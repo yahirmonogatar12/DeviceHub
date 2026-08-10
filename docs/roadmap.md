@@ -6,8 +6,8 @@ realidad y estan anotadas donde corresponde.
 
 ## Estado
 
-**Vamos en la Fase 12 (Auditoria).** Fases 0 a 11 implementadas, con tests y
-verificadas ejecutando contra el MySQL central.
+**Vamos en la Fase 13 (Roles y hardening).** Fases 0 a 12 implementadas, con
+tests y verificadas ejecutando contra el MySQL central.
 
 | # | Fase | Estado |
 |---|---|---|
@@ -23,8 +23,8 @@ verificadas ejecutando contra el MySQL central.
 | 9 | Servicios | hecho |
 | 10 | Control remoto (RustDesk) | hecho |
 | 11 | Sesiones remotas y permisos | hecho |
-| 12 | **Auditoria** | **siguiente** |
-| 13 | Roles y hardening | pendiente |
+| 12 | Auditoria | hecho |
+| 13 | **Roles y hardening** | **siguiente** |
 | 14 | File Manager | pendiente |
 | 15 | Terminal | pendiente |
 | 16 | Auto-update del agente | pendiente |
@@ -154,19 +154,21 @@ origen e instantes. Las huerfanas se cierran a las 8 h: sin eso, la auditoria
 diria que alguien lleva tres semanas dentro de una PC porque cerro el dashboard
 de golpe.
 
+**12 · Auditoria** — "si no se audita, no se ejecuta" hecho codigo: la fila de
+auditoria se escribe en la MISMA transaccion que la accion, asi que si ese
+INSERT falla, el rollback se lleva tambien el comando. `machine_audit` es la
+unica tabla **sin foreign key** a `machines`: las demas tienen ON DELETE CASCADE
+y borrar un equipo se lleva sus datos operativos, pero llevarse la prueba de
+quien hizo que convertiria "borrar la maquina" en "borrar el rastro". Por eso
+guarda `machine_code` y `site_code` como copia de texto, y no tiene purga. Los
+intentos **denegados** se auditan igual que los permitidos: que alguien sin
+permisos intentara apagar una PC es justo lo que hay que poder ver despues.
+
 ---
 
 ## Fases pendientes
 
-### 12 · Auditoria — siguiente
-
-Antes de terminal y de archivos, a proposito.
-
-`machine_audit`: `timestamp`, `user_id`, `machine_id`, `action`, `source_ip`,
-`details`. La escritura de auditoria va en la **misma transaccion** que la accion:
-si no se audita, no se ejecuta.
-
-### 13 · Roles y hardening
+### 13 · Roles y hardening — siguiente
 
 | Funcion | Viewer | Technician | Engineer | Admin |
 |---|---|---|---|---|

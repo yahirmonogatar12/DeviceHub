@@ -3,10 +3,11 @@
 Plataforma interna para inventariar, monitorear y administrar las PCs de planta.
 El control remoto es **un modulo mas**, no el producto.
 
-Estado actual: **Fases 0-11** implementadas. Identidad de maquina, heartbeat
+Estado actual: **Fases 0-12** implementadas. Identidad de maquina, heartbeat
 sobre stream gRPC persistente, historial de IP y de ubicacion, dashboard WPF,
 inventario de hardware, monitoreo, administracion remota (comandos con TTL e
-idempotencia, procesos y servicios) y control remoto con sesiones auditadas.
+idempotencia, procesos y servicios), control remoto con sesiones, y auditoria
+transaccional.
 
 **Avance completo, decisiones y lo que falta: [docs/roadmap.md](docs/roadmap.md).**
 
@@ -159,6 +160,25 @@ sin control remoto disponible -- no es un error.
 de acceso remoto de toda la planta no es algo que se resuelva de paso: exigiria
 cifrado en reposo, rotacion y auditoria propia. El tecnico la introduce, o se
 configura acceso desatendido en el propio RustDesk.
+
+## Auditoria
+
+**Si no se audita, no se ejecuta.** No es un lema: la fila de auditoria se
+escribe en la **misma transaccion** que la accion, asi que si ese INSERT falla,
+el rollback se lleva tambien el comando. No hay forma de dejar ejecutado algo sin
+rastro de quien lo pidio.
+
+`machine_audit` es la unica tabla **sin foreign key** a `machines`. Todas las
+demas tienen `ON DELETE CASCADE`, asi que borrar un equipo se lleva sus metricas
+e historiales -- correcto para datos operativos. Para la auditoria seria
+convertir "borrar la maquina" en "borrar el rastro", asi que guarda
+`machine_code` y `site_code` como copia de texto y **no tiene purga**.
+
+Los intentos **denegados** se auditan igual que los permitidos. Que alguien sin
+permisos intentara apagar una PC es exactamente lo que hay que poder ver despues.
+
+Cada fila lleva `request_id` (el `TraceIdentifier` de la peticion), que
+correlaciona todo lo ocurrido en una misma llamada.
 
 ## Inventario de hardware
 

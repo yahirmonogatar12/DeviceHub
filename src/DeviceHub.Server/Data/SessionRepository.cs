@@ -23,30 +23,42 @@ public sealed class SessionRepository(Db db)
     /// </summary>
     public static readonly TimeSpan OrphanTimeout = TimeSpan.FromHours(8);
 
+    /// <summary>Sesion y auditoria en la misma transaccion: no hay control remoto sin rastro.</summary>
     public async Task<string> StartAsync(
-        string machineId, string userId, string provider, string? deviceId, string? sourceIp, CancellationToken ct)
+        string machineId, string userId, string provider, string? deviceId, string? sourceIp,
+        AuditEntry audit, CancellationToken ct)
     {
         var id = Guid.NewGuid().ToString();
 
         await using var conn = await db.OpenAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+
         await conn.ExecuteAsync("""
             INSERT INTO machine_sessions (id, machine_id, user_id, provider, device_id, source_ip, started_at)
             VALUES (@id, @machineId, @userId, @provider, @deviceId, @sourceIp, @now)
             """,
-            new { id, machineId, userId, provider, deviceId, sourceIp, now = DateTime.UtcNow });
+            new { id, machineId, userId, provider, deviceId, sourceIp, now = DateTime.UtcNow }, tx);
 
+        await AuditRepository.WriteAsync(conn, tx, audit with { Details = $"sessionId={id}" });
+
+        await tx.CommitAsync(ct);
         return id;
     }
 
-    public async Task<SessionRow?> EndAsync(string sessionId, string reason, CancellationToken ct)
+    public async Task<SessionRow?> EndAsync(string sessionId, string reason, AuditEntry? audit, CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
 
         await conn.ExecuteAsync("""
             UPDATE machine_sessions SET ended_at = @now, end_reason = @reason
             WHERE id = @sessionId AND ended_at IS NULL
-            """, new { sessionId, reason, now = DateTime.UtcNow });
+            """, new { sessionId, reason, now = DateTime.UtcNow }, tx);
 
+        if (audit is not null)
+            await AuditRepository.WriteAsync(conn, tx, audit with { Details = $"sessionId={sessionId}" });
+
+        await tx.CommitAsync(ct);
         return await GetAsync(sessionId, ct);
     }
 

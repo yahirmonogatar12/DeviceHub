@@ -16,6 +16,21 @@ public sealed record ProcessRow(string Name, int Pid, long MemoryBytes, double C
 
 public sealed record ServiceRow(string Name, string DisplayName, string Status, string StartType);
 
+/// <summary>Una linea de auditoria lista para mostrar (Fase 12).</summary>
+public sealed record AuditLine(string When, string Who, string Action, string Outcome, string Details)
+{
+    public bool IsDenied => Outcome == "denied";
+
+    public static AuditLine From(AuditRecord record) => new(
+        When: record.OccurredAt is null
+            ? "-"
+            : DateTime.SpecifyKind(record.OccurredAt.ToDateTime(), DateTimeKind.Utc).ToLocalTime().ToString("MM-dd HH:mm:ss"),
+        Who: string.IsNullOrEmpty(record.UserRole) ? record.UserId : $"{record.UserId} ({record.UserRole})",
+        Action: record.Action,
+        Outcome: record.Outcome,
+        Details: string.Join("  ", new[] { record.Details, record.SourceIp }.Where(s => !string.IsNullOrEmpty(s))));
+}
+
 /// <summary>
 /// Parte de administracion del dashboard (Fases 7-9). Vive aparte del listado de
 /// maquinas porque son responsabilidades distintas: una muestra estado, la otra
@@ -27,6 +42,30 @@ public sealed partial class MainViewModel
 
     public ObservableCollection<ProcessRow> Processes { get; } = [];
     public ObservableCollection<ServiceRow> Services { get; } = [];
+    public ObservableCollection<AuditLine> Audit { get; } = [];
+
+    /// <summary>Auditoria de la maquina seleccionada (Fase 12).</summary>
+    [RelayCommand]
+    private async Task RefreshAuditAsync()
+    {
+        if (SelectedMachine is null)
+            return;
+
+        try
+        {
+            var list = await _client.ListAuditAsync(SelectedMachine.MachineId, CancellationToken.None);
+
+            Audit.Clear();
+            foreach (var entry in list.Entries)
+                Audit.Add(AuditLine.From(entry));
+
+            CommandFeedback = $"{Audit.Count} eventos auditados";
+        }
+        catch (Exception ex)
+        {
+            CommandFeedback = Describe(ex);
+        }
+    }
 
     [ObservableProperty]
     private string _commandFeedback = string.Empty;

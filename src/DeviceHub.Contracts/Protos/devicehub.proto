@@ -231,11 +231,35 @@ service AdminService {
   rpc MoveMachine (MoveMachineRequest) returns (MachineDetail);
   rpc CreateEnrollmentCode (CreateEnrollmentCodeRequest) returns (EnrollmentCodeReply);
   rpc ResolveIdentityConflict (ResolveConflictRequest) returns (MachineDetail);
+  rpc ListAudit (AuditQuery) returns (AuditList);
   rpc StartRemoteSession (MachineRef) returns (RemoteSessionReply);
   rpc EndRemoteSession (RemoteSessionRef) returns (RemoteSessionReply);
   rpc SendCommand (SendCommandRequest) returns (CommandEntry);
   rpc ListCommands (MachineRef) returns (CommandList);
   rpc GetCommand (CommandRef) returns (CommandEntry);
+}
+
+// Fase 12. Se llama AuditRecord y no AuditEntry para no chocar con el tipo
+// interno del servidor que construye estas filas.
+message AuditQuery {
+  string machine_id = 1;   // vacio = toda la planta
+  int32 limit = 2;
+}
+
+message AuditList {
+  repeated AuditRecord entries = 1;
+}
+
+message AuditRecord {
+  google.protobuf.Timestamp occurred_at = 1;
+  string user_id = 2;
+  string user_role = 3;
+  string action = 4;
+  string machine_code = 5;
+  string site_code = 6;
+  string source_ip = 7;
+  string outcome = 8;      // allowed | denied | failed
+  string details = 9;
 }
 
 message RemoteSessionRef {

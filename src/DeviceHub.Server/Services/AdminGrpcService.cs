@@ -26,6 +26,7 @@ public sealed class AdminGrpcService(
     EnrollmentRepository enrollment,
     CommandRepository commands,
     SessionRepository sessions,
+    AuditRepository audit,
     IRemoteProvider remote,
     UserRepository users,
     MachineBroadcaster broadcaster,
@@ -47,6 +48,15 @@ public sealed class AdminGrpcService(
         if (user is null || !user.IsActive || !Secrets.VerifyPassword(request.Password, user.PasswordHash))
         {
             logger.LogWarning("Login fallido para {Username} desde {Peer}", request.Username, context.Peer);
+
+            // Los intentos fallidos se auditan: es como se detecta que alguien
+            // esta probando contrasenas contra la consola de administracion.
+            await audit.WriteAsync(new AuditEntry(
+                UserId: request.Username, UserRole: null, Action: AuditActions.LoginFailed,
+                MachineId: null, MachineCode: null, SiteCode: null,
+                RequestId: context.GetHttpContext().TraceIdentifier, SourceIp: context.Peer,
+                Outcome: AuditEntry.Denied, Details: null), context.CancellationToken);
+
             throw new RpcException(new Status(StatusCode.Unauthenticated, "Credenciales invalidas"));
         }
 
@@ -153,6 +163,10 @@ public sealed class AdminGrpcService(
             NullIfEmpty(request.DisplayName), NullIfEmpty(request.Area), NullIfEmpty(request.Line),
             NullIfEmpty(request.Station), actor, ct);
 
+        await audit.WriteAsync(BuildAudit(context, AuditActions.MachineMoved,
+            await machines.GetAsync(request.MachineId, ct), AuditEntry.Allowed,
+            $"-> {request.MachineCode} @ {request.Area}/{request.Line}/{request.Station}"), ct);
+
         var config = new ConfigUpdate { MachineCode = request.MachineCode.Trim() };
         config.PinnedKeys.AddRange(pins.Current);
         registry.TryPush(request.MachineId, new ServerMessage { Config = config });
@@ -187,6 +201,9 @@ public sealed class AdminGrpcService(
 
         var actor = context.GetHttpContext().User.Identity?.Name ?? "desconocido";
         await enrollment.CreateAsync(Secrets.Sha256Hex(code), siteId, actor, expiresAt, maxUses, target, ct);
+
+        await audit.WriteAsync(BuildAudit(context, AuditActions.EnrollmentCodeCreated, null, AuditEntry.Allowed,
+            $"site={siteCode} usos={maxUses} minutos={minutes} recovery={target is not null}"), ct);
 
         logger.LogInformation("{Actor} genero un codigo {Kind} para {Site}, {Uses} uso(s), {Minutes} min",
             actor, target is null ? "de enrolamiento" : "de recovery", siteCode, maxUses, minutes);
@@ -224,10 +241,82 @@ public sealed class AdminGrpcService(
                 throw new RpcException(new Status(StatusCode.InvalidArgument, "Resolucion no especificada"));
         }
 
+        await audit.WriteAsync(BuildAudit(context, AuditActions.IdentityResolved,
+            await machines.GetAsync(request.MachineId, ct), AuditEntry.Allowed, request.Resolution.ToString()), ct);
+
         logger.LogWarning("{Actor} resolvio el conflicto de {MachineId} como {Resolution}",
             actor, request.MachineId, request.Resolution);
 
         return await GetMachine(new MachineRef { MachineId = request.MachineId }, context);
+    }
+
+    // -------------------------------------------------- auditoria (Fase 12)
+
+    public override async Task<AuditList> ListAudit(AuditQuery request, ServerCallContext context)
+    {
+        var limit = request.Limit > 0 ? Math.Min(request.Limit, 200) : 50;
+        var machineId = string.IsNullOrWhiteSpace(request.MachineId) ? null : request.MachineId;
+
+        var list = new AuditList();
+
+        foreach (var row in await audit.ListAsync(machineId, limit, context.CancellationToken))
+        {
+            list.Entries.Add(new AuditRecord
+            {
+                OccurredAt = Timestamp.FromDateTime(Db.AsUtc(row.OccurredAt)),
+                UserId = row.UserId,
+                UserRole = row.UserRole ?? string.Empty,
+                Action = row.Action,
+                MachineCode = row.MachineCode ?? string.Empty,
+                SiteCode = row.SiteCode ?? string.Empty,
+                SourceIp = row.SourceIp ?? string.Empty,
+                Outcome = row.Outcome,
+                Details = row.Details ?? string.Empty
+            });
+        }
+
+        return list;
+    }
+
+    /// <summary>
+    /// Construye la fila de auditoria a partir del contexto de la llamada.
+    ///
+    /// El request_id sale del TraceIdentifier de ASP.NET: correlaciona todo lo
+    /// que ocurrio en una misma peticion, incluida la denegacion y el comando
+    /// que si se creo despues.
+    /// </summary>
+    private static AuditEntry BuildAudit(
+        ServerCallContext context, string action, MachineRow? machine, string outcome, string? details = null)
+    {
+        var user = context.GetHttpContext().User;
+
+        return new AuditEntry(
+            UserId: user.Identity?.Name ?? "desconocido",
+            UserRole: user.FindFirst(ClaimTypes.Role)?.Value,
+            Action: action,
+            MachineId: machine?.Id,
+            MachineCode: machine?.MachineCode,
+            SiteCode: machine?.SiteCode,
+            RequestId: context.GetHttpContext().TraceIdentifier,
+            SourceIp: context.Peer,
+            Outcome: outcome,
+            Details: details);
+    }
+
+    /// <summary>
+    /// Un intento RECHAZADO es tan auditable como uno permitido: que alguien sin
+    /// permisos intentara apagar una PC es justo lo que hay que poder ver despues.
+    /// </summary>
+    private async Task DenyAsync(
+        ServerCallContext context, string action, MachineRow? machine, string reason)
+    {
+        await audit.WriteAsync(
+            BuildAudit(context, action, machine, AuditEntry.Denied, reason), context.CancellationToken);
+
+        logger.LogWarning("DENEGADO {Action} sobre {MachineCode}: {Reason}",
+            action, machine?.MachineCode ?? "-", reason);
+
+        throw new RpcException(new Status(StatusCode.PermissionDenied, reason));
     }
 
     // -------------------------------------------------- control remoto (Fases 10-11)
@@ -245,12 +334,12 @@ public sealed class AdminGrpcService(
         var user = context.GetHttpContext().User;
         var actor = user.Identity?.Name ?? "desconocido";
 
-        if (!Roles.Satisfies(user.FindFirst(ClaimTypes.Role)?.Value, Roles.Technician))
-            throw new RpcException(new Status(StatusCode.PermissionDenied,
-                "El control remoto requiere rol technician o superior"));
-
         var machine = await machines.GetAsync(request.MachineId, ct)
             ?? throw new RpcException(new Status(StatusCode.NotFound, "Maquina desconocida"));
+
+        if (!Roles.Satisfies(user.FindFirst(ClaimTypes.Role)?.Value, Roles.Technician))
+            await DenyAsync(context, AuditActions.RemoteStart, machine,
+                "El control remoto requiere rol technician o superior");
 
         if (!machine.RemoteAvailable || string.IsNullOrWhiteSpace(machine.RemoteDeviceId))
             throw new RpcException(new Status(StatusCode.FailedPrecondition,
@@ -262,11 +351,10 @@ public sealed class AdminGrpcService(
         // Las huerfanas se cierran aqui, sin servicio de fondo.
         await sessions.CloseOrphansAsync(ct);
 
+        // Sesion y auditoria en la misma transaccion.
         var sessionId = await sessions.StartAsync(
-            machine.Id, actor, launch.Provider, launch.DeviceId, sourceIp, ct);
-
-        await machines.LogEventAsync(machine.Id, "REMOTE_SESSION_STARTED",
-            $"{actor} via {launch.Provider}", sourceIp, ct);
+            machine.Id, actor, launch.Provider, launch.DeviceId, sourceIp,
+            BuildAudit(context, AuditActions.RemoteStart, machine, AuditEntry.Allowed), ct);
 
         logger.LogWarning("{Actor} abrio sesion remota sobre {MachineCode} desde {Source}",
             actor, machine.MachineCode, sourceIp);
@@ -285,12 +373,15 @@ public sealed class AdminGrpcService(
     public override async Task<RemoteSessionReply> EndRemoteSession(RemoteSessionRef request, ServerCallContext context)
     {
         var ct = context.CancellationToken;
-        var actor = context.GetHttpContext().User.Identity?.Name ?? "desconocido";
 
-        var session = await sessions.EndAsync(request.SessionId, "closed", ct)
+        var existing = await sessions.GetAsync(request.SessionId, ct)
             ?? throw new RpcException(new Status(StatusCode.NotFound, "Sesion desconocida"));
 
-        await machines.LogEventAsync(session.MachineId, "REMOTE_SESSION_ENDED", $"{actor}", context.Peer, ct);
+        var machine = await machines.GetAsync(existing.MachineId, ct);
+
+        var session = await sessions.EndAsync(request.SessionId, "closed",
+            BuildAudit(context, AuditActions.RemoteEnd, machine, AuditEntry.Allowed), ct)
+            ?? throw new RpcException(new Status(StatusCode.NotFound, "Sesion desconocida"));
 
         var reply = new RemoteSessionReply
         {
@@ -324,20 +415,26 @@ public sealed class AdminGrpcService(
         var user = context.GetHttpContext().User;
         var role = user.FindFirst(ClaimTypes.Role)?.Value;
         var actor = user.Identity?.Name ?? "desconocido";
-
-        if (!Roles.Satisfies(role, definition.RequiredRole))
-            throw new RpcException(new Status(StatusCode.PermissionDenied,
-                $"{request.Type} requiere rol {definition.RequiredRole} o superior"));
+        var action = AuditActions.ForCommand(request.Type);
 
         var machine = await machines.GetAsync(request.MachineId, ct)
             ?? throw new RpcException(new Status(StatusCode.NotFound, "Maquina desconocida"));
+
+        // La maquina se resuelve ANTES de comprobar el rol para que la fila de
+        // denegacion diga sobre QUE equipo se intento actuar.
+        if (!Roles.Satisfies(role, definition.RequiredRole))
+            await DenyAsync(context, action, machine,
+                $"{request.Type} requiere rol {definition.RequiredRole} o superior");
 
         var required = CommandPolicy.RequiredParameter(request.Type);
         if (required is not null && !request.Parameters.ContainsKey(required))
             throw new RpcException(new Status(StatusCode.InvalidArgument, $"Falta el parametro '{required}'"));
 
+        var details = string.Join(' ', request.Parameters.Select(p => $"{p.Key}={p.Value}"));
+
         var commandId = await commands.CreateAsync(
-            request.MachineId, request.Type, request.Parameters, actor, definition.Ttl, ct);
+            request.MachineId, request.Type, request.Parameters, actor, definition.Ttl,
+            BuildAudit(context, action, machine, AuditEntry.Allowed, details), ct);
 
         var row = await commands.GetAsync(commandId, ct)!;
 

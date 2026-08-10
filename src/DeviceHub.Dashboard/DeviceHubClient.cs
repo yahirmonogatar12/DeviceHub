@@ -107,6 +107,9 @@ public sealed class DeviceHubClient : IDisposable
     public Task<MachineDetail> ResolveConflictAsync(ResolveConflictRequest request, CancellationToken ct)
         => _client.ResolveIdentityConflictAsync(request, _auth, cancellationToken: ct).ResponseAsync;
 
+    public Task<AuditList> ListAuditAsync(string machineId, CancellationToken ct)
+        => _client.ListAuditAsync(new AuditQuery { MachineId = machineId, Limit = 30 }, _auth, cancellationToken: ct).ResponseAsync;
+
     public Task<RemoteSessionReply> StartRemoteSessionAsync(string machineId, CancellationToken ct)
         => _client.StartRemoteSessionAsync(new MachineRef { MachineId = machineId }, _auth, cancellationToken: ct).ResponseAsync;
 

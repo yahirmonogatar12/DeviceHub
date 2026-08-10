@@ -84,8 +84,16 @@ if (args.Contains("--command"))
     if (ArgValue(args, "--param") is { } raw && raw.Split('=', 2) is [var key, var value])
         parameters[key] = value;
 
+    // La CLI tambien se audita: un comando lanzado desde el servidor no puede ser
+    // menos rastreable que uno lanzado desde el dashboard.
+    var cliAudit = new AuditEntry(
+        UserId: "cli", UserRole: null, Action: type.ToString(),
+        MachineId: machine.Id, MachineCode: machine.MachineCode, SiteCode: machine.SiteCode,
+        RequestId: null, SourceIp: Environment.MachineName,
+        Outcome: AuditEntry.Allowed, Details: null);
+
     var id = await commandRepository.CreateAsync(
-        machine.Id, type, parameters, "cli", definition.Ttl, CancellationToken.None);
+        machine.Id, type, parameters, "cli", definition.Ttl, cliAudit, CancellationToken.None);
 
     bootstrapLogger.LogInformation("{Type} encolado para {MachineCode} ({CommandId})", type, machine.MachineCode, id);
 
@@ -128,6 +136,7 @@ builder.Services.AddSingleton<MachineRepository>();
 builder.Services.AddSingleton<EnrollmentRepository>();
 builder.Services.AddSingleton<CommandRepository>();
 builder.Services.AddSingleton<SessionRepository>();
+builder.Services.AddSingleton<AuditRepository>();
 
 // Unico punto donde se elige el motor remoto. La Fase 18 cambia esta linea.
 builder.Services.AddSingleton<IRemoteProvider, RustDeskProvider>();

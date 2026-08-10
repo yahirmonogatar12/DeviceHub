@@ -30,14 +30,23 @@ public sealed class CommandRepository(Db db)
         FROM machine_commands
         """;
 
+    /// <summary>
+    /// Crea el comando y su fila de auditoria EN LA MISMA TRANSACCION.
+    ///
+    /// Es "si no se audita, no se ejecuta" hecho codigo: si el INSERT de
+    /// auditoria falla, el rollback se lleva tambien el comando, y no queda forma
+    /// de haber pedido un reinicio sin rastro de quien lo pidio.
+    /// </summary>
     public async Task<string> CreateAsync(
         string machineId, CommandType type, IDictionary<string, string> parameters,
-        string requestedBy, TimeSpan ttl, CancellationToken ct)
+        string requestedBy, TimeSpan ttl, AuditEntry audit, CancellationToken ct)
     {
         var id = Guid.NewGuid().ToString();
         var now = DateTime.UtcNow;
 
         await using var conn = await db.OpenAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+
         await conn.ExecuteAsync("""
             INSERT INTO machine_commands (id, machine_id, command_type, parameters_json,
                                           requested_by, requested_at, expires_at, status)
@@ -52,8 +61,11 @@ public sealed class CommandRepository(Db db)
                 requestedBy,
                 now,
                 expiresAt = now.Add(ttl)
-            });
+            }, tx);
 
+        await AuditRepository.WriteAsync(conn, tx, audit with { Details = $"{audit.Details} commandId={id}".Trim() });
+
+        await tx.CommitAsync(ct);
         return id;
     }
 
