@@ -3,9 +3,10 @@
 Plataforma interna para inventariar, monitorear y administrar las PCs de planta.
 El control remoto es **un modulo mas**, no el producto.
 
-Estado actual: **Fases 0-6** implementadas. Identidad de maquina, heartbeat sobre
+Estado actual: **Fases 0-9** implementadas. Identidad de maquina, heartbeat sobre
 stream gRPC persistente, historial de IP y de ubicacion, dashboard WPF,
-inventario de hardware y monitoreo.
+inventario de hardware, monitoreo, y administracion remota: comandos con TTL e
+idempotencia, procesos y servicios.
 
 **Avance completo, decisiones y lo que falta: [docs/roadmap.md](docs/roadmap.md).**
 
@@ -105,6 +106,37 @@ Que ve DeviceHub en esta PC, sin instalar el servicio ni levantar el servidor:
 DeviceHub.Agent.exe --inventory   # CPU, RAM, discos, GPU, BIOS, Windows
 DeviceHub.Agent.exe --metrics     # tres muestras de CPU/RAM/disco/red
 ```
+
+Desde el servidor, sin abrir el dashboard:
+
+```powershell
+DeviceHub.Server.exe --enrollment-code --uses 5 --minutes 30
+DeviceHub.Server.exe --command Ping --machine M1-FCT-01
+DeviceHub.Server.exe --command RestartService --machine M1-FCT-01 --param service=MySQL80
+```
+
+## Administracion remota
+
+Comandos con lista cerrada (`enum`, nunca texto libre) y una politica por tipo:
+rol minimo, si es destructivo, si admite reintento, TTL y timeout.
+
+| Comando | Rol minimo | TTL |
+|---|---|---|
+| `Ping` | Viewer | 2 min |
+| `GetProcesses`, `GetServices` | Technician | 2 min |
+| `KillProcess` | Technician | 2 min |
+| `StartService`, `StopService`, `RestartService` | Engineer | 2 min |
+| `RestartMachine` | Engineer | **30 s** |
+| `ShutdownMachine` | Administrator | **30 s** |
+
+El TTL corto de los dos ultimos es el punto: una PC apagada dos horas **no** debe
+reiniciarse al reconectar porque alguien lo pidio hace dos horas. El agente
+comprueba el vencimiento antes de ejecutar; el servidor solo lo refleja.
+
+La idempotencia tiene dos mitades. El servidor guarda cada comando por
+`commandId`, y el agente lleva un journal en SQLite: si la conexion cae despues
+de ejecutar pero antes de reportar, al reconectar responde el resultado guardado
+en vez de ejecutar otra vez. Sin eso, una reconexion provoca dos reinicios.
 
 ## Inventario de hardware
 

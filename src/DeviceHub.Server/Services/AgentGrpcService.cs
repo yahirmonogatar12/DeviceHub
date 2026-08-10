@@ -12,6 +12,7 @@ namespace DeviceHub.Server.Services;
 public sealed class AgentGrpcService(
     MachineRepository machines,
     EnrollmentRepository enrollment,
+    CommandRepository commands,
     ConnectionRegistry registry,
     MachineBroadcaster broadcaster,
     ServerPins pins,
@@ -144,9 +145,10 @@ public sealed class AgentGrpcService(
         try
         {
             await responseStream.WriteAsync(BuildConfig(auth.MachineCode), ct);
+            await DeliverPendingCommandsAsync(machineId, outbound, ct);
 
             var pump = PumpOutboundAsync(outbound.Reader, responseStream, ct);
-            var ingest = IngestAsync(requestStream, machineId, auth, context);
+            var ingest = IngestAsync(requestStream, machineId, auth, outbound, context);
 
             await await Task.WhenAny(pump, ingest);
         }
@@ -172,7 +174,8 @@ public sealed class AgentGrpcService(
     }
 
     private async Task IngestAsync(
-        IAsyncStreamReader<AgentMessage> requestStream, string machineId, MachineAuthRow auth, ServerCallContext context)
+        IAsyncStreamReader<AgentMessage> requestStream, string machineId, MachineAuthRow auth,
+        Channel<ServerMessage> outbound, ServerCallContext context)
     {
         var ct = context.CancellationToken;
 
@@ -188,6 +191,17 @@ public sealed class AgentGrpcService(
             if (message.PayloadCase == AgentMessage.PayloadOneofCase.Hardware)
             {
                 await SaveInventoryAsync(machineId, message.Hardware, ct);
+                continue;
+            }
+
+            if (message.PayloadCase == AgentMessage.PayloadOneofCase.CommandResult)
+            {
+                var result = message.CommandResult;
+                await commands.ApplyResultAsync(result, machineId, ct);
+
+                logger.LogInformation("{MachineId}: comando {CommandId} -> {Status} {Error}",
+                    machineId, result.CommandId, result.Status, result.ErrorCode);
+
                 continue;
             }
 
@@ -237,6 +251,31 @@ public sealed class AgentGrpcService(
             var row = await machines.GetAsync(machineId, ct);
             if (row is not null)
                 broadcaster.Publish(SummaryMapper.ToSummary(row, DateTime.UtcNow));
+
+            // Red de seguridad: SendCommand empuja al conectar, pero ese TryPush
+            // puede fallar si la cola de la conexion esta llena, y entonces el
+            // comando quedaria pendiente para siempre. Cada latido reintenta.
+            await DeliverPendingCommandsAsync(machineId, outbound, ct);
+        }
+    }
+
+    /// <summary>
+    /// Al reconectar se entrega lo que quedo pendiente -- pero primero se caducan
+    /// los vencidos. Una PC que estuvo apagada dos horas no debe recibir el
+    /// reinicio que alguien pidio al principio de ese rato.
+    /// </summary>
+    private async Task DeliverPendingCommandsAsync(
+        string machineId, Channel<ServerMessage> outbound, CancellationToken ct)
+    {
+        await commands.ExpireStaleAsync(machineId, ct);
+
+        foreach (var row in await commands.GetDeliverableAsync(machineId, ct))
+        {
+            if (!outbound.Writer.TryWrite(new ServerMessage { Command = SummaryMapper.ToRequest(row) }))
+                break;
+
+            await commands.MarkSentAsync(row.Id, ct);
+            logger.LogInformation("{MachineId}: reentregando comando pendiente {CommandId}", machineId, row.Id);
         }
     }
 

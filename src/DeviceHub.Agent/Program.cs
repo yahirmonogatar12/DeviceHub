@@ -1,4 +1,5 @@
 using DeviceHub.Agent;
+using DeviceHub.Agent.Commands;
 using DeviceHub.Agent.Identity;
 using DeviceHub.Agent.Inventory;
 using DeviceHub.Agent.Monitoring;
@@ -33,6 +34,7 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.Services.Configure<AgentOptions>(builder.Configuration.GetSection(AgentOptions.SectionName));
 
 builder.Services.AddSingleton<PinnedChannelFactory>();
+builder.Services.AddSingleton<CommandRunner>();
 builder.Services.AddSingleton(sp => new MachineIdentity(
     sp.GetRequiredService<IOptions<AgentOptions>>().Value.DataDirectory,
     sp.GetRequiredService<ILogger<MachineIdentity>>()));

@@ -6,8 +6,8 @@ realidad y estan anotadas donde corresponde.
 
 ## Estado
 
-**Vamos en la Fase 7 (Comandos).** Fases 0 a 6 implementadas, con tests y
-verificadas ejecutando.
+**Vamos en la Fase 10 (Control remoto).** Fases 0 a 9 implementadas, con tests y
+verificadas ejecutando contra el MySQL central.
 
 | # | Fase | Estado |
 |---|---|---|
@@ -18,10 +18,10 @@ verificadas ejecutando.
 | 4 | Dashboard WPF | hecho |
 | 5 | Inventario de hardware | hecho |
 | 6 | Monitoreo | hecho |
-| 7 | **Comandos** | **siguiente** |
-| 8 | Procesos | pendiente |
-| 9 | Servicios | pendiente |
-| 10 | Control remoto (RustDesk) | pendiente |
+| 7 | Comandos | hecho |
+| 8 | Procesos | hecho |
+| 9 | Servicios | hecho |
+| 10 | **Control remoto (RustDesk)** | **siguiente** |
 | 11 | Sesiones remotas y permisos | pendiente |
 | 12 | Auditoria | pendiente |
 | 13 | Roles y hardening | pendiente |
@@ -124,42 +124,28 @@ meses, y `PerformanceCounter` falla en PCs con los contadores corruptos.
 
 ---
 
+**7 · Comandos** — el TTL es lo que evita que una PC apagada dos horas ejecute al
+reconectar un reinicio pedido hace dos horas: `RestartMachine` y
+`ShutdownMachine` caducan a los 30 s. La idempotencia tiene dos mitades: el
+servidor guarda cada comando por `commandId` y el agente lleva un journal en
+SQLite, porque el caso peligroso incluye que el servicio se reiniciara entre
+ejecutar y reportar. `CommandPolicy` concentra rol, si es destructivo, si admite
+reintento, TTL y timeout: sin esa tabla, las diferencias entre "hacer ping" y
+"apagar la maquina" acabarian repartidas en `if` por servidor, agente y UI.
+
+**8 · Procesos** — el % de CPU por proceso se calcula con dos muestras separadas
+500 ms: es un delta, no un valor que se pueda leer de golpe. El agente se niega a
+matar el PID <= 4 y a matarse a si mismo, que dejaria la PC invisible y sin
+rescate remoto.
+
+**9 · Servicios** — `ServiceController` con Start/Stop/Restart. Reservado a
+Engineer+: un tecnico no reinicia `MySQL80`.
+
+---
+
 ## Fases pendientes
 
-### 7 · Comandos — siguiente
-
-El transporte ya existe: el stream bidireccional de la Fase 2 es el canal
-servidor -> agente. Solo se agrega la tabla `machine_commands` y una variante al
-`oneof` del contrato.
-
-```json
--> { "commandId": "cmd-123", "type": "restart_service",
-     "parameters": { "service": "MySQL80" } }
-<- { "commandId": "cmd-123", "status": "completed", "result": "..." }
-```
-
-Whitelist cerrada como **enum, no string libre**: `Ping`, `GetProcesses`,
-`GetServices`, `RestartService`, `StartService`, `StopService`, `RestartMachine`,
-`ShutdownMachine`. Un tipo desconocido se rechaza **en el agente**, no solo en el
-servidor.
-
-Persistidos con `status` (pending/sent/completed/failed) e **idempotencia por
-`commandId`**: si el agente reconecta y recibe uno ya ejecutado, responde el
-resultado guardado sin re-ejecutar. Sin eso, una reconexion provoca dos reinicios.
-
-Test obligatorio: matriz de autorizacion rol x tipo de comando.
-
-### 8 · Procesos
-
-`GetProcesses` -> nombre, PID, CPU %, RAM. Vista con `Refresh` y `Kill Process`.
-Matar procesos exige Technician+ y se audita siempre.
-
-### 9 · Servicios
-
-`ServiceController` para Start/Stop/Restart. Servicios relevantes de planta:
-`MySQL80`, ICT/FCT/AOI Watcher, MES API. `RestartService` exige Engineer+.
-
-### 10 · Control remoto (RustDesk)
+### 10 · Control remoto (RustDesk) — siguiente
 
 ```csharp
 public interface IRemoteProvider {

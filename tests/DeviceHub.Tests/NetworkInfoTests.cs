@@ -64,7 +64,7 @@ public class NetworkInfoTests
         if (NetworkInfo.ResolvePrimaryIp("192.0.2.1") is null)
             return; // maquina sin ruta por defecto
 
-        Assert.Single(NetworkInfo.Collect("192.0.2.1").Where(n => n.IsPrimary));
+        Assert.Single(NetworkInfo.Collect("192.0.2.1"), n => n.IsPrimary);
     }
 
     [Fact]

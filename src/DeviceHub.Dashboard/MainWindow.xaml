@@ -232,6 +232,61 @@
                                 </StackPanel>
                             </StackPanel>
 
+                            <!-- Administracion (Fases 7-9) -->
+                            <StackPanel DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}"
+                                        Margin="0,18,0,0">
+                                <TextBlock Text="Administrar" FontWeight="SemiBold" Margin="0,0,0,6" />
+
+                                <WrapPanel>
+                                    <Button Content="Ping" Padding="8,3" Margin="0,0,4,4" Command="{Binding PingCommand}" />
+                                    <Button Content="Procesos" Padding="8,3" Margin="0,0,4,4" Command="{Binding RefreshProcessesCommand}" />
+                                    <Button Content="Servicios" Padding="8,3" Margin="0,0,4,4" Command="{Binding RefreshServicesCommand}" />
+                                    <Button Content="Reiniciar PC" Padding="8,3" Margin="0,0,4,4" Command="{Binding RestartMachineCommand}" />
+                                    <Button Content="Apagar" Padding="8,3" Margin="0,0,4,4" Foreground="#C0392B"
+                                            Command="{Binding ShutdownMachineCommand}" />
+                                </WrapPanel>
+
+                                <TextBlock Text="{Binding CommandFeedback}" FontSize="11" Foreground="#555"
+                                           TextWrapping="Wrap" Margin="0,4,0,0" />
+
+                                <!-- Procesos -->
+                                <StackPanel Visibility="{Binding Processes.Count, Converter={StaticResource BoolToVis}}">
+                                    <DataGrid ItemsSource="{Binding Processes}" SelectedItem="{Binding SelectedProcess}"
+                                              AutoGenerateColumns="False" IsReadOnly="True" MaxHeight="220"
+                                              HeadersVisibility="Column" RowHeaderWidth="0" FontSize="11" Margin="0,8,0,0">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="Proceso" Binding="{Binding Name}" Width="*" />
+                                            <DataGridTextColumn Header="PID" Binding="{Binding Pid}" Width="55" />
+                                            <DataGridTextColumn Header="CPU" Binding="{Binding Cpu}" Width="55" />
+                                            <DataGridTextColumn Header="RAM" Binding="{Binding Memory}" Width="70" />
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                    <Button Content="Matar proceso" Padding="8,3" Margin="0,4,0,0" HorizontalAlignment="Left"
+                                            Foreground="#C0392B" Command="{Binding KillProcessCommand}" />
+                                </StackPanel>
+
+                                <!-- Servicios -->
+                                <StackPanel Visibility="{Binding Services.Count, Converter={StaticResource BoolToVis}}">
+                                    <DataGrid ItemsSource="{Binding Services}" SelectedItem="{Binding SelectedService}"
+                                              AutoGenerateColumns="False" IsReadOnly="True" MaxHeight="220"
+                                              HeadersVisibility="Column" RowHeaderWidth="0" FontSize="11" Margin="0,8,0,0">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Header="Servicio" Binding="{Binding DisplayName}" Width="*" />
+                                            <DataGridTextColumn Header="Estado" Binding="{Binding Status}" Width="75" />
+                                            <DataGridTextColumn Header="Inicio" Binding="{Binding StartType}" Width="70" />
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                        <Button Content="Start" Padding="8,3" Margin="0,0,4,0"
+                                                Command="{Binding ServiceActionCommand}" CommandParameter="start" />
+                                        <Button Content="Stop" Padding="8,3" Margin="0,0,4,0"
+                                                Command="{Binding ServiceActionCommand}" CommandParameter="stop" />
+                                        <Button Content="Restart" Padding="8,3"
+                                                Command="{Binding ServiceActionCommand}" CommandParameter="restart" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </StackPanel>
+
                             <!-- Historiales -->
                             <StackPanel DataContext="{Binding DataContext.Detail, RelativeSource={RelativeSource AncestorType=Window}}">
                                 <TextBlock Text="Historial de IP" FontWeight="SemiBold" Margin="0,18,0,4" />

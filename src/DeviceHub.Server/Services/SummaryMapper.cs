@@ -62,6 +62,43 @@ public static class SummaryMapper
         return inventory;
     }
 
+    public static CommandEntry ToProto(CommandRow row)
+    {
+        var entry = new CommandEntry
+        {
+            CommandId = row.Id,
+            MachineId = row.MachineId,
+            Type = System.Enum.TryParse<CommandType>(row.CommandType, out var type) ? type : CommandType.Unspecified,
+            Status = System.Enum.TryParse<CommandStatus>(row.Status, ignoreCase: true, out var status) ? status : CommandStatus.Unspecified,
+            RequestedBy = row.RequestedBy,
+            RequestedAt = Timestamp.FromDateTime(Db.AsUtc(row.RequestedAt)),
+            ExpiresAt = Timestamp.FromDateTime(Db.AsUtc(row.ExpiresAt)),
+            Result = row.Result ?? string.Empty,
+            ErrorCode = row.ErrorCode ?? string.Empty
+        };
+
+        if (row.CompletedAt is not null)
+            entry.CompletedAt = Timestamp.FromDateTime(Db.AsUtc(row.CompletedAt.Value));
+
+        return entry;
+    }
+
+    /// <summary>Lo que baja al agente por el stream.</summary>
+    public static CommandRequest ToRequest(CommandRow row)
+    {
+        var request = new CommandRequest
+        {
+            CommandId = row.Id,
+            Type = System.Enum.TryParse<CommandType>(row.CommandType, out var type) ? type : CommandType.Unspecified,
+            ExpiresAt = Timestamp.FromDateTime(Db.AsUtc(row.ExpiresAt))
+        };
+
+        foreach (var (key, value) in CommandRepository.ParseParameters(row.ParametersJson))
+            request.Parameters[key] = value;
+
+        return request;
+    }
+
     public static IpHistoryEntry ToProto(HistoryRow row)
     {
         var entry = new IpHistoryEntry

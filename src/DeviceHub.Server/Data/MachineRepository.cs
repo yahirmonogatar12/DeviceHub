@@ -119,6 +119,13 @@ public sealed class MachineRepository(Db db)
             $"{SummarySelect} WHERE m.id = @machineId", new { machineId });
     }
 
+    public async Task<MachineRow?> GetByCodeAsync(string machineCode, CancellationToken ct)
+    {
+        await using var conn = await db.OpenAsync(ct);
+        return await conn.QuerySingleOrDefaultAsync<MachineRow>(
+            $"{SummarySelect} WHERE m.machine_code = @machineCode", new { machineCode });
+    }
+
     public async Task<MachineAuthRow?> GetForAuthAsync(string machineId, CancellationToken ct)
     {
         await using var conn = await db.OpenAsync(ct);

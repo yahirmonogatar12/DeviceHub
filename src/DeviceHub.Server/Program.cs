@@ -54,6 +54,57 @@ if (args.Contains("--enrollment-code"))
     return 0;
 }
 
+// Diagnostico de campo: "esta PC responde a comandos?" sin abrir el dashboard.
+// El servidor en marcha lo entrega en el siguiente latido.
+if (args.Contains("--command"))
+{
+    var db = new Db(connectionString);
+    var repository = new MachineRepository(db);
+    var commandRepository = new CommandRepository(db);
+
+    if (!System.Enum.TryParse<CommandType>(ArgValue(args, "--command"), ignoreCase: true, out var type)
+        || !CommandPolicy.TryGet(type, out var definition))
+    {
+        bootstrapLogger.LogError("Tipo invalido. Permitidos: {Types}",
+            string.Join(", ", CommandPolicy.All.Select(d => d.Type)));
+        return 1;
+    }
+
+    var machineCode = ArgValue(args, "--machine");
+    var machine = machineCode is null ? null : await repository.GetByCodeAsync(machineCode, CancellationToken.None);
+
+    if (machine is null)
+    {
+        bootstrapLogger.LogError("Maquina desconocida: {MachineCode}", machineCode);
+        return 1;
+    }
+
+    var parameters = new Dictionary<string, string>();
+    if (ArgValue(args, "--param") is { } raw && raw.Split('=', 2) is [var key, var value])
+        parameters[key] = value;
+
+    var id = await commandRepository.CreateAsync(
+        machine.Id, type, parameters, "cli", definition.Ttl, CancellationToken.None);
+
+    bootstrapLogger.LogInformation("{Type} encolado para {MachineCode} ({CommandId})", type, machine.MachineCode, id);
+
+    var deadline = DateTime.UtcNow.AddSeconds(90);
+    while (DateTime.UtcNow < deadline)
+    {
+        await Task.Delay(1000);
+        var row = await commandRepository.GetAsync(id, CancellationToken.None);
+
+        if (row is null || row.Status is "pending" or "sent" or "running")
+            continue;
+
+        Console.WriteLine($"{row.Status.ToUpperInvariant()}: {row.Result} {row.ErrorCode}".Trim());
+        return row.Status == "completed" ? 0 : 1;
+    }
+
+    bootstrapLogger.LogError("Sin respuesta en 90 s");
+    return 1;
+}
+
 static string? ArgValue(string[] args, string name)
 {
     var index = Array.IndexOf(args, name);
@@ -74,6 +125,7 @@ builder.Services.AddGrpc();
 builder.Services.AddSingleton(new Db(connectionString));
 builder.Services.AddSingleton<MachineRepository>();
 builder.Services.AddSingleton<EnrollmentRepository>();
+builder.Services.AddSingleton<CommandRepository>();
 builder.Services.AddSingleton<UserRepository>();
 builder.Services.AddSingleton<ConnectionRegistry>();
 builder.Services.AddSingleton<MachineBroadcaster>();

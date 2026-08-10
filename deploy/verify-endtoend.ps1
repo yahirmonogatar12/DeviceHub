@@ -97,6 +97,16 @@ try {
     Write-Host "`nAgente:  $agentData\machine.json" -ForegroundColor Green
     Get-Content "$agentData\machine.json"
 
+    $code = (Get-Content "$agentData\machine.json" -Raw | ConvertFrom-Json).machineCode
+
+    Step "Comandos (Fase 7) sobre $code"
+    foreach ($cmd in 'Ping', 'GetServices') {
+        $salida = & dotnet run --project "$root\src\DeviceHub.Server" --no-build -- --command $cmd --machine $code 2>$null |
+            Select-String -Pattern '^(COMPLETED|FAILED|EXPIRED)' | Select-Object -First 1
+        $texto = if ($salida) { $salida.Line } else { 'sin respuesta' }
+        Write-Host ("   {0,-12} {1}" -f $cmd, $texto.Substring(0, [Math]::Min(110, $texto.Length)))
+    }
+
     Write-Host @"
 
 >> Comprobar en la base (deberia haber una fila en cada una):

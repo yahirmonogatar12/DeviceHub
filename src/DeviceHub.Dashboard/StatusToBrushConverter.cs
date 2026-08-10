@@ -45,11 +45,17 @@ public sealed class BytesToSizeConverter : IValueConverter
 public sealed class BooleanToVisibilityConverter : IValueConverter
 {
     /// <summary>
-    /// Acepta bool o cualquier objeto: null se oculta, no-null se muestra. Asi el
-    /// mismo converter sirve para banderas y para "hay dato que mostrar", sin un
-    /// segundo NullToVisibility identico.
+    /// Un solo converter para "hay algo que mostrar":
     ///
-    /// Con parameter="invert" devuelve Visible cuando el valor es false o null.
+    ///   null            -> oculto
+    ///   bool            -> el propio valor
+    ///   numero (Count)  -> visible solo si es > 0
+    ///   cualquier otro  -> visible
+    ///
+    /// Evita tener tres converters identicos (NullToVisibility, CountToVisibility,
+    /// BoolToVisibility) que hacen la misma pregunta.
+    ///
+    /// Con parameter="invert" devuelve Visible en el caso contrario.
     /// </summary>
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
@@ -57,6 +63,8 @@ public sealed class BooleanToVisibilityConverter : IValueConverter
         {
             null => false,
             bool boolean => boolean,
+            int count => count > 0,
+            string text => text.Length > 0,
             _ => true
         };
 

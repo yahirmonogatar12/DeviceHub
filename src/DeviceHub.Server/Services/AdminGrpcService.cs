@@ -23,6 +23,7 @@ namespace DeviceHub.Server.Services;
 public sealed class AdminGrpcService(
     MachineRepository machines,
     EnrollmentRepository enrollment,
+    CommandRepository commands,
     UserRepository users,
     MachineBroadcaster broadcaster,
     ConnectionRegistry registry,
@@ -224,6 +225,72 @@ public sealed class AdminGrpcService(
             actor, request.MachineId, request.Resolution);
 
         return await GetMachine(new MachineRef { MachineId = request.MachineId }, context);
+    }
+
+    // ---------------------------------------------------------- comandos (Fase 7)
+
+    /// <summary>
+    /// La autorizacion sale de <see cref="CommandPolicy"/>, no de un
+    /// [Authorize(Roles=...)] en el metodo: el rol necesario depende del TIPO de
+    /// comando, y repartir esa decision en atributos o en `if` por el codigo es
+    /// justo lo que hace que un dia alguien pueda apagar 30 PCs siendo Viewer.
+    /// </summary>
+    public override async Task<CommandEntry> SendCommand(SendCommandRequest request, ServerCallContext context)
+    {
+        var ct = context.CancellationToken;
+
+        if (!CommandPolicy.TryGet(request.Type, out var definition))
+            throw new RpcException(new Status(StatusCode.InvalidArgument, $"Tipo de comando no permitido: {request.Type}"));
+
+        var user = context.GetHttpContext().User;
+        var role = user.FindFirst(ClaimTypes.Role)?.Value;
+        var actor = user.Identity?.Name ?? "desconocido";
+
+        if (!Roles.Satisfies(role, definition.RequiredRole))
+            throw new RpcException(new Status(StatusCode.PermissionDenied,
+                $"{request.Type} requiere rol {definition.RequiredRole} o superior"));
+
+        var machine = await machines.GetAsync(request.MachineId, ct)
+            ?? throw new RpcException(new Status(StatusCode.NotFound, "Maquina desconocida"));
+
+        var required = CommandPolicy.RequiredParameter(request.Type);
+        if (required is not null && !request.Parameters.ContainsKey(required))
+            throw new RpcException(new Status(StatusCode.InvalidArgument, $"Falta el parametro '{required}'"));
+
+        var commandId = await commands.CreateAsync(
+            request.MachineId, request.Type, request.Parameters, actor, definition.Ttl, ct);
+
+        var row = await commands.GetAsync(commandId, ct)!;
+
+        // Si el agente esta conectado se entrega ya; si no, queda pendiente y
+        // caducara solo. Un RestartMachine no espera dos horas a que vuelva.
+        if (registry.TryPush(request.MachineId, new ServerMessage { Command = SummaryMapper.ToRequest(row!) }))
+            await commands.MarkSentAsync(commandId, ct);
+
+        logger.LogWarning("{Actor} pidio {Type} sobre {MachineCode} (destructivo: {Destructive})",
+            actor, request.Type, machine.MachineCode, definition.IsDestructive);
+
+        return SummaryMapper.ToProto((await commands.GetAsync(commandId, ct))!);
+    }
+
+    public override async Task<CommandList> ListCommands(MachineRef request, ServerCallContext context)
+    {
+        var ct = context.CancellationToken;
+
+        // Vencimiento perezoso: lo que se muestra tiene que estar al dia.
+        await commands.ExpireStaleAsync(request.MachineId, ct);
+
+        var list = new CommandList();
+        list.Commands.AddRange((await commands.ListAsync(request.MachineId, 50, ct)).Select(SummaryMapper.ToProto));
+        return list;
+    }
+
+    public override async Task<CommandEntry> GetCommand(CommandRef request, ServerCallContext context)
+    {
+        var row = await commands.GetAsync(request.CommandId, context.CancellationToken)
+            ?? throw new RpcException(new Status(StatusCode.NotFound, "Comando desconocido"));
+
+        return SummaryMapper.ToProto(row);
     }
 
     private string IssueJwt(UserRow user)

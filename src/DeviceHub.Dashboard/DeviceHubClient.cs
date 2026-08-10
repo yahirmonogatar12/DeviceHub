@@ -107,5 +107,14 @@ public sealed class DeviceHubClient : IDisposable
     public Task<MachineDetail> ResolveConflictAsync(ResolveConflictRequest request, CancellationToken ct)
         => _client.ResolveIdentityConflictAsync(request, _auth, cancellationToken: ct).ResponseAsync;
 
+    public Task<CommandEntry> SendCommandAsync(SendCommandRequest request, CancellationToken ct)
+        => _client.SendCommandAsync(request, _auth, cancellationToken: ct).ResponseAsync;
+
+    public Task<CommandEntry> GetCommandAsync(string commandId, CancellationToken ct)
+        => _client.GetCommandAsync(new CommandRef { CommandId = commandId }, _auth, cancellationToken: ct).ResponseAsync;
+
+    public Task<CommandList> ListCommandsAsync(string machineId, CancellationToken ct)
+        => _client.ListCommandsAsync(new MachineRef { MachineId = machineId }, _auth, cancellationToken: ct).ResponseAsync;
+
     public void Dispose() => _channel.Dispose();
 }

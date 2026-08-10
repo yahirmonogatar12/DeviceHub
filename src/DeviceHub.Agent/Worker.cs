@@ -1,3 +1,5 @@
+using System.Threading.Channels;
+using DeviceHub.Agent.Commands;
 using DeviceHub.Agent.Identity;
 using DeviceHub.Agent.Inventory;
 using DeviceHub.Agent.Monitoring;
@@ -13,6 +15,7 @@ public sealed class Worker(
     IOptions<AgentOptions> options,
     MachineIdentity identityStore,
     PinnedChannelFactory channelFactory,
+    CommandRunner runner,
     ILogger<Worker> logger) : BackgroundService
 {
     private static readonly string AgentVersion =
@@ -21,6 +24,7 @@ public sealed class Worker(
     private readonly AgentOptions _options = options.Value;
     private MachineIdentityFile _identity = new();
     private MetricStore _metrics = null!;
+    private CommandJournal _commands = null!;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -43,6 +47,9 @@ public sealed class Worker(
 
         using var metrics = new MetricStore(_options.DataDirectory);
         _metrics = metrics;
+
+        using var journal = new CommandJournal(_options.DataDirectory);
+        _commands = journal;
 
         // El muestreo corre al margen de la conexion: precisamente los minutos en
         // que el servidor esta caido son los que hay que conservar.
@@ -176,21 +183,33 @@ public sealed class Worker(
 
         logger.LogInformation("Stream abierto contra {Address}", _options.ServerAddress);
 
-        var reader = ReadServerMessagesAsync(call.ResponseStream, session.Token);
-        var writer = SendLoopAsync(call.RequestStream, session.Token);
+        // Cola de salida por sesion. Los streams gRPC de cliente no admiten
+        // escrituras concurrentes, asi que hay UN solo escritor y todo lo demas
+        // encola. Antes el heartbeat escribia directo y no habia hueco para meter
+        // resultados de comando sin esperar hasta 30 s -- inaceptable para algo
+        // que un tecnico pidio y esta mirando.
+        var outbound = Channel.CreateUnbounded<AgentMessage>(new UnboundedChannelOptions { SingleReader = true });
+
+        var writer = WriteLoopAsync(call.RequestStream, outbound.Reader, session.Token);
+        var producer = ProduceLoopAsync(outbound.Writer, session.Token);
+        var reader = ReadServerMessagesAsync(call.ResponseStream, outbound.Writer, session.Token);
 
         // El primero que termine (o falle) cierra la sesion; el bucle exterior reconecta.
-        var finished = await Task.WhenAny(reader, writer);
+        var finished = await Task.WhenAny(writer, producer, reader);
         await session.CancelAsync();
         await finished; // propaga la excepcion real, no una de cancelacion
     }
 
-    /// <summary>
-    /// Un unico escritor del stream. El heartbeat y el inventario salen por el
-    /// mismo bucle secuencial porque los streams gRPC de cliente no admiten
-    /// escrituras concurrentes -- y un lock aqui seria peor que no tener dos tareas.
-    /// </summary>
-    private async Task SendLoopAsync(IClientStreamWriter<AgentMessage> stream, CancellationToken ct)
+    /// <summary>Unico escritor del stream.</summary>
+    private static async Task WriteLoopAsync(
+        IClientStreamWriter<AgentMessage> stream, ChannelReader<AgentMessage> outbound, CancellationToken ct)
+    {
+        await foreach (var message in outbound.ReadAllAsync(ct))
+            await stream.WriteAsync(message, ct);
+    }
+
+    /// <summary>Encola lo periodico: heartbeat, inventario y metricas.</summary>
+    private async Task ProduceLoopAsync(ChannelWriter<AgentMessage> outbound, CancellationToken ct)
     {
         var interval = TimeSpan.FromSeconds(_options.HeartbeatSeconds);
         var nextInventoryScan = DateTime.UtcNow; // al conectar, de inmediato
@@ -198,17 +217,17 @@ public sealed class Worker(
 
         while (!ct.IsCancellationRequested)
         {
-            await stream.WriteAsync(new AgentMessage { Heartbeat = BuildHeartbeat() }, ct);
+            await outbound.WriteAsync(new AgentMessage { Heartbeat = BuildHeartbeat() }, ct);
 
             if (DateTime.UtcNow >= nextInventoryScan)
             {
-                await MaybeSendInventoryAsync(stream, ct);
+                await MaybeSendInventoryAsync(outbound, ct);
                 nextInventoryScan = DateTime.UtcNow.Add(InventoryCadence.ScanInterval);
             }
 
             if (DateTime.UtcNow >= nextMetricsFlush)
             {
-                await FlushMetricsAsync(stream, ct);
+                await FlushMetricsAsync(outbound, ct);
                 nextMetricsFlush = DateTime.UtcNow.AddMinutes(1);
             }
 
@@ -216,7 +235,7 @@ public sealed class Worker(
         }
     }
 
-    private async Task FlushMetricsAsync(IClientStreamWriter<AgentMessage> stream, CancellationToken ct)
+    private async Task FlushMetricsAsync(ChannelWriter<AgentMessage> outbound, CancellationToken ct)
     {
         var pending = _metrics.Take(500);
 
@@ -226,7 +245,7 @@ public sealed class Worker(
         var batch = new MetricsBatch();
         batch.Samples.AddRange(pending);
 
-        await stream.WriteAsync(new AgentMessage { Metrics = batch }, ct);
+        await outbound.WriteAsync(new AgentMessage { Metrics = batch }, ct);
 
         // ponytail: se borra tras escribir, sin esperar confirmacion del servidor.
         // Si la conexion cae justo despues se pierde ese lote -- aceptable para
@@ -238,7 +257,7 @@ public sealed class Worker(
             logger.LogInformation("Metricas enviadas: {Count} minutos acumulados", pending.Count);
     }
 
-    private async Task MaybeSendInventoryAsync(IClientStreamWriter<AgentMessage> stream, CancellationToken ct)
+    private async Task MaybeSendInventoryAsync(ChannelWriter<AgentMessage> outbound, CancellationToken ct)
     {
         var inventory = HardwareCollector.Collect();
 
@@ -250,7 +269,7 @@ public sealed class Worker(
 
         var changed = _identity.LastInventoryHash is not null && _identity.LastInventoryHash != inventory.Hash;
 
-        await stream.WriteAsync(new AgentMessage { Hardware = inventory }, ct);
+        await outbound.WriteAsync(new AgentMessage { Hardware = inventory }, ct);
 
         _identity.LastInventoryHash = inventory.Hash;
         _identity.LastInventoryUtc = DateTime.UtcNow;
@@ -261,10 +280,17 @@ public sealed class Worker(
             : "Inventario enviado");
     }
 
-    private async Task ReadServerMessagesAsync(IAsyncStreamReader<ServerMessage> stream, CancellationToken ct)
+    private async Task ReadServerMessagesAsync(
+        IAsyncStreamReader<ServerMessage> stream, ChannelWriter<AgentMessage> outbound, CancellationToken ct)
     {
         await foreach (var message in stream.ReadAllAsync(ct))
         {
+            if (message.PayloadCase == ServerMessage.PayloadOneofCase.Command)
+            {
+                await HandleCommandAsync(message.Command, outbound, ct);
+                continue;
+            }
+
             if (message.PayloadCase != ServerMessage.PayloadOneofCase.Config)
                 continue;
 
@@ -294,6 +320,34 @@ public sealed class Worker(
             if (changed)
                 identityStore.Save(_identity);
         }
+    }
+
+    /// <summary>
+    /// Mitad del agente de la idempotencia.
+    ///
+    /// Si la conexion cae despues de ejecutar pero antes de reportar, el servidor
+    /// reenvia el comando al reconectar. Aqui se responde con el resultado ya
+    /// guardado en vez de ejecutar otra vez: sin esto, una reconexion en mal
+    /// momento provoca dos reinicios.
+    /// </summary>
+    private async Task HandleCommandAsync(
+        CommandRequest request, ChannelWriter<AgentMessage> outbound, CancellationToken ct)
+    {
+        if (_commands.Find(request.CommandId) is { } already)
+        {
+            logger.LogInformation("Comando {CommandId} ya ejecutado; se reenvia el resultado guardado", request.CommandId);
+            await outbound.WriteAsync(new AgentMessage { CommandResult = already }, ct);
+            return;
+        }
+
+        logger.LogInformation("Ejecutando {Type} ({CommandId})", request.Type, request.CommandId);
+
+        var result = await runner.ExecuteAsync(request, AgentVersion, ct);
+
+        // Primero al journal y despues al cable: si el orden fuera al reves y el
+        // proceso muriera en medio, el comando se ejecutaria dos veces.
+        _commands.Record(result);
+        await outbound.WriteAsync(new AgentMessage { CommandResult = result }, ct);
     }
 
     private Heartbeat BuildHeartbeat()

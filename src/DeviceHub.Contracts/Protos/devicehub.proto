@@ -83,7 +83,57 @@ message AgentMessage {
     Heartbeat heartbeat = 1;
     HardwareInventory hardware = 2;
     MetricsBatch metrics = 3;
+    CommandResult command_result = 4;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Comandos (Fase 7). Bajan por el MISMO stream que ya existe.
+// ---------------------------------------------------------------------------
+
+// Enum cerrado, nunca un string libre: lo que no este aqui no se puede pedir.
+// El agente tambien rechaza lo que no conoce, no solo el servidor.
+enum CommandType {
+  COMMAND_TYPE_UNSPECIFIED = 0;
+  COMMAND_TYPE_PING = 1;
+  COMMAND_TYPE_GET_PROCESSES = 2;
+  COMMAND_TYPE_GET_SERVICES = 3;
+  COMMAND_TYPE_KILL_PROCESS = 4;
+  COMMAND_TYPE_START_SERVICE = 5;
+  COMMAND_TYPE_STOP_SERVICE = 6;
+  COMMAND_TYPE_RESTART_SERVICE = 7;
+  COMMAND_TYPE_RESTART_MACHINE = 8;
+  COMMAND_TYPE_SHUTDOWN_MACHINE = 9;
+}
+
+enum CommandStatus {
+  COMMAND_STATUS_UNSPECIFIED = 0;
+  COMMAND_STATUS_PENDING = 1;
+  COMMAND_STATUS_SENT = 2;
+  COMMAND_STATUS_RUNNING = 3;
+  COMMAND_STATUS_COMPLETED = 4;
+  COMMAND_STATUS_FAILED = 5;
+  COMMAND_STATUS_EXPIRED = 6;
+  COMMAND_STATUS_CANCELLED = 7;
+}
+
+message CommandRequest {
+  string command_id = 1;              // clave de idempotencia
+  CommandType type = 2;
+  map<string, string> parameters = 3;
+
+  // Sin esto, una PC apagada dos horas ejecutaria al reconectar un reinicio que
+  // alguien pidio hace dos horas. El agente comprueba el vencimiento ANTES de
+  // ejecutar: es la proteccion real, no un adorno de reporteria.
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+message CommandResult {
+  string command_id = 1;
+  CommandStatus status = 2;
+  string result = 3;                  // texto, o JSON para GetProcesses/GetServices
+  string error_code = 4;
+  string agent_version = 5;
 }
 
 // Fase 6. El agente muestrea cada 5 s, agrega por minuto y envia el lote cada
@@ -148,6 +198,7 @@ message Heartbeat {
 message ServerMessage {
   oneof payload {
     ConfigUpdate config = 1;
+    CommandRequest command = 2;
   }
 }
 
@@ -168,6 +219,36 @@ service AdminService {
   rpc MoveMachine (MoveMachineRequest) returns (MachineDetail);
   rpc CreateEnrollmentCode (CreateEnrollmentCodeRequest) returns (EnrollmentCodeReply);
   rpc ResolveIdentityConflict (ResolveConflictRequest) returns (MachineDetail);
+  rpc SendCommand (SendCommandRequest) returns (CommandEntry);
+  rpc ListCommands (MachineRef) returns (CommandList);
+  rpc GetCommand (CommandRef) returns (CommandEntry);
+}
+
+message SendCommandRequest {
+  string machine_id = 1;
+  CommandType type = 2;
+  map<string, string> parameters = 3;
+}
+
+message CommandRef {
+  string command_id = 1;
+}
+
+message CommandList {
+  repeated CommandEntry commands = 1;
+}
+
+message CommandEntry {
+  string command_id = 1;
+  string machine_id = 2;
+  CommandType type = 3;
+  CommandStatus status = 4;
+  string requested_by = 5;
+  google.protobuf.Timestamp requested_at = 6;
+  google.protobuf.Timestamp expires_at = 7;
+  google.protobuf.Timestamp completed_at = 8;
+  string result = 9;
+  string error_code = 10;
 }
 
 message LoginRequest {
