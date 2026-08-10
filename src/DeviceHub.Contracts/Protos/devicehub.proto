@@ -1,0 +1,232 @@
+syntax = "proto3";
+
+// Versionado en el package desde el dia 1 (regla 13: no romper agentes viejos).
+package devicehub.v1;
+
+option csharp_namespace = "DeviceHub.Contracts";
+
+import "google/protobuf/timestamp.proto";
+
+// ---------------------------------------------------------------------------
+// Tipos comunes
+// ---------------------------------------------------------------------------
+
+// Confianza del fingerprint de hardware. Las placas industriales y los BIOS mal
+// poblados reportan UUID/serial genericos: el fingerprint es senal fuerte, no
+// verdad absoluta. Solo HIGH habilita la deteccion de clonacion por hardware.
+enum FingerprintConfidence {
+  FINGERPRINT_CONFIDENCE_UNSPECIFIED = 0;
+  FINGERPRINT_CONFIDENCE_LOW = 1;
+  FINGERPRINT_CONFIDENCE_MEDIUM = 2;
+  FINGERPRINT_CONFIDENCE_HIGH = 3;
+}
+
+message HardwareFingerprint {
+  string hash = 1;
+  FingerprintConfidence confidence = 2;
+}
+
+message NetworkInterfaceInfo {
+  string name = 1;
+  string ip = 2;
+  string mac = 3;
+  // Marcada por el agente segun la ruta real hacia el servidor, no por lista
+  // negra de adaptadores virtuales.
+  bool is_primary = 4;
+}
+
+// Derivado de last_seen en el servidor, nunca almacenado en columna.
+enum MachineStatus {
+  MACHINE_STATUS_UNSPECIFIED = 0;
+  MACHINE_STATUS_ONLINE = 1;       // 0-90 s
+  MACHINE_STATUS_UNREACHABLE = 2;  // 90 s - 5 min
+  MACHINE_STATUS_OFFLINE = 3;      // > 5 min
+}
+
+enum IdentityState {
+  IDENTITY_STATE_UNSPECIFIED = 0;
+  IDENTITY_STATE_OK = 1;
+  IDENTITY_STATE_CONFLICT = 2;
+}
+
+// ---------------------------------------------------------------------------
+// AgentService: superficie del agente. Autenticacion por token de maquina.
+// ---------------------------------------------------------------------------
+
+service AgentService {
+  // Primer arranque, o recovery de una maquina existente. Consume un codigo de
+  // un solo uso; nunca un token compartido embebido en el instalador.
+  rpc Register (RegisterRequest) returns (RegisterReply);
+
+  // Stream bidireccional persistente. Los heartbeats suben por aqui y los
+  // comandos (Fase 7) bajaran por el mismo canal: no hace falta transporte nuevo.
+  rpc Connect (stream AgentMessage) returns (stream ServerMessage);
+}
+
+message RegisterRequest {
+  string enrollment_code = 1;
+  string machine_id = 2;             // GUID generado localmente, permanente
+  string hostname = 3;
+  HardwareFingerprint fingerprint = 4;
+  string agent_version = 5;
+}
+
+message RegisterReply {
+  string token = 1;                  // token permanente por maquina
+  string machine_code = 2;           // autoritativo del servidor
+  repeated string pinned_keys = 3;   // pines SPKI aceptados (rotacion multi-pin)
+}
+
+message AgentMessage {
+  // proto3 permite agregar variantes al oneof sin romper agentes viejos.
+  oneof payload {
+    Heartbeat heartbeat = 1;
+  }
+}
+
+message Heartbeat {
+  string hostname = 1;
+  repeated NetworkInterfaceInfo interfaces = 2;
+  string logged_user = 3;
+  int64 uptime_seconds = 4;
+  string agent_version = 5;
+  HardwareFingerprint fingerprint = 6;
+  // Pines que el agente tiene cargados. Es la puerta del paso 2 de la rotacion
+  // de certificado: no se cambia el cert hasta que el 100% reporte el nuevo.
+  repeated string pinned_keys = 7;
+}
+
+message ServerMessage {
+  oneof payload {
+    ConfigUpdate config = 1;
+  }
+}
+
+message ConfigUpdate {
+  string machine_code = 1;           // renombrar sin tocar la PC
+  repeated string pinned_keys = 2;
+}
+
+// ---------------------------------------------------------------------------
+// AdminService: superficie del dashboard. Autenticacion por JWT con rol.
+// ---------------------------------------------------------------------------
+
+service AdminService {
+  rpc Login (LoginRequest) returns (LoginReply);
+  rpc ListMachines (ListMachinesRequest) returns (ListMachinesReply);
+  rpc GetMachine (MachineRef) returns (MachineDetail);
+  rpc WatchMachines (WatchRequest) returns (stream MachineSummary);
+  rpc MoveMachine (MoveMachineRequest) returns (MachineDetail);
+  rpc CreateEnrollmentCode (CreateEnrollmentCodeRequest) returns (EnrollmentCodeReply);
+  rpc ResolveIdentityConflict (ResolveConflictRequest) returns (MachineDetail);
+}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message LoginReply {
+  string token = 1;
+  string username = 2;
+  string role = 3;                   // viewer | technician | engineer | administrator
+}
+
+message ListMachinesRequest {
+  string site_code = 1;              // vacio = todos
+  string area = 2;
+  string line = 3;
+}
+
+message ListMachinesReply {
+  repeated MachineSummary machines = 1;
+}
+
+message MachineRef {
+  string machine_id = 1;
+}
+
+message MachineSummary {
+  string machine_id = 1;
+  string site_code = 2;
+  string machine_code = 3;
+  string display_name = 4;
+  string hostname = 5;
+  string area = 6;
+  string line = 7;
+  string station = 8;
+  string current_ip = 9;
+  string primary_mac = 10;
+  string logged_user = 11;
+  string agent_version = 12;
+  int64 uptime_seconds = 13;
+  google.protobuf.Timestamp last_seen = 14;  // siempre UTC
+  MachineStatus status = 15;
+  IdentityState identity_state = 16;
+}
+
+message MachineDetail {
+  MachineSummary summary = 1;
+  repeated IpHistoryEntry ip_history = 2;
+  repeated PlacementHistoryEntry placement_history = 3;
+  HardwareFingerprint fingerprint = 4;
+}
+
+message IpHistoryEntry {
+  string ip = 1;
+  string mac = 2;
+  google.protobuf.Timestamp valid_from = 3;
+  google.protobuf.Timestamp valid_to = 4;   // ausente = vigente
+}
+
+message PlacementHistoryEntry {
+  string site_code = 1;
+  string machine_code = 2;
+  string area = 3;
+  string line = 4;
+  string station = 5;
+  google.protobuf.Timestamp valid_from = 6;
+  google.protobuf.Timestamp valid_to = 7;
+  string changed_by = 8;
+}
+
+message WatchRequest {
+  string site_code = 1;
+}
+
+// Renombrar y mover: machine_id es inmutable, todo lo demas es editable.
+message MoveMachineRequest {
+  string machine_id = 1;
+  string site_code = 2;
+  string machine_code = 3;
+  string display_name = 4;
+  string area = 5;
+  string line = 6;
+  string station = 7;
+}
+
+message CreateEnrollmentCodeRequest {
+  int32 max_uses = 1;                // default 1
+  int32 valid_minutes = 2;           // default 30
+  string site_code = 3;
+  // Con valor: recovery code de una maquina existente (conserva identidad e
+  // historial). Vacio: enrolamiento de maquina nueva.
+  string target_machine_id = 4;
+}
+
+message EnrollmentCodeReply {
+  string code = 1;                   // se muestra una sola vez, se guarda hasheado
+  google.protobuf.Timestamp expires_at = 2;
+  int32 max_uses = 3;
+}
+
+message ResolveConflictRequest {
+  string machine_id = 1;
+  Resolution resolution = 2;
+
+  enum Resolution {
+    RESOLUTION_UNSPECIFIED = 0;
+    RESOLUTION_APPROVE_NEW_HARDWARE = 1;  // cambio legitimo de placa
+    RESOLUTION_ISSUE_NEW_IDENTITY = 2;    // era un clon
+  }
+}

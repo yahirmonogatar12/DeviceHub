@@ -1,0 +1,14 @@
+bin/
+obj/
+*.user
+*.suo
+.vs/
+TestResults/
+
+# Nunca versionar material criptografico ni identidades de maquina
+*.pfx
+*.key
+machine.json
+
+# Artefactos de publicacion
+artifacts/

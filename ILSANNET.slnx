@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DeviceHub.Agent/DeviceHub.Agent.csproj" />
+    <Project Path="src/DeviceHub.Contracts/DeviceHub.Contracts.csproj" />
+    <Project Path="src/DeviceHub.Dashboard/DeviceHub.Dashboard.csproj" />
+    <Project Path="src/DeviceHub.Server/DeviceHub.Server.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DeviceHub.Tests/DeviceHub.Tests.csproj" />
+  </Folder>
+</Solution>
