@@ -100,7 +100,18 @@
 
                 <!-- Detalle -->
                 <Border Grid.Column="1" Margin="0,0,10,10" BorderBrush="#DDD" BorderThickness="1" Padding="12">
+                  <Grid>
+                    <!-- Sin equipo seleccionado NO se pinta el panel.
+                         Antes se mostraba entero, incluida la alarma de conflicto
+                         de identidad, porque con SelectedMachine en null los
+                         bindings fallan, y un binding fallido no llama al converter:
+                         Visibility se queda en su valor por defecto, que es Visible. -->
+                    <TextBlock Text="Selecciona un equipo de la lista"
+                               Foreground="#999" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Visibility="{Binding SelectedMachine, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
+
                     <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                  Visibility="{Binding SelectedMachine, Converter={StaticResource BoolToVis}}"
                                   DataContext="{Binding SelectedMachine}">
                         <StackPanel>
                             <TextBlock Text="{Binding MachineCode}" FontSize="16" FontWeight="SemiBold" />
@@ -351,6 +362,7 @@
                             </StackPanel>
                         </StackPanel>
                     </ScrollViewer>
+                  </Grid>
                 </Border>
             </Grid>
 
