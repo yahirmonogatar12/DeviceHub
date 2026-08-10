@@ -82,7 +82,28 @@ message AgentMessage {
   oneof payload {
     Heartbeat heartbeat = 1;
     HardwareInventory hardware = 2;
+    MetricsBatch metrics = 3;
   }
+}
+
+// Fase 6. El agente muestrea cada 5 s, agrega por minuto y envia el lote cada
+// 60 s. Nunca una fila por segundo en MySQL.
+//
+// Va en lote y no suelto porque el buffer local puede acumular horas si el
+// servidor estuvo caido: al reconectar se drena todo de una.
+message MetricsBatch {
+  repeated MetricSample samples = 1;
+}
+
+message MetricSample {
+  google.protobuf.Timestamp minute = 1;   // minuto UTC truncado; clave de idempotencia
+  float cpu_avg = 2;
+  float cpu_max = 3;                      // el pico importa: un avg del 40% puede esconder un 100% sostenido
+  float memory_avg = 4;
+  float memory_max = 5;
+  float disk_min_free_percent = 6;        // el disco mas apretado de la maquina
+  int64 net_rx_bytes_per_sec = 7;
+  int64 net_tx_bytes_per_sec = 8;
 }
 
 // Fase 5. NO viaja en el heartbeat: se envia al conectar, cada 12 h, y cuando
@@ -191,6 +212,13 @@ message MachineSummary {
   google.protobuf.Timestamp last_seen = 14;  // siempre UTC
   MachineStatus status = 15;
   IdentityState identity_state = 16;
+
+  // Ultima medicion conocida. Es una observacion, no un valor derivable de otra
+  // columna: por eso si se almacena, a diferencia de `status`.
+  float cpu_percent = 17;
+  float memory_percent = 18;
+  float disk_free_percent = 19;
+  google.protobuf.Timestamp metrics_at = 20;
 }
 
 message MachineDetail {

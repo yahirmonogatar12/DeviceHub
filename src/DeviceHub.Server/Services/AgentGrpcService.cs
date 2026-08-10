@@ -191,6 +191,16 @@ public sealed class AgentGrpcService(
                 continue;
             }
 
+            if (message.PayloadCase == AgentMessage.PayloadOneofCase.Metrics)
+            {
+                await machines.SaveMetricsAsync(machineId, message.Metrics.Samples, ct);
+
+                if (await machines.GetAsync(machineId, ct) is { } updated)
+                    broadcaster.Publish(SummaryMapper.ToSummary(updated, DateTime.UtcNow));
+
+                continue;
+            }
+
             if (message.PayloadCase != AgentMessage.PayloadOneofCase.Heartbeat)
                 continue;
 

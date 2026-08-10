@@ -25,11 +25,17 @@ public static class SummaryMapper
             UptimeSeconds = row.UptimeSeconds ?? 0,
             // Derivado, nunca leido de una columna.
             Status = StatusCalculator.Compute(row.LastSeen, nowUtc),
-            IdentityState = Map.Identity(row.IdentityState)
+            IdentityState = Map.Identity(row.IdentityState),
+            CpuPercent = row.CpuPercent ?? 0,
+            MemoryPercent = row.MemoryPercent ?? 0,
+            DiskFreePercent = row.DiskFreePercent ?? 0
         };
 
         if (row.LastSeen is not null)
             summary.LastSeen = Timestamp.FromDateTime(Db.AsUtc(row.LastSeen.Value));
+
+        if (row.MetricsAt is not null)
+            summary.MetricsAt = Timestamp.FromDateTime(Db.AsUtc(row.MetricsAt.Value));
 
         return summary;
     }

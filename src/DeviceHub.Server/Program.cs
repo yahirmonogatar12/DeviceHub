@@ -61,6 +61,8 @@ builder.Services
 
 builder.Services.AddAuthorization();
 
+builder.Services.AddHostedService<MetricsRetentionService>();
+
 var app = builder.Build();
 
 // Regla 9: el esquema se pone al dia solo, antes de aceptar una sola conexion.

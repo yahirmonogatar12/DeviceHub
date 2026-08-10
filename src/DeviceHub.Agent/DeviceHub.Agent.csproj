@@ -16,7 +16,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.10" />
+    <!-- NO es una dependencia sin usar: Microsoft.Data.Sqlite arrastra la 2.1.11,
+         que tiene la vulnerabilidad GHSA-2m69-gcr7-jv3q (severidad alta). Esta
+         referencia directa fuerza la 2.1.12 parcheada. Se puede quitar cuando
+         Microsoft.Data.Sqlite actualice su transitiva. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
     <PackageReference Include="System.Management" Version="10.0.10" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.10" />
   </ItemGroup>

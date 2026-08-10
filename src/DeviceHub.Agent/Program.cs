@@ -1,6 +1,7 @@
 using DeviceHub.Agent;
 using DeviceHub.Agent.Identity;
 using DeviceHub.Agent.Inventory;
+using DeviceHub.Agent.Monitoring;
 using DeviceHub.Agent.Security;
 
 // Diagnostico de campo: "que ve DeviceHub en esta PC?" sin instalar el servicio
@@ -8,6 +9,22 @@ using DeviceHub.Agent.Security;
 if (args.Contains("--inventory"))
 {
     Console.WriteLine(Google.Protobuf.JsonFormatter.Default.Format(HardwareCollector.Collect()));
+    return;
+}
+
+if (args.Contains("--metrics"))
+{
+    var sampler = new SystemSampler();
+    Console.WriteLine("  CPU%   RAM%  Disco libre%      RX B/s      TX B/s");
+
+    for (var i = 0; i < 3; i++)
+    {
+        await Task.Delay(MetricAggregation.SampleInterval);
+        var sample = sampler.Sample();
+        Console.WriteLine($"{sample.CpuPercent,6:0.0}{sample.MemoryPercent,7:0.0}{sample.DiskFreePercent,14:0.0}" +
+                          $"{sample.NetRxBytesPerSec,12}{sample.NetTxBytesPerSec,12}");
+    }
+
     return;
 }
 

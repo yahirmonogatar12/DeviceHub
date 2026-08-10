@@ -19,4 +19,7 @@ public sealed class ServerOptions
     public string JwtIssuer { get; set; } = "devicehub";
 
     public int JwtHours { get; set; } = 12;
+
+    /// <summary>Dias de metricas por minuto que se conservan (Fase 6).</summary>
+    public int MetricsRetentionDays { get; set; } = 30;
 }

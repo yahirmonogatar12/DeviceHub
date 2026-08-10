@@ -21,6 +21,10 @@ public sealed class MachineRow
     public string? AgentVersion { get; set; }
     public long? UptimeSeconds { get; set; }
     public DateTime? LastSeen { get; set; }
+    public float? CpuPercent { get; set; }
+    public float? MemoryPercent { get; set; }
+    public float? DiskFreePercent { get; set; }
+    public DateTime? MetricsAt { get; set; }
     public string IdentityState { get; set; } = "ok";
     public string? HardwareFingerprint { get; set; }
     public string FingerprintConfidence { get; set; } = "low";
@@ -83,6 +87,8 @@ public sealed class MachineRepository(Db db)
                m.current_ip AS CurrentIp, m.primary_mac AS PrimaryMac,
                m.logged_user AS LoggedUser, m.agent_version AS AgentVersion,
                m.uptime_seconds AS UptimeSeconds, m.last_seen AS LastSeen,
+               m.cpu_percent AS CpuPercent, m.memory_percent AS MemoryPercent,
+               m.disk_free_percent AS DiskFreePercent, m.metrics_at AS MetricsAt,
                m.identity_state AS IdentityState,
                m.hardware_fingerprint AS HardwareFingerprint,
                m.fingerprint_confidence AS FingerprintConfidence
@@ -385,6 +391,95 @@ public sealed class MachineRepository(Db db)
             $"{machineCode} @ {area}/{line}/{station} por {changedBy}", null, now);
 
         await tx.CommitAsync(ct);
+    }
+
+    // --------------------------------------------------------- metricas (Fase 6)
+
+    /// <summary>
+    /// Guarda un lote de minutos y refresca la ultima medicion en `machines`.
+    ///
+    /// El upsert por (machine_id, minute_utc) hace el reenvio inocuo: un agente
+    /// que reconecta y repite minutos ya guardados los pisa, no los duplica.
+    /// </summary>
+    public async Task SaveMetricsAsync(string machineId, IReadOnlyList<MetricSample> samples, CancellationToken ct)
+    {
+        if (samples.Count == 0)
+            return;
+
+        await using var conn = await db.OpenAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+
+        foreach (var sample in samples)
+        {
+            await conn.ExecuteAsync("""
+                INSERT INTO machine_metrics (
+                    machine_id, minute_utc, cpu_avg, cpu_max, memory_avg, memory_max,
+                    disk_min_free_percent, net_rx_bytes_per_sec, net_tx_bytes_per_sec)
+                VALUES (@machineId, @minute, @cpuAvg, @cpuMax, @memAvg, @memMax, @disk, @rx, @tx)
+                ON DUPLICATE KEY UPDATE
+                    cpu_avg = @cpuAvg, cpu_max = @cpuMax, memory_avg = @memAvg,
+                    memory_max = @memMax, disk_min_free_percent = @disk,
+                    net_rx_bytes_per_sec = @rx, net_tx_bytes_per_sec = @tx
+                """,
+                new
+                {
+                    machineId,
+                    minute = sample.Minute.ToDateTime(),
+                    cpuAvg = sample.CpuAvg,
+                    cpuMax = sample.CpuMax,
+                    memAvg = sample.MemoryAvg,
+                    memMax = sample.MemoryMax,
+                    disk = sample.DiskMinFreePercent,
+                    rx = sample.NetRxBytesPerSec,
+                    tx = sample.NetTxBytesPerSec
+                }, tx);
+        }
+
+        var latest = samples.MaxBy(s => s.Minute.Seconds)!;
+
+        // La guarda por fecha evita que el drenado de un backlog deje en `machines`
+        // una medicion mas vieja que la que ya habia.
+        await conn.ExecuteAsync("""
+            UPDATE machines
+            SET cpu_percent = @cpu, memory_percent = @memory,
+                disk_free_percent = @disk, metrics_at = @minute, updated_at = @now
+            WHERE id = @machineId AND (metrics_at IS NULL OR metrics_at < @minute)
+            """,
+            new
+            {
+                machineId,
+                cpu = latest.CpuAvg,
+                memory = latest.MemoryAvg,
+                disk = latest.DiskMinFreePercent,
+                minute = latest.Minute.ToDateTime(),
+                now = DateTime.UtcNow
+            }, tx);
+
+        await tx.CommitAsync(ct);
+    }
+
+    /// <summary>
+    /// Purga por antiguedad, en tandas. Un DELETE de millones de filas de golpe
+    /// bloquearia la tabla varios segundos.
+    /// </summary>
+    public async Task<int> PurgeMetricsOlderThanAsync(DateTime cutoffUtc, int batchSize, CancellationToken ct)
+    {
+        await using var conn = await db.OpenAsync(ct);
+        var total = 0;
+
+        while (!ct.IsCancellationRequested)
+        {
+            var deleted = await conn.ExecuteAsync(
+                "DELETE FROM machine_metrics WHERE minute_utc < @cutoffUtc LIMIT @batchSize",
+                new { cutoffUtc, batchSize });
+
+            total += deleted;
+
+            if (deleted < batchSize)
+                break;
+        }
+
+        return total;
     }
 
     // ------------------------------------------------------- inventario (Fase 5)

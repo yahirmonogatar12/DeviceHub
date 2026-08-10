@@ -80,6 +80,9 @@
                         <DataGridTextColumn Header="IP" Binding="{Binding CurrentIp}" Width="120" />
                         <DataGridTextColumn Header="MAC" Binding="{Binding PrimaryMac}" Width="140" />
                         <DataGridTextColumn Header="Usuario" Binding="{Binding LoggedUser}" Width="150" />
+                        <DataGridTextColumn Header="CPU" Binding="{Binding Cpu}" Width="60" />
+                        <DataGridTextColumn Header="RAM" Binding="{Binding Memory}" Width="60" />
+                        <DataGridTextColumn Header="Disco libre" Binding="{Binding DiskFree}" Width="80" />
                         <DataGridTextColumn Header="Uptime" Binding="{Binding Uptime}" Width="80" />
                         <DataGridTextColumn Header="Agente" Binding="{Binding AgentVersion}" Width="70" />
                         <DataGridTextColumn Header="Visto" Binding="{Binding LastSeenAgo}" Width="100" />

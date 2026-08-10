@@ -1,5 +1,6 @@
 using DeviceHub.Agent.Identity;
 using DeviceHub.Agent.Inventory;
+using DeviceHub.Agent.Monitoring;
 using DeviceHub.Agent.Network;
 using DeviceHub.Agent.Security;
 using DeviceHub.Contracts;
@@ -19,6 +20,7 @@ public sealed class Worker(
 
     private readonly AgentOptions _options = options.Value;
     private MachineIdentityFile _identity = new();
+    private MetricStore _metrics = null!;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -38,6 +40,13 @@ public sealed class Worker(
 
         logger.LogInformation("DeviceHub Agent {Version} | machineId {MachineId} | servidor {Address}",
             AgentVersion, _identity.MachineId, _options.ServerAddress);
+
+        using var metrics = new MetricStore(_options.DataDirectory);
+        _metrics = metrics;
+
+        // El muestreo corre al margen de la conexion: precisamente los minutos en
+        // que el servidor esta caido son los que hay que conservar.
+        var sampling = SampleLoopAsync(stoppingToken);
 
         var backoff = TimeSpan.FromSeconds(1);
 
@@ -68,6 +77,49 @@ public sealed class Worker(
                     ex.Message, backoff.TotalSeconds);
                 await SafeDelay(Jitter(backoff), stoppingToken);
                 backoff = TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 2, 60));
+            }
+        }
+
+        await sampling;
+    }
+
+    /// <summary>
+    /// Muestrea cada 5 s y vuelca un agregado por minuto al buffer local. No
+    /// depende del stream: si el servidor esta caido, los minutos se acumulan y
+    /// se drenan al reconectar.
+    /// </summary>
+    private async Task SampleLoopAsync(CancellationToken ct)
+    {
+        var sampler = new SystemSampler();
+        var buffer = new List<RawSample>();
+        var currentMinute = MetricAggregation.MinuteOf(DateTime.UtcNow);
+
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(MetricAggregation.SampleInterval, ct);
+
+                var minute = MetricAggregation.MinuteOf(DateTime.UtcNow);
+
+                if (minute != currentMinute && buffer.Count > 0)
+                {
+                    _metrics.Append(MetricAggregation.Aggregate(currentMinute, buffer));
+                    buffer.Clear();
+                }
+
+                currentMinute = minute;
+                buffer.Add(sampler.Sample());
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                // El monitoreo nunca debe tumbar al agente: si falla una muestra,
+                // la maquina tiene que seguir apareciendo ONLINE.
+                logger.LogWarning(ex, "Fallo al muestrear metricas");
             }
         }
     }
@@ -142,6 +194,7 @@ public sealed class Worker(
     {
         var interval = TimeSpan.FromSeconds(_options.HeartbeatSeconds);
         var nextInventoryScan = DateTime.UtcNow; // al conectar, de inmediato
+        var nextMetricsFlush = DateTime.UtcNow;
 
         while (!ct.IsCancellationRequested)
         {
@@ -153,8 +206,36 @@ public sealed class Worker(
                 nextInventoryScan = DateTime.UtcNow.Add(InventoryCadence.ScanInterval);
             }
 
+            if (DateTime.UtcNow >= nextMetricsFlush)
+            {
+                await FlushMetricsAsync(stream, ct);
+                nextMetricsFlush = DateTime.UtcNow.AddMinutes(1);
+            }
+
             await Task.Delay(interval, ct);
         }
+    }
+
+    private async Task FlushMetricsAsync(IClientStreamWriter<AgentMessage> stream, CancellationToken ct)
+    {
+        var pending = _metrics.Take(500);
+
+        if (pending.Count == 0)
+            return;
+
+        var batch = new MetricsBatch();
+        batch.Samples.AddRange(pending);
+
+        await stream.WriteAsync(new AgentMessage { Metrics = batch }, ct);
+
+        // ponytail: se borra tras escribir, sin esperar confirmacion del servidor.
+        // Si la conexion cae justo despues se pierde ese lote -- aceptable para
+        // metricas. El servidor hace upsert por (machine_id, minute), asi que el
+        // dia que haga falta se puede pasar a at-least-once sin duplicar nada.
+        _metrics.Remove(pending);
+
+        if (pending.Count > 1)
+            logger.LogInformation("Metricas enviadas: {Count} minutos acumulados", pending.Count);
     }
 
     private async Task MaybeSendInventoryAsync(IClientStreamWriter<AgentMessage> stream, CancellationToken ct)

@@ -3,9 +3,10 @@
 Plataforma interna para inventariar, monitorear y administrar las PCs de planta.
 El control remoto es **un modulo mas**, no el producto.
 
-Estado actual: **Fases 0-5** implementadas. Identidad de maquina, heartbeat sobre
-stream gRPC persistente, historial de IP y de ubicacion, dashboard WPF e
-inventario de hardware. Las fases 6-18 estan disenadas pero no codificadas.
+Estado actual: **Fases 0-6** implementadas. Identidad de maquina, heartbeat sobre
+stream gRPC persistente, historial de IP y de ubicacion, dashboard WPF,
+inventario de hardware y monitoreo. Las fases 7-18 estan disenadas pero no
+codificadas.
 
 ## Stack
 
@@ -99,7 +100,8 @@ dotnet run --project src/DeviceHub.Dashboard
 Que ve DeviceHub en esta PC, sin instalar el servicio ni levantar el servidor:
 
 ```powershell
-DeviceHub.Agent.exe --inventory
+DeviceHub.Agent.exe --inventory   # CPU, RAM, discos, GPU, BIOS, Windows
+DeviceHub.Agent.exe --metrics     # tres muestras de CPU/RAM/disco/red
 ```
 
 ## Inventario de hardware
@@ -117,6 +119,27 @@ Dos exclusiones deliberadas para que el hash no cambie por ruido:
 
 Cuando el hardware si cambia de verdad (mas RAM, disco nuevo, actualizacion de
 Windows) queda un evento `HARDWARE_CHANGED` en `machine_events`.
+
+## Monitoreo
+
+```
+Agente --> muestra cada 5 s (CPU, RAM, disco, red)
+       --> agrega por minuto (promedio Y pico)
+       --> buffer SQLite local
+       --> envia el lote cada 60 s por el stream que ya existe
+Servidor --> machine_metrics, purga a los 30 dias
+```
+
+Granularidad de un minuto, nunca de un segundo: a 200 PCs serian 17 millones de
+filas diarias. Se guarda promedio **y** maximo porque un promedio del 40% puede
+esconder un pico sostenido al 100%, que es justo lo que se busca cuando alguien
+reporta que una estacion va lenta. Del disco se reporta el mas apretado, no la
+media: un `C:` al 5% no debe quedar escondido tras un `D:` al 90%.
+
+El muestreo corre **al margen de la conexion**. Los minutos en que el servidor
+esta caido son precisamente los que hay que conservar, y para eso esta el buffer
+SQLite: sobrevive al reinicio del servicio y se drena al reconectar. Esta acotado
+a 24 h para que un agente desconectado una semana no llene el disco de la PC.
 
 ## Tests
 

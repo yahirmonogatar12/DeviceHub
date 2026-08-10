@@ -24,6 +24,16 @@ public sealed class MachineViewModel(MachineSummary summary) : ObservableObject
 
     public bool HasConflict => _summary.IdentityState == IdentityState.Conflict;
 
+    /// <summary>
+    /// Se pregunta por MetricsAt y no por el valor: un 0% de CPU es una lectura
+    /// legitima de una maquina inactiva, no ausencia de datos.
+    /// </summary>
+    public bool HasMetrics => _summary.MetricsAt is not null;
+
+    public string Cpu => HasMetrics ? $"{_summary.CpuPercent:0}%" : "-";
+    public string Memory => HasMetrics ? $"{_summary.MemoryPercent:0}%" : "-";
+    public string DiskFree => HasMetrics ? $"{_summary.DiskFreePercent:0}%" : "-";
+
     /// <summary>Recalculado en el cliente, no el que empujo el servidor.</summary>
     public MachineStatus Status => StatusCalculator.Compute(LastSeenUtc, DateTime.UtcNow);
 
