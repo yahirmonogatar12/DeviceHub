@@ -25,6 +25,41 @@ var connectionString = Environment.GetEnvironmentVariable("DEVICEHUB_DB_CONNECTI
 using var bootstrapLoggerFactory = LoggerFactory.Create(logging => logging.AddSimpleConsole());
 var bootstrapLogger = bootstrapLoggerFactory.CreateLogger("DeviceHub.Bootstrap");
 
+// Bootstrap sin GUI: generar un codigo de enrolamiento exigia abrir el dashboard,
+// lo que impide guionizar un despliegue. Instalar en 80 PCs no puede depender de
+// que alguien copie y pegue de una ventana.
+if (args.Contains("--enrollment-code"))
+{
+    var db = new Db(connectionString);
+    var repository = new MachineRepository(db);
+    var siteCode = ArgValue(args, "--site") ?? options.DefaultSiteCode;
+
+    var siteId = await repository.GetSiteIdAsync(siteCode, CancellationToken.None);
+
+    if (siteId is null)
+    {
+        bootstrapLogger.LogError("Sitio desconocido: {SiteCode}. Arranca el servidor una vez para aplicar las migraciones.", siteCode);
+        return 1;
+    }
+
+    var uses = int.TryParse(ArgValue(args, "--uses"), out var parsedUses) ? Math.Max(1, parsedUses) : 1;
+    var minutes = int.TryParse(ArgValue(args, "--minutes"), out var parsedMinutes) ? Math.Clamp(parsedMinutes, 5, 120) : 30;
+    var code = Secrets.NewEnrollmentCode();
+
+    await new EnrollmentRepository(db).CreateAsync(
+        Secrets.Sha256Hex(code), siteId.Value, "cli", DateTime.UtcNow.AddMinutes(minutes), uses, null, CancellationToken.None);
+
+    Console.WriteLine(code);
+    bootstrapLogger.LogInformation("Codigo para {SiteCode}: {Uses} uso(s), vence en {Minutes} min", siteCode, uses, minutes);
+    return 0;
+}
+
+static string? ArgValue(string[] args, string name)
+{
+    var index = Array.IndexOf(args, name);
+    return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
+}
+
 var certificate = CertificateProvider.LoadOrCreate(options.DataDirectory, bootstrapLogger);
 var jwtKeyProvider = new JwtKeyProvider(options.DataDirectory);
 
