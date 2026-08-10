@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using System.Text.Json;
 using System.Windows;
@@ -89,31 +90,91 @@ public sealed partial class MainViewModel
         if (SelectedMachine is null)
             return;
 
+        RemoteSessionReply? session = null;
+
         try
         {
             CommandFeedback = "Abriendo sesion remota...";
-            var session = await _client.StartRemoteSessionAsync(SelectedMachine.MachineId, CancellationToken.None);
+            session = await _client.StartRemoteSessionAsync(SelectedMachine.MachineId, CancellationToken.None);
 
-            using var process = System.Diagnostics.Process.Start(
-                new System.Diagnostics.ProcessStartInfo(session.LaunchTarget, session.LaunchArguments)
+            var ejecutable = ResolverCliente(session.LaunchTarget)
+                ?? throw new FileNotFoundException(
+                    $"No se encontro {session.LaunchTarget} en esta PC.\n\n" +
+                    "El cliente de control remoto se ejecuta AQUI, no en la maquina controlada:\n" +
+                    "instalalo en este equipo y vuelve a intentarlo.");
+
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(ejecutable, session.LaunchArguments)
                 {
                     UseShellExecute = true
                 });
-
-            if (process is null)
-            {
-                await _client.EndRemoteSessionAsync(session.SessionId, CancellationToken.None);
-                CommandFeedback = $"No se pudo lanzar el cliente ({session.LaunchTarget}). Instalalo en esta PC.";
-                return;
-            }
 
             _remoteSessionId = session.SessionId;
             CommandFeedback = $"Sesion remota abierta sobre {SelectedMachine.MachineCode}";
         }
         catch (Exception ex)
         {
+            // Si el lanzamiento fallo, la sesion ya quedo abierta en el servidor.
+            // Sin cerrarla aqui, la auditoria mostraria a alguien "dentro" de una
+            // maquina donde nunca entro, hasta el timeout de 8 h.
+            if (session is not null)
+            {
+                try { await _client.EndRemoteSessionAsync(session.SessionId, CancellationToken.None); }
+                catch (Exception) { /* el servidor la cerrara por timeout */ }
+            }
+
             CommandFeedback = Describe(ex);
+            MessageBox.Show(Describe(ex), "Control remoto", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
+    }
+
+    /// <summary>
+    /// Localiza el cliente de control remoto EN ESTA PC.
+    ///
+    /// Lanzarlo por nombre depende del PATH, y RustDesk no se añade al PATH: el
+    /// intento fallaba practicamente siempre con un error de Windows en bruto.
+    /// Se busca donde de verdad se instala, igual que hace el agente.
+    /// </summary>
+    private static string? ResolverCliente(string target)
+    {
+        if (Path.IsPathFullyQualified(target) && File.Exists(target))
+            return target;
+
+        var nombre = Path.GetFileName(target);
+
+        foreach (var clave in new[]
+                 {
+                     @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\RustDesk",
+                     @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\RustDesk"
+                 })
+        {
+            try
+            {
+                using var registro = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(clave);
+                var ruta = registro?.GetValue("InstallLocation")?.ToString();
+
+                if (!string.IsNullOrWhiteSpace(ruta) && File.Exists(Path.Combine(ruta, nombre)))
+                    return Path.Combine(ruta, nombre);
+            }
+            catch (Exception)
+            {
+                // sin permisos para leer esa clave
+            }
+        }
+
+        foreach (var carpeta in new[]
+                 {
+                     Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                     Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86)
+                 })
+        {
+            var candidato = Path.Combine(carpeta, "RustDesk", nombre);
+
+            if (File.Exists(candidato))
+                return candidato;
+        }
+
+        return null;
     }
 
     [RelayCommand]
