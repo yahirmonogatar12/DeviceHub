@@ -3,7 +3,7 @@
 Plataforma interna para inventariar, monitorear y administrar las PCs de planta.
 El control remoto es **un modulo mas**, no el producto.
 
-Estado actual: **Fases 0-12** implementadas. Identidad de maquina, heartbeat
+Estado actual: **Fases 0-13** implementadas. Identidad de maquina, heartbeat
 sobre stream gRPC persistente, historial de IP y de ubicacion, dashboard WPF,
 inventario de hardware, monitoreo, administracion remota (comandos con TTL e
 idempotencia, procesos y servicios), control remoto con sesiones, y auditoria
@@ -179,6 +179,32 @@ permisos intentara apagar una PC es exactamente lo que hay que poder ver despues
 
 Cada fila lleva `request_id` (el `TraceIdentifier` de la peticion), que
 correlaciona todo lo ocurrido en una misma llamada.
+
+## Usuarios y limites
+
+| Rol | Puede |
+|---|---|
+| `viewer` | ver equipos, `Ping` |
+| `technician` | + procesos, matar procesos, control remoto |
+| `engineer` | + servicios, reiniciar la maquina |
+| `administrator` | + apagar, mover/renombrar, usuarios, codigos de enrolamiento |
+
+El administrador crea usuarios desde el dashboard. **No se puede degradar ni
+desactivar al ultimo administrador activo**: dejaria el sistema sin forma de
+crear usuarios ni resolver conflictos de identidad salvo reescribiendo la base a
+mano.
+
+Contrasenas: minimo 12 caracteres y sin palabras obvias. Se exige longitud en
+vez de un zoo de simbolos porque `Ilsan2026!` cumple cualquier regla de
+mayusculas-numeros-simbolos y es adivinable; una frase larga no.
+
+Limites (ventana deslizante, en memoria):
+
+- **5 intentos de login** por usuario y origen cada 5 min. Registrar los fallos
+  no los detiene: sin limite, se pueden probar contrasenas tan rapido como
+  aguante la red y lo unico que aporta DeviceHub es constancia detallada.
+- **30 comandos por minuto y maquina**. Acota un bucle en la UI o un script mal
+  escrito; nadie encola mil reinicios sobre el mismo equipo.
 
 ## Inventario de hardware
 

@@ -6,8 +6,8 @@ realidad y estan anotadas donde corresponde.
 
 ## Estado
 
-**Vamos en la Fase 13 (Roles y hardening).** Fases 0 a 12 implementadas, con
-tests y verificadas ejecutando contra el MySQL central.
+**Vamos en la Fase 14 (File Manager).** Fases 0 a 13 implementadas, con tests
+y verificadas ejecutando contra el MySQL central.
 
 | # | Fase | Estado |
 |---|---|---|
@@ -24,8 +24,8 @@ tests y verificadas ejecutando contra el MySQL central.
 | 10 | Control remoto (RustDesk) | hecho |
 | 11 | Sesiones remotas y permisos | hecho |
 | 12 | Auditoria | hecho |
-| 13 | **Roles y hardening** | **siguiente** |
-| 14 | File Manager | pendiente |
+| 13 | Roles y hardening | hecho (mTLS diferido) |
+| 14 | **File Manager** | **siguiente** |
 | 15 | Terminal | pendiente |
 | 16 | Auto-update del agente | pendiente |
 | 17 | Integracion MES | pendiente |
@@ -154,6 +154,17 @@ origen e instantes. Las huerfanas se cierran a las 8 h: sin eso, la auditoria
 diria que alguien lleva tres semanas dentro de una PC porque cerro el dashboard
 de golpe.
 
+**13 · Roles y hardening** — el hueco real no era la matriz (ya existia en
+`CommandPolicy`) sino que **no habia forma de crear un technician**: solo estaba
+el admin del bootstrap, asi que los permisos eran teoricos. Ahora hay gestion de
+usuarios, con la guarda de no poder degradar ni desactivar al ultimo
+administrador activo. Rate limiting en login y comandos: la auditoria ya
+registraba los intentos fallidos, pero registrar no es detener. Y se persisten
+los pines que reporta cada agente, sin los cuales la rotacion de certificado era
+a ciegas.
+
+**mTLS queda diferido a proposito** — ver deuda deliberada.
+
 **12 · Auditoria** — "si no se audita, no se ejecuta" hecho codigo: la fila de
 auditoria se escribe en la MISMA transaccion que la accion, asi que si ese
 INSERT falla, el rollback se lleva tambien el comando. `machine_audit` es la
@@ -168,22 +179,7 @@ permisos intentara apagar una PC es justo lo que hay que poder ver despues.
 
 ## Fases pendientes
 
-### 13 · Roles y hardening — siguiente
-
-| Funcion | Viewer | Technician | Engineer | Admin |
-|---|---|---|---|---|
-| Ver equipo | si | si | si | si |
-| Control remoto | no | si | si | si |
-| Procesos | no | si | si | si |
-| Reiniciar servicio | no | no | si | si |
-| Terminal | no | no | si | si |
-| Apagar equipo | no | no | no | si |
-
-Mas: mTLS con certificado por agente, rate limiting, rotacion del certificado
-disparada desde el dashboard (el procedimiento de 4 pasos ya esta en
-[security.md](security.md)).
-
-### 14 · File Manager
+### 14 · File Manager — siguiente
 
 List / Download / Upload / Rename / Move / Delete, por streams gRPC con chunks.
 Rutas protegidas normalizando con `Path.GetFullPath` **antes** de comparar, para
@@ -246,6 +242,8 @@ Simplificaciones tomadas a conciencia, con el disparador para revisarlas.
 | DeviceHub NO guarda la contrasena del motor remoto: el tecnico la introduce | si se exige un clic sin prompt. Exigiria cifrado en reposo, rotacion y auditoria propia: una tabla con las claves de acceso remoto de toda la planta no se resuelve de paso |
 | `sites` con una sola fila | la UI multi-planta se agrega cuando haya una segunda |
 | Un solo proyecto para el agente | si aparece un agente Linux |
+| mTLS por agente no implementado: se queda en TLS con pin SPKI + token aleatorio de 32 bytes protegido con DPAPI | si aparece un requisito de cumplimiento que lo exija, o si el servidor deja de estar solo en la LAN. Hoy el beneficio marginal es escaso: la amenaza que mTLS ataca es el robo del token desde una maquina comprometida, pero esa maquina filtraria igual la clave privada de su certificado cliente. Montar emision, distribucion y rotacion de certificados por agente es un subsistema entero a cambio de poco |
+| El rate limiting vive en memoria: reiniciar el servidor limpia los contadores | si alguna vez hay varias instancias detras de un balanceador; ahi tiene que pasar a almacenamiento compartido |
 | `SQLitePCLRaw.bundle_e_sqlite3` fijado a mano en el `.csproj` | cuando `Microsoft.Data.Sqlite` actualice su transitiva (hoy trae una con CVE) |
 
 ## Reglas que siguen aplicando

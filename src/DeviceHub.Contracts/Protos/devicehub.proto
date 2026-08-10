@@ -231,12 +231,68 @@ service AdminService {
   rpc MoveMachine (MoveMachineRequest) returns (MachineDetail);
   rpc CreateEnrollmentCode (CreateEnrollmentCodeRequest) returns (EnrollmentCodeReply);
   rpc ResolveIdentityConflict (ResolveConflictRequest) returns (MachineDetail);
+  rpc ListUsers (ListUsersRequest) returns (UserList);
+  rpc CreateUser (CreateUserRequest) returns (UserRecord);
+  rpc UpdateUser (UpdateUserRequest) returns (UserRecord);
+  rpc ChangeOwnPassword (ChangeOwnPasswordRequest) returns (UserRecord);
+  rpc GetRotationReadiness (RotationReadinessRequest) returns (RotationReadinessReply);
   rpc ListAudit (AuditQuery) returns (AuditList);
   rpc StartRemoteSession (MachineRef) returns (RemoteSessionReply);
   rpc EndRemoteSession (RemoteSessionRef) returns (RemoteSessionReply);
   rpc SendCommand (SendCommandRequest) returns (CommandEntry);
   rpc ListCommands (MachineRef) returns (CommandList);
   rpc GetCommand (CommandRef) returns (CommandEntry);
+}
+
+// --------------------------------------------------------------------------
+// Fase 13: usuarios y rotacion de certificado.
+// --------------------------------------------------------------------------
+
+message ListUsersRequest {}
+
+message UserList {
+  repeated UserRecord users = 1;
+}
+
+message UserRecord {
+  string username = 1;
+  string role = 2;                            // viewer|technician|engineer|administrator
+  bool is_active = 3;
+  string created_by = 4;
+  google.protobuf.Timestamp last_login_at = 5;
+}
+
+message CreateUserRequest {
+  string username = 1;
+  string password = 2;
+  string role = 3;
+}
+
+message UpdateUserRequest {
+  string username = 1;
+  string role = 2;        // vacio = sin cambio
+  bool set_active = 3;
+  bool is_active = 4;
+  string new_password = 5; // vacio = sin cambio
+}
+
+message ChangeOwnPasswordRequest {
+  string current_password = 1;
+  string new_password = 2;
+}
+
+message RotationReadinessRequest {
+  // Pin SPKI candidato. Se responde cuantas maquinas ya lo aceptan.
+  string candidate_pin = 1;
+}
+
+// La puerta del paso 2 de la rotacion: no se cambia el certificado hasta que
+// TODAS las maquinas alcanzables reportan el pin nuevo.
+message RotationReadinessReply {
+  int32 online_machines = 1;
+  int32 ready_machines = 2;
+  bool safe_to_rotate = 3;
+  repeated string pending_machine_codes = 4;
 }
 
 // Fase 12. Se llama AuditRecord y no AuditEntry para no chocar con el tipo

@@ -19,6 +19,10 @@ public static class AuditActions
     public const string IdentityResolved = "IDENTITY_CONFLICT_RESOLVED";
     public const string EnrollmentCodeCreated = "ENROLLMENT_CODE_CREATED";
     public const string LoginFailed = "LOGIN_FAILED";
+    public const string LoginThrottled = "LOGIN_THROTTLED";
+    public const string UserCreated = "USER_CREATED";
+    public const string UserUpdated = "USER_UPDATED";
+    public const string PasswordChanged = "PASSWORD_CHANGED";
 
     /// <summary>
     /// Cada comando peligroso tiene su propia accion auditable. Registrar

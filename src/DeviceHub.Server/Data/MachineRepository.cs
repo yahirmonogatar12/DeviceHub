@@ -171,6 +171,33 @@ public sealed class MachineRepository(Db db)
     }
 
     /// <summary>
+    /// Estado de preparacion para rotar el certificado (Fase 13).
+    ///
+    /// Solo cuentan las maquinas vistas recientemente: una apagada no puede
+    /// confirmar nada, y esperar por ella bloquearia la rotacion para siempre.
+    /// Esas se recuperan con un recovery code cuando vuelvan.
+    /// </summary>
+    public async Task<IReadOnlyList<(string MachineCode, bool HasPin)>> GetPinReadinessAsync(
+        string candidatePin, TimeSpan onlineWindow, CancellationToken ct)
+    {
+        await using var conn = await db.OpenAsync(ct);
+
+        var rows = await conn.QueryAsync<(string MachineCode, string? PinnedKeys)>("""
+            SELECT machine_code AS MachineCode, pinned_keys AS PinnedKeys
+            FROM machines
+            WHERE last_seen IS NOT NULL AND last_seen > @cutoff AND identity_state = 'ok'
+            ORDER BY machine_code
+            """, new { cutoff = DateTime.UtcNow - onlineWindow });
+
+        return
+        [
+            .. rows.Select(r => (r.MachineCode,
+                HasPin: r.PinnedKeys is not null
+                    && r.PinnedKeys.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains(candidatePin)))
+        ];
+    }
+
+    /// <summary>
     /// Cuantas OTRAS maquinas comparten este fingerprint. Alimenta la degradacion
     /// aprendida: >=3 significa que el valor no discrimina y se trata como LOW.
     /// </summary>
@@ -264,7 +291,7 @@ public sealed class MachineRepository(Db db)
                 agent_version = @agentVersion, hardware_fingerprint = @fingerprint,
                 fingerprint_confidence = @confidence,
                 remote_provider = @remoteProvider, remote_device_id = @remoteDeviceId,
-                remote_available = @remoteAvailable,
+                remote_available = @remoteAvailable, pinned_keys = @pinnedKeys,
                 last_seen = @now, updated_at = @now
             WHERE id = @machineId
             """,
@@ -280,6 +307,7 @@ public sealed class MachineRepository(Db db)
                 remoteProvider = NullIfEmpty(heartbeat.Remote?.Provider),
                 remoteDeviceId = NullIfEmpty(heartbeat.Remote?.DeviceId),
                 remoteAvailable = heartbeat.Remote?.Available ?? false,
+                pinnedKeys = heartbeat.PinnedKeys.Count == 0 ? null : string.Join(' ', heartbeat.PinnedKeys),
                 now
             }, tx);
 

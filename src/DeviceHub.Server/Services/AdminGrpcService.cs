@@ -27,6 +27,7 @@ public sealed class AdminGrpcService(
     CommandRepository commands,
     SessionRepository sessions,
     AuditRepository audit,
+    RateLimiter limiter,
     IRemoteProvider remote,
     UserRepository users,
     MachineBroadcaster broadcaster,
@@ -41,6 +42,27 @@ public sealed class AdminGrpcService(
     [AllowAnonymous]
     public override async Task<LoginReply> Login(LoginRequest request, ServerCallContext context)
     {
+        // Registrar los intentos fallidos no los detiene. Se limita por usuario Y
+        // por origen: por usuario para que no se le pruebe la cuenta al admin
+        // desde mil sitios, por origen para que un solo atacante no barra la
+        // lista de usuarios.
+        var throttleKey = $"login:{request.Username.ToLowerInvariant()}|{context.Peer}";
+
+        if (!limiter.TryAcquire(throttleKey, RateLimits.LoginAttempts, RateLimits.LoginWindow))
+        {
+            logger.LogWarning("Login bloqueado por exceso de intentos: {Username} desde {Peer}",
+                request.Username, context.Peer);
+
+            await audit.WriteAsync(new AuditEntry(
+                UserId: request.Username, UserRole: null, Action: AuditActions.LoginThrottled,
+                MachineId: null, MachineCode: null, SiteCode: null,
+                RequestId: context.GetHttpContext().TraceIdentifier, SourceIp: context.Peer,
+                Outcome: AuditEntry.Denied, Details: null), context.CancellationToken);
+
+            throw new RpcException(new Status(StatusCode.ResourceExhausted,
+                "Demasiados intentos. Espera unos minutos."));
+        }
+
         var user = await users.FindAsync(request.Username, context.CancellationToken);
 
         // Mismo mensaje para usuario inexistente y password mala: no se filtra
@@ -59,6 +81,9 @@ public sealed class AdminGrpcService(
 
             throw new RpcException(new Status(StatusCode.Unauthenticated, "Credenciales invalidas"));
         }
+
+        limiter.Reset(throttleKey);
+        await users.TouchLoginAsync(user.Username, context.CancellationToken);
 
         return new LoginReply
         {
@@ -250,6 +275,159 @@ public sealed class AdminGrpcService(
         return await GetMachine(new MachineRef { MachineId = request.MachineId }, context);
     }
 
+    // ------------------------------------------------- usuarios (Fase 13)
+
+    [Authorize(Roles = Roles.Administrator)]
+    public override async Task<UserList> ListUsers(ListUsersRequest request, ServerCallContext context)
+    {
+        var list = new UserList();
+        list.Users.AddRange((await users.ListAsync(context.CancellationToken)).Select(ToRecord));
+        return list;
+    }
+
+    [Authorize(Roles = Roles.Administrator)]
+    public override async Task<UserRecord> CreateUser(CreateUserRequest request, ServerCallContext context)
+    {
+        var ct = context.CancellationToken;
+        var username = request.Username.Trim().ToLowerInvariant();
+
+        if (username.Length < 3)
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Usuario demasiado corto"));
+
+        if (Roles.Rank(request.Role) < 0)
+            throw new RpcException(new Status(StatusCode.InvalidArgument, $"Rol desconocido: {request.Role}"));
+
+        if (!PasswordPolicy.IsValid(request.Password, out var error))
+            throw new RpcException(new Status(StatusCode.InvalidArgument, error));
+
+        if (await users.FindAsync(username, ct) is not null)
+            throw new RpcException(new Status(StatusCode.AlreadyExists, "Ese usuario ya existe"));
+
+        var actor = context.GetHttpContext().User.Identity?.Name ?? "desconocido";
+        await users.CreateAsync(username, Secrets.HashPassword(request.Password), request.Role, actor, ct);
+
+        await audit.WriteAsync(BuildAudit(context, AuditActions.UserCreated, null, AuditEntry.Allowed,
+            $"{username} rol={request.Role}"), ct);
+
+        return ToRecord((await users.FindAsync(username, ct))!);
+    }
+
+    [Authorize(Roles = Roles.Administrator)]
+    public override async Task<UserRecord> UpdateUser(UpdateUserRequest request, ServerCallContext context)
+    {
+        var ct = context.CancellationToken;
+        var username = request.Username.Trim().ToLowerInvariant();
+
+        var target = await users.FindAsync(username, ct)
+            ?? throw new RpcException(new Status(StatusCode.NotFound, "Usuario desconocido"));
+
+        string? role = string.IsNullOrWhiteSpace(request.Role) ? null : request.Role;
+        if (role is not null && Roles.Rank(role) < 0)
+            throw new RpcException(new Status(StatusCode.InvalidArgument, $"Rol desconocido: {role}"));
+
+        bool? active = request.SetActive ? request.IsActive : null;
+
+        string? passwordHash = null;
+        if (!string.IsNullOrEmpty(request.NewPassword))
+        {
+            if (!PasswordPolicy.IsValid(request.NewPassword, out var error))
+                throw new RpcException(new Status(StatusCode.InvalidArgument, error));
+
+            passwordHash = Secrets.HashPassword(request.NewPassword);
+        }
+
+        // Quedarse sin ningun administrador activo dejaria el sistema sin forma
+        // de crear usuarios ni resolver conflictos: solo se saldria reescribiendo
+        // la base a mano.
+        var losesAdmin = target.Role == Roles.Administrator
+            && ((role is not null && role != Roles.Administrator) || active == false);
+
+        if (losesAdmin && await users.CountAdministratorsAsync(ct) <= 1)
+            throw new RpcException(new Status(StatusCode.FailedPrecondition,
+                "Es el ultimo administrador activo: crea otro antes de degradarlo o desactivarlo"));
+
+        await users.UpdateAsync(username, role, active, passwordHash, ct);
+
+        await audit.WriteAsync(BuildAudit(context, AuditActions.UserUpdated, null, AuditEntry.Allowed,
+            $"{username} rol={role ?? "="} activo={(active?.ToString() ?? "=")} password={(passwordHash is not null)}"), ct);
+
+        return ToRecord((await users.FindAsync(username, ct))!);
+    }
+
+    /// <summary>
+    /// Cualquiera puede cambiar SU propia contrasena, y hace falta: el admin
+    /// inicial nace con una aleatoria que el servidor imprime una sola vez.
+    /// Exige la actual, para que una sesion olvidada abierta no baste.
+    /// </summary>
+    public override async Task<UserRecord> ChangeOwnPassword(ChangeOwnPasswordRequest request, ServerCallContext context)
+    {
+        var ct = context.CancellationToken;
+        var username = context.GetHttpContext().User.Identity?.Name
+            ?? throw new RpcException(new Status(StatusCode.Unauthenticated, "Sin sesion"));
+
+        var user = await users.FindAsync(username, ct)
+            ?? throw new RpcException(new Status(StatusCode.NotFound, "Usuario desconocido"));
+
+        if (!Secrets.VerifyPassword(request.CurrentPassword, user.PasswordHash))
+        {
+            await audit.WriteAsync(BuildAudit(context, AuditActions.PasswordChanged, null, AuditEntry.Denied,
+                "contrasena actual incorrecta"), ct);
+
+            throw new RpcException(new Status(StatusCode.PermissionDenied, "La contrasena actual no es correcta"));
+        }
+
+        if (!PasswordPolicy.IsValid(request.NewPassword, out var error))
+            throw new RpcException(new Status(StatusCode.InvalidArgument, error));
+
+        await users.UpdateAsync(username, null, null, Secrets.HashPassword(request.NewPassword), ct);
+        await audit.WriteAsync(BuildAudit(context, AuditActions.PasswordChanged, null, AuditEntry.Allowed, username), ct);
+
+        return ToRecord((await users.FindAsync(username, ct))!);
+    }
+
+    /// <summary>
+    /// Paso 2 del procedimiento de rotacion de certificado: responde si YA es
+    /// seguro cambiarlo. Mientras quede una maquina alcanzable sin el pin nuevo,
+    /// cambiarlo la desconectaria.
+    /// </summary>
+    [Authorize(Roles = Roles.Administrator)]
+    public override async Task<RotationReadinessReply> GetRotationReadiness(
+        RotationReadinessRequest request, ServerCallContext context)
+    {
+        if (string.IsNullOrWhiteSpace(request.CandidatePin))
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Falta el pin candidato"));
+
+        var readiness = await machines.GetPinReadinessAsync(
+            request.CandidatePin, StatusCalculator.UnreachableWindow, context.CancellationToken);
+
+        var reply = new RotationReadinessReply
+        {
+            OnlineMachines = readiness.Count,
+            ReadyMachines = readiness.Count(r => r.HasPin)
+        };
+
+        reply.PendingMachineCodes.AddRange(readiness.Where(r => !r.HasPin).Select(r => r.MachineCode));
+        reply.SafeToRotate = reply.OnlineMachines > 0 && reply.PendingMachineCodes.Count == 0;
+
+        return reply;
+    }
+
+    private static UserRecord ToRecord(UserRow row)
+    {
+        var record = new UserRecord
+        {
+            Username = row.Username,
+            Role = row.Role,
+            IsActive = row.IsActive,
+            CreatedBy = row.CreatedBy ?? string.Empty
+        };
+
+        if (row.LastLoginAt is not null)
+            record.LastLoginAt = Timestamp.FromDateTime(Db.AsUtc(row.LastLoginAt.Value));
+
+        return record;
+    }
+
     // -------------------------------------------------- auditoria (Fase 12)
 
     public override async Task<AuditList> ListAudit(AuditQuery request, ServerCallContext context)
@@ -429,6 +607,17 @@ public sealed class AdminGrpcService(
         var required = CommandPolicy.RequiredParameter(request.Type);
         if (required is not null && !request.Parameters.ContainsKey(required))
             throw new RpcException(new Status(StatusCode.InvalidArgument, $"Falta el parametro '{required}'"));
+
+        // Acota el dano de un bucle en la UI o de un script mal escrito: nadie
+        // encola mil reinicios sobre la misma PC en un minuto.
+        if (!limiter.TryAcquire($"cmd:{request.MachineId}", RateLimits.CommandsPerMachine, RateLimits.CommandWindow))
+        {
+            await audit.WriteAsync(BuildAudit(context, action, machine, AuditEntry.Denied,
+                "limite de comandos por minuto excedido"), ct);
+
+            throw new RpcException(new Status(StatusCode.ResourceExhausted,
+                $"Maximo {RateLimits.CommandsPerMachine} comandos por minuto y maquina"));
+        }
 
         var details = string.Join(' ', request.Parameters.Select(p => $"{p.Key}={p.Value}"));
 

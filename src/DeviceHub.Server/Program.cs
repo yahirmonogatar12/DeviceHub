@@ -137,6 +137,7 @@ builder.Services.AddSingleton<EnrollmentRepository>();
 builder.Services.AddSingleton<CommandRepository>();
 builder.Services.AddSingleton<SessionRepository>();
 builder.Services.AddSingleton<AuditRepository>();
+builder.Services.AddSingleton<RateLimiter>();
 
 // Unico punto donde se elige el motor remoto. La Fase 18 cambia esta linea.
 builder.Services.AddSingleton<IRemoteProvider, RustDeskProvider>();
