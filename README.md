@@ -5,8 +5,9 @@ El control remoto es **un modulo mas**, no el producto.
 
 Estado actual: **Fases 0-6** implementadas. Identidad de maquina, heartbeat sobre
 stream gRPC persistente, historial de IP y de ubicacion, dashboard WPF,
-inventario de hardware y monitoreo. Las fases 7-18 estan disenadas pero no
-codificadas.
+inventario de hardware y monitoreo.
+
+**Avance completo, decisiones y lo que falta: [docs/roadmap.md](docs/roadmap.md).**
 
 ## Stack
 
@@ -28,7 +29,8 @@ src/DeviceHub.Agent/        servicio de Windows por PC
 src/DeviceHub.Dashboard/    WPF
 tests/DeviceHub.Tests/      xunit sobre la logica que puede romperse
 database/migrations/        .sql embebidos en el servidor
-docs/                       arquitectura, protocolo, seguridad
+deploy/                     publicacion e instalacion de servicios
+docs/                       roadmap, arquitectura, protocolo, seguridad
 ```
 
 ## Desplegar
