@@ -3,6 +3,7 @@ using DeviceHub.Agent.Commands;
 using DeviceHub.Agent.Identity;
 using DeviceHub.Agent.Inventory;
 using DeviceHub.Agent.Monitoring;
+using DeviceHub.Agent.Remote;
 using DeviceHub.Agent.Security;
 
 // Diagnostico de campo: "que ve DeviceHub en esta PC?" sin instalar el servicio
@@ -35,6 +36,10 @@ builder.Services.Configure<AgentOptions>(builder.Configuration.GetSection(AgentO
 
 builder.Services.AddSingleton<PinnedChannelFactory>();
 builder.Services.AddSingleton<CommandRunner>();
+
+// Unico punto donde el agente elige motor remoto. Todo lo especifico de RustDesk
+// (rutas, TOML, --get-id) vive dentro de esta implementacion.
+builder.Services.AddSingleton<IRemoteAgentDetector, RustDeskDetector>();
 builder.Services.AddSingleton(sp => new MachineIdentity(
     sp.GetRequiredService<IOptions<AgentOptions>>().Value.DataDirectory,
     sp.GetRequiredService<ILogger<MachineIdentity>>()));

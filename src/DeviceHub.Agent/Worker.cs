@@ -4,6 +4,7 @@ using DeviceHub.Agent.Identity;
 using DeviceHub.Agent.Inventory;
 using DeviceHub.Agent.Monitoring;
 using DeviceHub.Agent.Network;
+using DeviceHub.Agent.Remote;
 using DeviceHub.Agent.Security;
 using DeviceHub.Contracts;
 using Grpc.Core;
@@ -16,6 +17,7 @@ public sealed class Worker(
     MachineIdentity identityStore,
     PinnedChannelFactory channelFactory,
     CommandRunner runner,
+    IRemoteAgentDetector remoteDetector,
     ILogger<Worker> logger) : BackgroundService
 {
     private static readonly string AgentVersion =
@@ -25,6 +27,11 @@ public sealed class Worker(
     private MachineIdentityFile _identity = new();
     private MetricStore _metrics = null!;
     private CommandJournal _commands = null!;
+
+    /// <summary>Se cachea: detectar lanza un proceso, y el motor remoto no se
+    /// instala ni desinstala cada 30 segundos.</summary>
+    private RemoteAgentInfo _remote = new();
+    private DateTime _nextRemoteScan = DateTime.MinValue;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -358,7 +365,8 @@ public sealed class Worker(
             LoggedUser = LoggedUser(),
             UptimeSeconds = NetworkInfo.UptimeSeconds(),
             AgentVersion = AgentVersion,
-            Fingerprint = Fingerprint.Collect()
+            Fingerprint = Fingerprint.Collect(),
+            Remote = DetectRemote()
         };
 
         heartbeat.PinnedKeys.AddRange(_identity.PinnedKeys);
@@ -371,6 +379,44 @@ public sealed class Worker(
         }));
 
         return heartbeat;
+    }
+
+    /// <summary>
+    /// Identificador de la maquina en el motor remoto. Que NO este instalado no
+    /// es un error: la maquina aparece sin control remoto disponible y ya.
+    /// </summary>
+    private RemoteAgentInfo DetectRemote()
+    {
+        if (DateTime.UtcNow < _nextRemoteScan)
+            return _remote;
+
+        _nextRemoteScan = DateTime.UtcNow.Add(InventoryCadence.ScanInterval);
+
+        try
+        {
+            var deviceId = remoteDetector.DetectDeviceId();
+
+            var detected = new RemoteAgentInfo
+            {
+                Provider = remoteDetector.Provider,
+                DeviceId = deviceId ?? string.Empty,
+                Available = deviceId is not null
+            };
+
+            if (detected.Available != _remote.Available)
+            {
+                logger.LogInformation("Control remoto ({Provider}): {Estado}",
+                    detected.Provider, detected.Available ? "disponible" : "no instalado");
+            }
+
+            _remote = detected;
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Fallo la deteccion del motor remoto");
+        }
+
+        return _remote;
     }
 
     /// <summary>

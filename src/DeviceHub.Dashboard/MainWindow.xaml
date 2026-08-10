@@ -237,6 +237,15 @@
                                         Margin="0,18,0,0">
                                 <TextBlock Text="Administrar" FontWeight="SemiBold" Margin="0,0,0,6" />
 
+                                <!-- El ID del motor remoto NO se muestra: al tecnico le basta el boton. -->
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6"
+                                            Visibility="{Binding SelectedMachine.RemoteAvailable, Converter={StaticResource BoolToVis}}">
+                                    <Button Content="CONTROLAR PC" Padding="12,5" FontWeight="SemiBold"
+                                            Command="{Binding RemoteControlCommand}" />
+                                    <Button Content="Cerrar sesion" Padding="8,5" Margin="6,0,0,0"
+                                            Command="{Binding EndRemoteSessionCommand}" />
+                                </StackPanel>
+
                                 <WrapPanel>
                                     <Button Content="Ping" Padding="8,3" Margin="0,0,4,4" Command="{Binding PingCommand}" />
                                     <Button Content="Procesos" Padding="8,3" Margin="0,0,4,4" Command="{Binding RefreshProcessesCommand}" />

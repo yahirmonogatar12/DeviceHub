@@ -37,6 +37,69 @@ public sealed partial class MainViewModel
     [ObservableProperty]
     private ServiceRow? _selectedService;
 
+    /// <summary>
+    /// Control remoto (Fase 10). El servidor autoriza, registra la sesion y
+    /// devuelve QUE ejecutar; aqui solo se lanza el cliente local.
+    ///
+    /// Nada de esto nombra a RustDesk: si la Fase 18 cambia de motor, este
+    /// metodo no se toca.
+    /// </summary>
+    [RelayCommand]
+    private async Task RemoteControlAsync()
+    {
+        if (SelectedMachine is null)
+            return;
+
+        try
+        {
+            CommandFeedback = "Abriendo sesion remota...";
+            var session = await _client.StartRemoteSessionAsync(SelectedMachine.MachineId, CancellationToken.None);
+
+            using var process = System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(session.LaunchTarget, session.LaunchArguments)
+                {
+                    UseShellExecute = true
+                });
+
+            if (process is null)
+            {
+                await _client.EndRemoteSessionAsync(session.SessionId, CancellationToken.None);
+                CommandFeedback = $"No se pudo lanzar el cliente ({session.LaunchTarget}). Instalalo en esta PC.";
+                return;
+            }
+
+            _remoteSessionId = session.SessionId;
+            CommandFeedback = $"Sesion remota abierta sobre {SelectedMachine.MachineCode}";
+        }
+        catch (Exception ex)
+        {
+            CommandFeedback = Describe(ex);
+        }
+    }
+
+    [RelayCommand]
+    private async Task EndRemoteSessionAsync()
+    {
+        if (_remoteSessionId is null)
+            return;
+
+        try
+        {
+            await _client.EndRemoteSessionAsync(_remoteSessionId, CancellationToken.None);
+            CommandFeedback = "Sesion remota cerrada";
+        }
+        catch (Exception ex)
+        {
+            CommandFeedback = Describe(ex);
+        }
+        finally
+        {
+            _remoteSessionId = null;
+        }
+    }
+
+    private string? _remoteSessionId;
+
     [RelayCommand]
     private async Task PingAsync()
     {

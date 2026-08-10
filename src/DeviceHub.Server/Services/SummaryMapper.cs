@@ -28,7 +28,8 @@ public static class SummaryMapper
             IdentityState = Map.Identity(row.IdentityState),
             CpuPercent = row.CpuPercent ?? 0,
             MemoryPercent = row.MemoryPercent ?? 0,
-            DiskFreePercent = row.DiskFreePercent ?? 0
+            DiskFreePercent = row.DiskFreePercent ?? 0,
+            RemoteAvailable = row.RemoteAvailable
         };
 
         if (row.LastSeen is not null)

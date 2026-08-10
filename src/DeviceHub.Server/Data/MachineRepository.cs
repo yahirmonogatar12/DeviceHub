@@ -25,6 +25,9 @@ public sealed class MachineRow
     public float? MemoryPercent { get; set; }
     public float? DiskFreePercent { get; set; }
     public DateTime? MetricsAt { get; set; }
+    public string? RemoteProvider { get; set; }
+    public string? RemoteDeviceId { get; set; }
+    public bool RemoteAvailable { get; set; }
     public string IdentityState { get; set; } = "ok";
     public string? HardwareFingerprint { get; set; }
     public string FingerprintConfidence { get; set; } = "low";
@@ -87,6 +90,8 @@ public sealed class MachineRepository(Db db)
                m.current_ip AS CurrentIp, m.primary_mac AS PrimaryMac,
                m.logged_user AS LoggedUser, m.agent_version AS AgentVersion,
                m.uptime_seconds AS UptimeSeconds, m.last_seen AS LastSeen,
+               m.remote_provider AS RemoteProvider, m.remote_device_id AS RemoteDeviceId,
+               m.remote_available AS RemoteAvailable,
                m.cpu_percent AS CpuPercent, m.memory_percent AS MemoryPercent,
                m.disk_free_percent AS DiskFreePercent, m.metrics_at AS MetricsAt,
                m.identity_state AS IdentityState,
@@ -257,7 +262,10 @@ public sealed class MachineRepository(Db db)
             UPDATE machines
             SET hostname = @hostname, logged_user = @loggedUser, uptime_seconds = @uptime,
                 agent_version = @agentVersion, hardware_fingerprint = @fingerprint,
-                fingerprint_confidence = @confidence, last_seen = @now, updated_at = @now
+                fingerprint_confidence = @confidence,
+                remote_provider = @remoteProvider, remote_device_id = @remoteDeviceId,
+                remote_available = @remoteAvailable,
+                last_seen = @now, updated_at = @now
             WHERE id = @machineId
             """,
             new
@@ -269,6 +277,9 @@ public sealed class MachineRepository(Db db)
                 agentVersion = heartbeat.AgentVersion,
                 fingerprint = heartbeat.Fingerprint?.Hash,
                 confidence = Map.ToDb(confidence),
+                remoteProvider = NullIfEmpty(heartbeat.Remote?.Provider),
+                remoteDeviceId = NullIfEmpty(heartbeat.Remote?.DeviceId),
+                remoteAvailable = heartbeat.Remote?.Available ?? false,
                 now
             }, tx);
 
@@ -572,6 +583,9 @@ public sealed class MachineRepository(Db db)
         await tx.CommitAsync(ct);
         return change;
     }
+
+    private static string? NullIfEmpty(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value;
 
     /// <summary>Un modelo de GPU absurdamente largo no debe tumbar el inventario entero.</summary>
     private static string? Trim(string? value, int max)

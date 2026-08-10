@@ -6,7 +6,7 @@ realidad y estan anotadas donde corresponde.
 
 ## Estado
 
-**Vamos en la Fase 10 (Control remoto).** Fases 0 a 9 implementadas, con tests y
+**Vamos en la Fase 12 (Auditoria).** Fases 0 a 11 implementadas, con tests y
 verificadas ejecutando contra el MySQL central.
 
 | # | Fase | Estado |
@@ -21,9 +21,9 @@ verificadas ejecutando contra el MySQL central.
 | 7 | Comandos | hecho |
 | 8 | Procesos | hecho |
 | 9 | Servicios | hecho |
-| 10 | **Control remoto (RustDesk)** | **siguiente** |
-| 11 | Sesiones remotas y permisos | pendiente |
-| 12 | Auditoria | pendiente |
+| 10 | Control remoto (RustDesk) | hecho |
+| 11 | Sesiones remotas y permisos | hecho |
+| 12 | **Auditoria** | **siguiente** |
 | 13 | Roles y hardening | pendiente |
 | 14 | File Manager | pendiente |
 | 15 | Terminal | pendiente |
@@ -141,35 +141,24 @@ rescate remoto.
 **9 · Servicios** — `ServiceController` con Start/Stop/Restart. Reservado a
 Engineer+: un tecnico no reinicia `MySQL80`.
 
+**10 · Control remoto** — el agente obtiene su identificador preguntandole al
+programa (`rustdesk.exe --get-id`) en vez de parsear su TOML: la ruta y el
+formato cambian entre versiones, y las nuevas cifran el id. Mismo principio que
+la seleccion de NIC. Todo lo especifico vive en `RustDeskDetector` (agente) y
+`RustDeskProvider` (servidor); el contrato, la BD y el dashboard solo manejan
+`provider` y `device_id` como texto opaco. **DeviceHub no guarda la contrasena
+del motor remoto** -- ver deuda deliberada.
+
+**11 · Sesiones** — toda sesion queda en `machine_sessions` con usuario, maquina,
+origen e instantes. Las huerfanas se cierran a las 8 h: sin eso, la auditoria
+diria que alguien lleva tres semanas dentro de una PC porque cerro el dashboard
+de golpe.
+
 ---
 
 ## Fases pendientes
 
-### 10 · Control remoto (RustDesk) — siguiente
-
-```csharp
-public interface IRemoteProvider {
-    Task<RemoteInfo> GetConnectionInfoAsync(Guid machineId);
-    Task<RemoteSession> LaunchAsync(Guid machineId, string userId);
-}
-```
-
-Dos metodos, no quince. **Nada fuera del provider sabe que existe RustDesk**: el
-contrato, la BD y el dashboard solo manejan `RemoteProvider` y `RemoteDeviceId`
-como strings opacos. La deteccion de la ruta del `RustDesk2.toml` vive dentro de
-`RustDeskDetector` y resuelve por descarte, porque cambia entre versiones.
-
-hbbs/hbbr self-hosted en la LAN: ningun agente expuesto a Internet.
-
-> Ojo con la Fase 5: si RustDesk instala su display virtual, aparecera como GPU
-> nueva y disparara un `HARDWARE_CHANGED` en todas las PCs. Ver *Deuda deliberada*.
-
-### 11 · Sesiones remotas y permisos
-
-`machine_sessions` con inicio, fin y origen. Sesiones huerfanas se cierran por
-timeout. Control remoto exige Technician+.
-
-### 12 · Auditoria
+### 12 · Auditoria — siguiente
 
 Antes de terminal y de archivos, a proposito.
 
@@ -252,6 +241,7 @@ Simplificaciones tomadas a conciencia, con el disparador para revisarlas.
 | `status` derivado de `last_seen`, sin columna ni sweeper | si hacen falta eventos "se cayo" para alertas |
 | Pin de clave publica en vez de PKI | mTLS en Fase 13; la rotacion A->B ya esta definida |
 | El conflicto de identidad lo resuelve un humano | si el volumen de conflictos genera ruido real |
+| DeviceHub NO guarda la contrasena del motor remoto: el tecnico la introduce | si se exige un clic sin prompt. Exigiria cifrado en reposo, rotacion y auditoria propia: una tabla con las claves de acceso remoto de toda la planta no se resuelve de paso |
 | `sites` con una sola fila | la UI multi-planta se agrega cuando haya una segunda |
 | Un solo proyecto para el agente | si aparece un agente Linux |
 | `SQLitePCLRaw.bundle_e_sqlite3` fijado a mano en el `.csproj` | cuando `Microsoft.Data.Sqlite` actualice su transitiva (hoy trae una con CVE) |

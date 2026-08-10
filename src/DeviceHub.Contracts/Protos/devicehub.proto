@@ -193,6 +193,18 @@ message Heartbeat {
   // Pines que el agente tiene cargados. Es la puerta del paso 2 de la rotacion
   // de certificado: no se cambia el cert hasta que el 100% reporte el nuevo.
   repeated string pinned_keys = 7;
+
+  RemoteAgentInfo remote = 8;
+}
+
+// Fase 10. Deliberadamente OPACO: `provider` y `device_id` son strings sin
+// estructura. Ni el contrato, ni la BD, ni el dashboard saben que existe
+// RustDesk -- eso vive dentro del detector y del provider. Cambiar de motor en
+// la Fase 18 no toca este mensaje.
+message RemoteAgentInfo {
+  string provider = 1;
+  string device_id = 2;
+  bool available = 3;
 }
 
 message ServerMessage {
@@ -219,9 +231,27 @@ service AdminService {
   rpc MoveMachine (MoveMachineRequest) returns (MachineDetail);
   rpc CreateEnrollmentCode (CreateEnrollmentCodeRequest) returns (EnrollmentCodeReply);
   rpc ResolveIdentityConflict (ResolveConflictRequest) returns (MachineDetail);
+  rpc StartRemoteSession (MachineRef) returns (RemoteSessionReply);
+  rpc EndRemoteSession (RemoteSessionRef) returns (RemoteSessionReply);
   rpc SendCommand (SendCommandRequest) returns (CommandEntry);
   rpc ListCommands (MachineRef) returns (CommandList);
   rpc GetCommand (CommandRef) returns (CommandEntry);
+}
+
+message RemoteSessionRef {
+  string session_id = 1;
+}
+
+// Lo que el dashboard necesita para lanzar el cliente local. Nada aqui nombra a
+// RustDesk: `launch_target` es lo que el provider decida que hay que ejecutar.
+message RemoteSessionReply {
+  string session_id = 1;
+  string provider = 2;
+  string device_id = 3;
+  string launch_target = 4;   // ejecutable
+  string launch_arguments = 5;
+  google.protobuf.Timestamp started_at = 6;
+  google.protobuf.Timestamp ended_at = 7;
 }
 
 message SendCommandRequest {
@@ -300,6 +330,10 @@ message MachineSummary {
   float memory_percent = 18;
   float disk_free_percent = 19;
   google.protobuf.Timestamp metrics_at = 20;
+
+  // El dashboard solo necesita saber SI se puede controlar, no con que ni con
+  // que identificador. El device_id no se le enseña al tecnico.
+  bool remote_available = 21;
 }
 
 message MachineDetail {

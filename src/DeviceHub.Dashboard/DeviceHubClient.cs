@@ -107,6 +107,12 @@ public sealed class DeviceHubClient : IDisposable
     public Task<MachineDetail> ResolveConflictAsync(ResolveConflictRequest request, CancellationToken ct)
         => _client.ResolveIdentityConflictAsync(request, _auth, cancellationToken: ct).ResponseAsync;
 
+    public Task<RemoteSessionReply> StartRemoteSessionAsync(string machineId, CancellationToken ct)
+        => _client.StartRemoteSessionAsync(new MachineRef { MachineId = machineId }, _auth, cancellationToken: ct).ResponseAsync;
+
+    public Task<RemoteSessionReply> EndRemoteSessionAsync(string sessionId, CancellationToken ct)
+        => _client.EndRemoteSessionAsync(new RemoteSessionRef { SessionId = sessionId }, _auth, cancellationToken: ct).ResponseAsync;
+
     public Task<CommandEntry> SendCommandAsync(SendCommandRequest request, CancellationToken ct)
         => _client.SendCommandAsync(request, _auth, cancellationToken: ct).ResponseAsync;
 

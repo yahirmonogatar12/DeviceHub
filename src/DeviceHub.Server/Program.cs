@@ -2,6 +2,7 @@ using DeviceHub.Contracts;
 using DeviceHub.Server;
 using DeviceHub.Server.Data;
 using DeviceHub.Server.Realtime;
+using DeviceHub.Server.Remote;
 using DeviceHub.Server.Security;
 using DeviceHub.Server.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -126,6 +127,10 @@ builder.Services.AddSingleton(new Db(connectionString));
 builder.Services.AddSingleton<MachineRepository>();
 builder.Services.AddSingleton<EnrollmentRepository>();
 builder.Services.AddSingleton<CommandRepository>();
+builder.Services.AddSingleton<SessionRepository>();
+
+// Unico punto donde se elige el motor remoto. La Fase 18 cambia esta linea.
+builder.Services.AddSingleton<IRemoteProvider, RustDeskProvider>();
 builder.Services.AddSingleton<UserRepository>();
 builder.Services.AddSingleton<ConnectionRegistry>();
 builder.Services.AddSingleton<MachineBroadcaster>();

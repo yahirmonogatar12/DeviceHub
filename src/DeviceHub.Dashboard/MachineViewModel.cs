@@ -24,6 +24,10 @@ public sealed class MachineViewModel(MachineSummary summary) : ObservableObject
 
     public bool HasConflict => _summary.IdentityState == IdentityState.Conflict;
 
+    /// <summary>Si se puede controlar. Con que motor y con que ID es cosa del
+    /// servidor: al tecnico le basta el boton.</summary>
+    public bool RemoteAvailable => _summary.RemoteAvailable;
+
     /// <summary>
     /// Se pregunta por MetricsAt y no por el valor: un 0% de CPU es una lectura
     /// legitima de una maquina inactiva, no ausencia de datos.

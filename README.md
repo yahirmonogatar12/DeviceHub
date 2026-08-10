@@ -3,10 +3,10 @@
 Plataforma interna para inventariar, monitorear y administrar las PCs de planta.
 El control remoto es **un modulo mas**, no el producto.
 
-Estado actual: **Fases 0-9** implementadas. Identidad de maquina, heartbeat sobre
-stream gRPC persistente, historial de IP y de ubicacion, dashboard WPF,
-inventario de hardware, monitoreo, y administracion remota: comandos con TTL e
-idempotencia, procesos y servicios.
+Estado actual: **Fases 0-11** implementadas. Identidad de maquina, heartbeat
+sobre stream gRPC persistente, historial de IP y de ubicacion, dashboard WPF,
+inventario de hardware, monitoreo, administracion remota (comandos con TTL e
+idempotencia, procesos y servicios) y control remoto con sesiones auditadas.
 
 **Avance completo, decisiones y lo que falta: [docs/roadmap.md](docs/roadmap.md).**
 
@@ -137,6 +137,28 @@ La idempotencia tiene dos mitades. El servidor guarda cada comando por
 `commandId`, y el agente lleva un journal en SQLite: si la conexion cae despues
 de ejecutar pero antes de reportar, al reconectar responde el resultado guardado
 en vez de ejecutar otra vez. Sin eso, una reconexion provoca dos reinicios.
+
+## Control remoto
+
+El dashboard muestra **`[ CONTROLAR PC ]`** y nada mas: el identificador del
+motor remoto no se le enseña al tecnico. El servidor autoriza (Technician+),
+registra la sesion en `machine_sessions` y devuelve que ejecutar; el cliente
+corre en la PC del tecnico.
+
+Nada fuera de `RustDeskDetector` (agente) y `RustDeskProvider` (servidor) sabe
+que hay RustDesk detras: el contrato, la base y la UI manejan `provider` y
+`device_id` como texto opaco. Cambiar de motor es cambiar una linea de registro
+de dependencias.
+
+El agente obtiene su identificador preguntandole al programa
+(`rustdesk.exe --get-id`) en vez de parsear su archivo de configuracion, cuya
+ruta y formato cambian entre versiones. Si no esta instalado, la maquina aparece
+sin control remoto disponible -- no es un error.
+
+**DeviceHub no guarda la contrasena del motor remoto.** Una tabla con las claves
+de acceso remoto de toda la planta no es algo que se resuelva de paso: exigiria
+cifrado en reposo, rotacion y auditoria propia. El tecnico la introduce, o se
+configura acceso desatendido en el propio RustDesk.
 
 ## Inventario de hardware
 

@@ -3,6 +3,7 @@ using System.Text;
 using DeviceHub.Contracts;
 using DeviceHub.Server.Data;
 using DeviceHub.Server.Realtime;
+using DeviceHub.Server.Remote;
 using DeviceHub.Server.Security;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
@@ -24,6 +25,8 @@ public sealed class AdminGrpcService(
     MachineRepository machines,
     EnrollmentRepository enrollment,
     CommandRepository commands,
+    SessionRepository sessions,
+    IRemoteProvider remote,
     UserRepository users,
     MachineBroadcaster broadcaster,
     ConnectionRegistry registry,
@@ -225,6 +228,82 @@ public sealed class AdminGrpcService(
             actor, request.MachineId, request.Resolution);
 
         return await GetMachine(new MachineRef { MachineId = request.MachineId }, context);
+    }
+
+    // -------------------------------------------------- control remoto (Fases 10-11)
+
+    /// <summary>
+    /// Autoriza, registra la sesion y devuelve QUE lanzar. El servidor no abre
+    /// nada: el cliente remoto corre en la PC del tecnico.
+    ///
+    /// El device_id viaja porque el cliente local lo necesita, pero el dashboard
+    /// no lo muestra: al tecnico le basta el boton.
+    /// </summary>
+    public override async Task<RemoteSessionReply> StartRemoteSession(MachineRef request, ServerCallContext context)
+    {
+        var ct = context.CancellationToken;
+        var user = context.GetHttpContext().User;
+        var actor = user.Identity?.Name ?? "desconocido";
+
+        if (!Roles.Satisfies(user.FindFirst(ClaimTypes.Role)?.Value, Roles.Technician))
+            throw new RpcException(new Status(StatusCode.PermissionDenied,
+                "El control remoto requiere rol technician o superior"));
+
+        var machine = await machines.GetAsync(request.MachineId, ct)
+            ?? throw new RpcException(new Status(StatusCode.NotFound, "Maquina desconocida"));
+
+        if (!machine.RemoteAvailable || string.IsNullOrWhiteSpace(machine.RemoteDeviceId))
+            throw new RpcException(new Status(StatusCode.FailedPrecondition,
+                "Esta maquina no tiene motor de control remoto instalado"));
+
+        var launch = remote.BuildLaunch(machine.RemoteDeviceId);
+        var sourceIp = context.Peer;
+
+        // Las huerfanas se cierran aqui, sin servicio de fondo.
+        await sessions.CloseOrphansAsync(ct);
+
+        var sessionId = await sessions.StartAsync(
+            machine.Id, actor, launch.Provider, launch.DeviceId, sourceIp, ct);
+
+        await machines.LogEventAsync(machine.Id, "REMOTE_SESSION_STARTED",
+            $"{actor} via {launch.Provider}", sourceIp, ct);
+
+        logger.LogWarning("{Actor} abrio sesion remota sobre {MachineCode} desde {Source}",
+            actor, machine.MachineCode, sourceIp);
+
+        return new RemoteSessionReply
+        {
+            SessionId = sessionId,
+            Provider = launch.Provider,
+            DeviceId = launch.DeviceId,
+            LaunchTarget = launch.Target,
+            LaunchArguments = launch.Arguments,
+            StartedAt = Timestamp.FromDateTime(DateTime.UtcNow)
+        };
+    }
+
+    public override async Task<RemoteSessionReply> EndRemoteSession(RemoteSessionRef request, ServerCallContext context)
+    {
+        var ct = context.CancellationToken;
+        var actor = context.GetHttpContext().User.Identity?.Name ?? "desconocido";
+
+        var session = await sessions.EndAsync(request.SessionId, "closed", ct)
+            ?? throw new RpcException(new Status(StatusCode.NotFound, "Sesion desconocida"));
+
+        await machines.LogEventAsync(session.MachineId, "REMOTE_SESSION_ENDED", $"{actor}", context.Peer, ct);
+
+        var reply = new RemoteSessionReply
+        {
+            SessionId = session.Id,
+            Provider = session.Provider,
+            DeviceId = session.DeviceId ?? string.Empty,
+            StartedAt = Timestamp.FromDateTime(Db.AsUtc(session.StartedAt))
+        };
+
+        if (session.EndedAt is not null)
+            reply.EndedAt = Timestamp.FromDateTime(Db.AsUtc(session.EndedAt.Value));
+
+        return reply;
     }
 
     // ---------------------------------------------------------- comandos (Fase 7)
