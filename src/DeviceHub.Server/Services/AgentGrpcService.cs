@@ -146,7 +146,7 @@ public sealed class AgentGrpcService(
             await responseStream.WriteAsync(BuildConfig(auth.MachineCode), ct);
 
             var pump = PumpOutboundAsync(outbound.Reader, responseStream, ct);
-            var ingest = IngestHeartbeatsAsync(requestStream, machineId, auth, context);
+            var ingest = IngestAsync(requestStream, machineId, auth, context);
 
             await await Task.WhenAny(pump, ingest);
         }
@@ -171,7 +171,7 @@ public sealed class AgentGrpcService(
             await stream.WriteAsync(message, ct);
     }
 
-    private async Task IngestHeartbeatsAsync(
+    private async Task IngestAsync(
         IAsyncStreamReader<AgentMessage> requestStream, string machineId, MachineAuthRow auth, ServerCallContext context)
     {
         var ct = context.CancellationToken;
@@ -185,6 +185,12 @@ public sealed class AgentGrpcService(
 
         await foreach (var message in requestStream.ReadAllAsync(ct))
         {
+            if (message.PayloadCase == AgentMessage.PayloadOneofCase.Hardware)
+            {
+                await SaveInventoryAsync(machineId, message.Hardware, ct);
+                continue;
+            }
+
             if (message.PayloadCase != AgentMessage.PayloadOneofCase.Heartbeat)
                 continue;
 
@@ -222,6 +228,14 @@ public sealed class AgentGrpcService(
             if (row is not null)
                 broadcaster.Publish(SummaryMapper.ToSummary(row, DateTime.UtcNow));
         }
+    }
+
+    private async Task SaveInventoryAsync(string machineId, HardwareInventory inventory, CancellationToken ct)
+    {
+        var change = await machines.SaveHardwareAsync(machineId, inventory, DiskJson.Serialize(inventory), ct);
+
+        if (change is not null)
+            logger.LogWarning("{MachineId}: {Change}", machineId, change);
     }
 
     // ------------------------------------------------------------------ helpers

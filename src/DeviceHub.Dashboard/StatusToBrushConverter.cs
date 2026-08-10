@@ -22,12 +22,43 @@ public sealed class StatusToBrushConverter : IValueConverter
         => throw new NotSupportedException();
 }
 
-public sealed class BooleanToVisibilityConverter : IValueConverter
+public sealed class BytesToSizeConverter : IValueConverter
 {
-    /// <summary>Con parameter="invert" devuelve Visible cuando el valor es false.</summary>
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
-        var flag = value is true;
+        var bytes = System.Convert.ToInt64(value ?? 0L);
+
+        if (bytes <= 0)
+            return "-";
+
+        // Los fabricantes venden en GB decimales; mostrarlo asi evita el
+        // "mi disco de 500 GB dice 465".
+        return bytes >= 1_000_000_000_000L
+            ? $"{bytes / 1_000_000_000_000d:0.#} TB"
+            : $"{bytes / 1_000_000_000d:0.#} GB";
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}
+
+public sealed class BooleanToVisibilityConverter : IValueConverter
+{
+    /// <summary>
+    /// Acepta bool o cualquier objeto: null se oculta, no-null se muestra. Asi el
+    /// mismo converter sirve para banderas y para "hay dato que mostrar", sin un
+    /// segundo NullToVisibility identico.
+    ///
+    /// Con parameter="invert" devuelve Visible cuando el valor es false o null.
+    /// </summary>
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        var flag = value switch
+        {
+            null => false,
+            bool boolean => boolean,
+            _ => true
+        };
 
         if (parameter as string == "invert")
             flag = !flag;

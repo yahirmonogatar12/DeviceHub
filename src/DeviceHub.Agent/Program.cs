@@ -1,6 +1,15 @@
 using DeviceHub.Agent;
 using DeviceHub.Agent.Identity;
+using DeviceHub.Agent.Inventory;
 using DeviceHub.Agent.Security;
+
+// Diagnostico de campo: "que ve DeviceHub en esta PC?" sin instalar el servicio
+// ni levantar el servidor. Contesta la pregunta que si no obliga a adivinar.
+if (args.Contains("--inventory"))
+{
+    Console.WriteLine(Google.Protobuf.JsonFormatter.Default.Format(HardwareCollector.Collect()));
+    return;
+}
 
 var builder = Host.CreateApplicationBuilder(args);
 

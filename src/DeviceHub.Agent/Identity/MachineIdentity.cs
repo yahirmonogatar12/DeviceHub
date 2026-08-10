@@ -16,6 +16,17 @@ public sealed class MachineIdentityFile
     /// <summary>Pines SPKI aceptados. Conjunto, no valor unico: es lo que permite
     /// la rotacion de certificado sin ventana de caida.</summary>
     public List<string> PinnedKeys { get; set; } = [];
+
+    /// <summary>
+    /// Ultimo inventario enviado (Fase 5). Sobrevive al reinicio del servicio para
+    /// no reenviar lo mismo en cada arranque.
+    ///
+    /// ponytail: son dos campos, no una base de datos. SQLite entra en Fase 6, que
+    /// es cuando hay series de metricas que agregar y realmente lo justifica.
+    /// </summary>
+    public string? LastInventoryHash { get; set; }
+
+    public DateTime? LastInventoryUtc { get; set; }
 }
 
 /// <summary>

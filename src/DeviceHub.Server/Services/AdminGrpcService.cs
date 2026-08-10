@@ -84,6 +84,12 @@ public sealed class AdminGrpcService(
         detail.IpHistory.AddRange((await machines.GetIpHistoryAsync(request.MachineId, ct)).Select(SummaryMapper.ToProto));
         detail.PlacementHistory.AddRange((await machines.GetPlacementHistoryAsync(request.MachineId, ct)).Select(SummaryMapper.ToProto));
 
+        if (await machines.GetHardwareAsync(request.MachineId, ct) is { } hardware)
+        {
+            detail.Hardware = SummaryMapper.ToProto(hardware);
+            detail.HardwareCollectedAt = Timestamp.FromDateTime(Db.AsUtc(hardware.CollectedAt));
+        }
+
         return detail;
     }
 

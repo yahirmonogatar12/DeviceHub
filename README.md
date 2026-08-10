@@ -3,9 +3,9 @@
 Plataforma interna para inventariar, monitorear y administrar las PCs de planta.
 El control remoto es **un modulo mas**, no el producto.
 
-Estado actual: **Fases 0-4** implementadas. Identidad de maquina, heartbeat sobre
-stream gRPC persistente, historial de IP y de ubicacion, y dashboard WPF.
-Las fases 5-18 estan disenadas pero no codificadas.
+Estado actual: **Fases 0-5** implementadas. Identidad de maquina, heartbeat sobre
+stream gRPC persistente, historial de IP y de ubicacion, dashboard WPF e
+inventario de hardware. Las fases 6-18 estan disenadas pero no codificadas.
 
 ## Stack
 
@@ -93,6 +93,30 @@ $env:DEVICEHUB_DB_CONNECTION = "Server=...;Database=devicehub;Uid=...;Pwd=...;"
 dotnet run --project src/DeviceHub.Server
 dotnet run --project src/DeviceHub.Dashboard
 ```
+
+## Diagnostico en campo
+
+Que ve DeviceHub en esta PC, sin instalar el servicio ni levantar el servidor:
+
+```powershell
+DeviceHub.Agent.exe --inventory
+```
+
+## Inventario de hardware
+
+CPU, RAM, discos, GPU, placa, BIOS, serial y version de Windows. **No viaja en el
+heartbeat**: se envia al conectar, cuando el hash del contenido cambia, y como
+mucho cada 12 horas.
+
+Dos exclusiones deliberadas para que el hash no cambie por ruido:
+
+- **discos USB y removibles**: en planta las memorias entran y salen todo el dia,
+  y contarlas generaria un cambio de hardware falso en cada una;
+- **espacio libre**: cambia a cada minuto, asi que es una metrica (Fase 6), no
+  inventario. Incluirlo convertiria el inventario en un heartbeat caro.
+
+Cuando el hardware si cambia de verdad (mas RAM, disco nuevo, actualizacion de
+Windows) queda un evento `HARDWARE_CHANGED` en `machine_events`.
 
 ## Tests
 

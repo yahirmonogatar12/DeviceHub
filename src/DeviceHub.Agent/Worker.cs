@@ -1,4 +1,5 @@
 using DeviceHub.Agent.Identity;
+using DeviceHub.Agent.Inventory;
 using DeviceHub.Agent.Network;
 using DeviceHub.Agent.Security;
 using DeviceHub.Contracts;
@@ -124,7 +125,7 @@ public sealed class Worker(
         logger.LogInformation("Stream abierto contra {Address}", _options.ServerAddress);
 
         var reader = ReadServerMessagesAsync(call.ResponseStream, session.Token);
-        var writer = SendHeartbeatsAsync(call.RequestStream, session.Token);
+        var writer = SendLoopAsync(call.RequestStream, session.Token);
 
         // El primero que termine (o falle) cierra la sesion; el bucle exterior reconecta.
         var finished = await Task.WhenAny(reader, writer);
@@ -132,15 +133,51 @@ public sealed class Worker(
         await finished; // propaga la excepcion real, no una de cancelacion
     }
 
-    private async Task SendHeartbeatsAsync(IClientStreamWriter<AgentMessage> stream, CancellationToken ct)
+    /// <summary>
+    /// Un unico escritor del stream. El heartbeat y el inventario salen por el
+    /// mismo bucle secuencial porque los streams gRPC de cliente no admiten
+    /// escrituras concurrentes -- y un lock aqui seria peor que no tener dos tareas.
+    /// </summary>
+    private async Task SendLoopAsync(IClientStreamWriter<AgentMessage> stream, CancellationToken ct)
     {
         var interval = TimeSpan.FromSeconds(_options.HeartbeatSeconds);
+        var nextInventoryScan = DateTime.UtcNow; // al conectar, de inmediato
 
         while (!ct.IsCancellationRequested)
         {
             await stream.WriteAsync(new AgentMessage { Heartbeat = BuildHeartbeat() }, ct);
+
+            if (DateTime.UtcNow >= nextInventoryScan)
+            {
+                await MaybeSendInventoryAsync(stream, ct);
+                nextInventoryScan = DateTime.UtcNow.Add(InventoryCadence.ScanInterval);
+            }
+
             await Task.Delay(interval, ct);
         }
+    }
+
+    private async Task MaybeSendInventoryAsync(IClientStreamWriter<AgentMessage> stream, CancellationToken ct)
+    {
+        var inventory = HardwareCollector.Collect();
+
+        if (!InventoryCadence.ShouldSend(
+                inventory.Hash, _identity.LastInventoryHash, _identity.LastInventoryUtc, DateTime.UtcNow))
+        {
+            return;
+        }
+
+        var changed = _identity.LastInventoryHash is not null && _identity.LastInventoryHash != inventory.Hash;
+
+        await stream.WriteAsync(new AgentMessage { Hardware = inventory }, ct);
+
+        _identity.LastInventoryHash = inventory.Hash;
+        _identity.LastInventoryUtc = DateTime.UtcNow;
+        identityStore.Save(_identity);
+
+        logger.LogInformation(changed
+            ? "Inventario enviado: el hardware cambio"
+            : "Inventario enviado");
     }
 
     private async Task ReadServerMessagesAsync(IAsyncStreamReader<ServerMessage> stream, CancellationToken ct)

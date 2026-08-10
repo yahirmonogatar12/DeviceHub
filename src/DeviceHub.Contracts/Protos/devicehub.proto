@@ -81,7 +81,35 @@ message AgentMessage {
   // proto3 permite agregar variantes al oneof sin romper agentes viejos.
   oneof payload {
     Heartbeat heartbeat = 1;
+    HardwareInventory hardware = 2;
   }
+}
+
+// Fase 5. NO viaja en el heartbeat: se envia al conectar, cada 12 h, y cuando
+// el hash cambia. Mandar esto cada 30 s seria tirar ancho de banda y escrituras
+// para repetir datos que no se mueven en meses.
+message HardwareInventory {
+  string hash = 1;                  // SHA256 del contenido; decide si hay algo nuevo
+  string cpu_model = 2;
+  int32 cpu_cores = 3;
+  int32 cpu_threads = 4;
+  int64 total_memory_bytes = 5;
+  string gpu_model = 6;
+  string motherboard = 7;
+  string bios_version = 8;
+  string bios_serial = 9;
+  string os_caption = 10;
+  string os_version = 11;
+  string os_build = 12;
+  repeated DiskInfo disks = 13;
+}
+
+// Solo lo estatico. El espacio libre cambia a cada minuto: es una METRICA
+// (Fase 6), y meterlo aqui haria que el hash cambiara siempre, convirtiendo el
+// inventario en un heartbeat caro.
+message DiskInfo {
+  string model = 1;
+  int64 size_bytes = 2;
 }
 
 message Heartbeat {
@@ -170,6 +198,8 @@ message MachineDetail {
   repeated IpHistoryEntry ip_history = 2;
   repeated PlacementHistoryEntry placement_history = 3;
   HardwareFingerprint fingerprint = 4;
+  HardwareInventory hardware = 5;
+  google.protobuf.Timestamp hardware_collected_at = 6;
 }
 
 message IpHistoryEntry {

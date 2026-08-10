@@ -8,6 +8,7 @@
     <Window.Resources>
         <local:StatusToBrushConverter x:Key="StatusBrush" />
         <local:BooleanToVisibilityConverter x:Key="BoolToVis" />
+        <local:BytesToSizeConverter x:Key="Bytes" />
     </Window.Resources>
 
     <Grid>
@@ -163,6 +164,69 @@
                                 </Grid>
                                 <Button Content="Guardar" Padding="8,4" Margin="0,10,0,0" HorizontalAlignment="Left"
                                         Command="{Binding MoveMachineCommand}" />
+                            </StackPanel>
+
+                            <!-- Inventario de hardware (Fase 5) -->
+                            <StackPanel DataContext="{Binding DataContext.Detail, RelativeSource={RelativeSource AncestorType=Window}}">
+                                <StackPanel Visibility="{Binding Hardware, Converter={StaticResource BoolToVis}}">
+                                    <TextBlock Text="Hardware" FontWeight="SemiBold" Margin="0,18,0,4" />
+                                    <Grid DataContext="{Binding Hardware}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition /><RowDefinition /><RowDefinition />
+                                            <RowDefinition /><RowDefinition /><RowDefinition />
+                                        </Grid.RowDefinitions>
+
+                                        <Label Grid.Row="0" Grid.Column="0" Content="CPU" />
+                                        <TextBlock Grid.Row="0" Grid.Column="1" TextWrapping="Wrap" FontSize="11">
+                                            <Run Text="{Binding CpuModel, Mode=OneWay}" />
+                                            <Run Text=" (" /><Run Text="{Binding CpuCores, Mode=OneWay}" />
+                                            <Run Text="c /" /><Run Text="{Binding CpuThreads, Mode=OneWay}" /><Run Text="t)" />
+                                        </TextBlock>
+
+                                        <Label Grid.Row="1" Grid.Column="0" Content="RAM" />
+                                        <TextBlock Grid.Row="1" Grid.Column="1" FontSize="11"
+                                                   Text="{Binding TotalMemoryBytes, Converter={StaticResource Bytes}}" />
+
+                                        <Label Grid.Row="2" Grid.Column="0" Content="GPU" />
+                                        <TextBlock Grid.Row="2" Grid.Column="1" FontSize="11" TextWrapping="Wrap"
+                                                   Text="{Binding GpuModel}" />
+
+                                        <Label Grid.Row="3" Grid.Column="0" Content="Placa" />
+                                        <TextBlock Grid.Row="3" Grid.Column="1" FontSize="11" TextWrapping="Wrap"
+                                                   Text="{Binding Motherboard}" />
+
+                                        <Label Grid.Row="4" Grid.Column="0" Content="BIOS" />
+                                        <TextBlock Grid.Row="4" Grid.Column="1" FontSize="11" TextWrapping="Wrap">
+                                            <Run Text="{Binding BiosVersion, Mode=OneWay}" />
+                                            <Run Text="  S/N " Foreground="#888" />
+                                            <Run Text="{Binding BiosSerial, Mode=OneWay}" />
+                                        </TextBlock>
+
+                                        <Label Grid.Row="5" Grid.Column="0" Content="Windows" />
+                                        <TextBlock Grid.Row="5" Grid.Column="1" FontSize="11" TextWrapping="Wrap">
+                                            <Run Text="{Binding OsCaption, Mode=OneWay}" />
+                                            <Run Text=" build " Foreground="#888" />
+                                            <Run Text="{Binding OsBuild, Mode=OneWay}" />
+                                        </TextBlock>
+                                    </Grid>
+
+                                    <ItemsControl ItemsSource="{Binding Hardware.Disks}" Margin="0,6,0,0">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock FontSize="11" TextWrapping="Wrap">
+                                                    <Run Text="Disco  " Foreground="#888" />
+                                                    <Run Text="{Binding Model, Mode=OneWay}" />
+                                                    <Run Text="  " />
+                                                    <Run Text="{Binding SizeBytes, Mode=OneWay, Converter={StaticResource Bytes}}" />
+                                                </TextBlock>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
                             </StackPanel>
 
                             <!-- Historiales -->

@@ -44,6 +44,24 @@ public sealed class HistoryRow
     public DateTime? ValidTo { get; set; }
 }
 
+public sealed class HardwareRow
+{
+    public string Hash { get; set; } = string.Empty;
+    public string? CpuModel { get; set; }
+    public int? CpuCores { get; set; }
+    public int? CpuThreads { get; set; }
+    public long? TotalMemoryBytes { get; set; }
+    public string? GpuModel { get; set; }
+    public string? Motherboard { get; set; }
+    public string? BiosVersion { get; set; }
+    public string? BiosSerial { get; set; }
+    public string? OsCaption { get; set; }
+    public string? OsVersion { get; set; }
+    public string? OsBuild { get; set; }
+    public string? Disks { get; set; }
+    public DateTime CollectedAt { get; set; }
+}
+
 public sealed class PlacementRow
 {
     public string SiteCode { get; set; } = string.Empty;
@@ -368,6 +386,91 @@ public sealed class MachineRepository(Db db)
 
         await tx.CommitAsync(ct);
     }
+
+    // ------------------------------------------------------- inventario (Fase 5)
+
+    public async Task<HardwareRow?> GetHardwareAsync(string machineId, CancellationToken ct)
+    {
+        await using var conn = await db.OpenAsync(ct);
+        return await conn.QuerySingleOrDefaultAsync<HardwareRow>("""
+            SELECT hash AS Hash, cpu_model AS CpuModel, cpu_cores AS CpuCores,
+                   cpu_threads AS CpuThreads, total_memory_bytes AS TotalMemoryBytes,
+                   gpu_model AS GpuModel, motherboard AS Motherboard,
+                   bios_version AS BiosVersion, bios_serial AS BiosSerial,
+                   os_caption AS OsCaption, os_version AS OsVersion, os_build AS OsBuild,
+                   disks AS Disks, collected_at AS CollectedAt
+            FROM machine_hardware WHERE machine_id = @machineId
+            """, new { machineId });
+    }
+
+    /// <summary>
+    /// Guarda el inventario. Devuelve la descripcion del cambio si el hardware es
+    /// distinto al que habia, o null si es el reenvio periodico de siempre.
+    /// </summary>
+    public async Task<string?> SaveHardwareAsync(
+        string machineId, HardwareInventory inventory, string disksJson, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+
+        await using var conn = await db.OpenAsync(ct);
+
+        var previous = await conn.QuerySingleOrDefaultAsync<string>(
+            "SELECT hash FROM machine_hardware WHERE machine_id = @machineId", new { machineId });
+
+        var change = previous is not null && previous != inventory.Hash
+            ? $"hardware modificado (hash {previous[..8]} -> {inventory.Hash[..8]})"
+            : null;
+
+        await using var tx = await conn.BeginTransactionAsync(ct);
+
+        // Parametros con nombre en el UPDATE: evita VALUES(), deprecado desde
+        // MySQL 8.0.20, sin atarse a la sintaxis de alias de 8.0.19+.
+        await conn.ExecuteAsync("""
+            INSERT INTO machine_hardware (
+                machine_id, hash, cpu_model, cpu_cores, cpu_threads, total_memory_bytes,
+                gpu_model, motherboard, bios_version, bios_serial,
+                os_caption, os_version, os_build, disks, collected_at, updated_at)
+            VALUES (
+                @machineId, @hash, @cpuModel, @cpuCores, @cpuThreads, @totalMemory,
+                @gpuModel, @motherboard, @biosVersion, @biosSerial,
+                @osCaption, @osVersion, @osBuild, @disks, @now, @now)
+            ON DUPLICATE KEY UPDATE
+                hash = @hash, cpu_model = @cpuModel, cpu_cores = @cpuCores,
+                cpu_threads = @cpuThreads, total_memory_bytes = @totalMemory,
+                gpu_model = @gpuModel, motherboard = @motherboard,
+                bios_version = @biosVersion, bios_serial = @biosSerial,
+                os_caption = @osCaption, os_version = @osVersion, os_build = @osBuild,
+                disks = @disks, collected_at = @now, updated_at = @now
+            """,
+            new
+            {
+                machineId,
+                hash = inventory.Hash,
+                cpuModel = Trim(inventory.CpuModel, 160),
+                cpuCores = inventory.CpuCores,
+                cpuThreads = inventory.CpuThreads,
+                totalMemory = inventory.TotalMemoryBytes,
+                gpuModel = Trim(inventory.GpuModel, 160),
+                motherboard = Trim(inventory.Motherboard, 160),
+                biosVersion = Trim(inventory.BiosVersion, 120),
+                biosSerial = Trim(inventory.BiosSerial, 120),
+                osCaption = Trim(inventory.OsCaption, 160),
+                osVersion = Trim(inventory.OsVersion, 60),
+                osBuild = Trim(inventory.OsBuild, 60),
+                disks = disksJson,
+                now
+            }, tx);
+
+        if (change is not null)
+            await LogEventAsync(conn, tx, machineId, "HARDWARE_CHANGED", change, null, now);
+
+        await tx.CommitAsync(ct);
+        return change;
+    }
+
+    /// <summary>Un modelo de GPU absurdamente largo no debe tumbar el inventario entero.</summary>
+    private static string? Trim(string? value, int max)
+        => string.IsNullOrEmpty(value) ? null : value.Length <= max ? value : value[..max];
 
     public async Task LogEventAsync(string? machineId, string type, string? details, string? sourceIp, CancellationToken ct)
     {

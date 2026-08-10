@@ -34,6 +34,28 @@ public static class SummaryMapper
         return summary;
     }
 
+    public static HardwareInventory ToProto(HardwareRow row)
+    {
+        var inventory = new HardwareInventory
+        {
+            Hash = row.Hash,
+            CpuModel = row.CpuModel ?? string.Empty,
+            CpuCores = row.CpuCores ?? 0,
+            CpuThreads = row.CpuThreads ?? 0,
+            TotalMemoryBytes = row.TotalMemoryBytes ?? 0,
+            GpuModel = row.GpuModel ?? string.Empty,
+            Motherboard = row.Motherboard ?? string.Empty,
+            BiosVersion = row.BiosVersion ?? string.Empty,
+            BiosSerial = row.BiosSerial ?? string.Empty,
+            OsCaption = row.OsCaption ?? string.Empty,
+            OsVersion = row.OsVersion ?? string.Empty,
+            OsBuild = row.OsBuild ?? string.Empty
+        };
+
+        inventory.Disks.AddRange(DiskJson.Deserialize(row.Disks));
+        return inventory;
+    }
+
     public static IpHistoryEntry ToProto(HistoryRow row)
     {
         var entry = new IpHistoryEntry
