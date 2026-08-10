@@ -6,8 +6,12 @@ realidad y estan anotadas donde corresponde.
 
 ## Estado
 
-**Vamos en la Fase 16 (Auto-update).** Fases 0 a 15 implementadas, con tests y
-verificadas ejecutando contra el MySQL central.
+**Las 18 fases estan cerradas salvo la 17 (integracion MES), pospuesta por
+decision del usuario.** La 18 queda entregada como protocolo y arnes de medida:
+los numeros se llenan cuando se corra en planta, y no bloquea nada porque
+`IRemoteProvider` permite cambiar de motor con una linea.
+
+Lo que falta no es codigo: es **probarlo en 5 PCs reales**.
 
 | # | Fase | Estado |
 |---|---|---|
@@ -27,9 +31,9 @@ verificadas ejecutando contra el MySQL central.
 | 13 | Roles y hardening | hecho (mTLS diferido) |
 | 14 | File Manager | hecho |
 | 15 | Terminal | hecho |
-| 16 | **Auto-update del agente** | **siguiente** |
-| 17 | Integracion MES | pendiente |
-| 18 | Benchmark de motores remotos | pendiente |
+| 16 | Auto-update del agente | hecho |
+| 17 | Integracion MES | pospuesta |
+| 18 | Benchmark de motores remotos | protocolo y arnes listos |
 
 Fuera de la numeracion, tambien hecho: scripts de despliegue self-contained
 (`deploy/`), verificacion end-to-end contra MySQL real, bootstrap sin GUI
@@ -153,6 +157,20 @@ del motor remoto** -- ver deuda deliberada.
 origen e instantes. Las huerfanas se cierran a las 8 h: sin eso, la auditoria
 diria que alguien lleva tres semanas dentro de una PC porque cerro el dashboard
 de golpe.
+
+**16 · Auto-update** — origen en `\\192.168.1.10\updates\Shared\DeviceHub`, por
+anillos (`canary`, `pilot`, `production`): publicar directo a produccion empuja
+la version a todas las PCs a la vez y un agente roto deja la planta ciega.
+**El SHA256 vive en el mismo recurso que el paquete, asi que solo protege contra
+corrupcion, no contra manipulacion**: quien pueda escribir ahi cambia los dos. El
+control real es la firma Authenticode verificada contra un thumbprint fijado, y
+el agente avisa a nivel WARNING en cada comprobacion si esta sin configurar. No
+se aceptan downgrades: bajar de version seria reintroducir en toda la planta una
+vulnerabilidad ya corregida. El actualizador es un proceso aparte porque un
+servicio no puede reemplazar su propio binario, y hace rollback si el agente
+nuevo no escribe su marca de salud en 5 minutos -- marca que se escribe al
+CONECTAR y no al arrancar, porque un agente que arranca sin llegar al servidor
+esta igual de roto.
 
 **15 · Terminal** — no hay "ejecuta esto" suelto: `RunShell` se rechaza en
 `SendCommand` y en la CLI, asi que la unica via es una sesion abierta donde cada
