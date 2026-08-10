@@ -6,7 +6,7 @@ realidad y estan anotadas donde corresponde.
 
 ## Estado
 
-**Vamos en la Fase 15 (Terminal).** Fases 0 a 14 implementadas, con tests y
+**Vamos en la Fase 16 (Auto-update).** Fases 0 a 15 implementadas, con tests y
 verificadas ejecutando contra el MySQL central.
 
 | # | Fase | Estado |
@@ -26,8 +26,8 @@ verificadas ejecutando contra el MySQL central.
 | 12 | Auditoria | hecho |
 | 13 | Roles y hardening | hecho (mTLS diferido) |
 | 14 | File Manager | hecho |
-| 15 | **Terminal** | **siguiente** |
-| 16 | Auto-update del agente | pendiente |
+| 15 | Terminal | hecho |
+| 16 | **Auto-update del agente** | **siguiente** |
 | 17 | Integracion MES | pendiente |
 | 18 | Benchmark de motores remotos | pendiente |
 
@@ -154,6 +154,18 @@ origen e instantes. Las huerfanas se cierran a las 8 h: sin eso, la auditoria
 diria que alguien lleva tres semanas dentro de una PC porque cerro el dashboard
 de golpe.
 
+**15 · Terminal** — no hay "ejecuta esto" suelto: `RunShell` se rechaza en
+`SendCommand` y en la CLI, asi que la unica via es una sesion abierta donde cada
+comando queda con su salida. No se mantiene un shell vivo con tuberias: detectar
+donde acaba la salida de cada comando no tiene delimitador fiable y acaba en
+marcadores centinela que fallan de madrugada. Cada comando es un proceso nuevo
+con `-NoProfile -NonInteractive`; se pierden las variables y se conserva el
+directorio, que es lo que la gente usa. La sesion caduca a los 15 min de
+inactividad -- mucho antes que una remota de 8 h, porque en la remota hay alguien
+mirando la pantalla y un terminal olvidado es una consola con permisos de SYSTEM
+esperando a que alguien pase. Se reuso `machine_sessions` en vez de crear una
+tabla gemela: "quien estuvo dentro de esta maquina" es la misma pregunta.
+
 **14 · File Manager** — las operaciones van por el canal de comandos que ya
 existia: son peticiones con respuesta, no hacia falta un subsistema aparte. La
 validacion de rutas vive en el AGENTE, no en el servidor: `GetFolderPath` en el
@@ -188,13 +200,7 @@ permisos intentara apagar una PC es justo lo que hay que poder ver despues.
 
 ## Fases pendientes
 
-### 15 · Terminal — siguiente
-
-Ahora si, con auditoria y roles en pie. Nunca un `POST /execute` suelto: sesion
-con `session_id`, `user_id`, `machine_id`, cada comando registrado con su salida,
-y timeout de inactividad.
-
-### 16 · Auto-update del agente
+### 16 · Auto-update del agente — siguiente
 
 ```
 Server anuncia v1.4.0 -> descarga -> valida SHA256 + Authenticode

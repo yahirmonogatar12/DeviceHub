@@ -67,7 +67,14 @@ if (args.Contains("--command"))
         || !CommandPolicy.TryGet(type, out var definition))
     {
         bootstrapLogger.LogError("Tipo invalido. Permitidos: {Types}",
-            string.Join(", ", CommandPolicy.All.Select(d => d.Type)));
+            string.Join(", ", CommandPolicy.All.Where(d => !CommandPolicy.RequiresSession(d.Type)).Select(d => d.Type)));
+        return 1;
+    }
+
+    // La CLI no es una puerta trasera: lo que exige sesion, la exige tambien aqui.
+    if (CommandPolicy.RequiresSession(type))
+    {
+        bootstrapLogger.LogError("{Type} solo puede emitirse dentro de una sesion de terminal auditada", type);
         return 1;
     }
 
@@ -136,6 +143,7 @@ builder.Services.AddSingleton<MachineRepository>();
 builder.Services.AddSingleton<EnrollmentRepository>();
 builder.Services.AddSingleton<CommandRepository>();
 builder.Services.AddSingleton<SessionRepository>();
+builder.Services.AddSingleton<TerminalRepository>();
 builder.Services.AddSingleton<AuditRepository>();
 builder.Services.AddSingleton<RateLimiter>();
 

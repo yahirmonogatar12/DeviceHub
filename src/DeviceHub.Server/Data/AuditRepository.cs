@@ -27,6 +27,9 @@ public static class AuditActions
     public const string FileWrite = "FILE_WRITE";
     public const string FileRename = "FILE_RENAME";
     public const string FileRead = "FILE_READ";
+    public const string TerminalStart = "TERMINAL_START";
+    public const string TerminalCommand = "TERMINAL_COMMAND";
+    public const string TerminalEnd = "TERMINAL_END";
 
     /// <summary>
     /// Cada comando peligroso tiene su propia accion auditable. Registrar
@@ -46,6 +49,7 @@ public static class AuditActions
         CommandType.WriteFile => FileWrite,
         CommandType.RenamePath => FileRename,
         CommandType.ReadFile => FileRead,
+        CommandType.RunShell => TerminalCommand,
         _ => CommandRequested
     };
 }

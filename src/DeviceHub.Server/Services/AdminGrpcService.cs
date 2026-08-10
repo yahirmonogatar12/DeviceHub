@@ -26,6 +26,7 @@ public sealed class AdminGrpcService(
     EnrollmentRepository enrollment,
     CommandRepository commands,
     SessionRepository sessions,
+    TerminalRepository terminal,
     AuditRepository audit,
     RateLimiter limiter,
     IRemoteProvider remote,
@@ -497,6 +498,179 @@ public sealed class AdminGrpcService(
         throw new RpcException(new Status(StatusCode.PermissionDenied, reason));
     }
 
+    // ------------------------------------------------------- terminal (Fase 15)
+
+    [Authorize(Roles = Roles.Engineer + "," + Roles.Administrator)]
+    public override async Task<TerminalSessionReply> StartTerminalSession(MachineRef request, ServerCallContext context)
+    {
+        var ct = context.CancellationToken;
+
+        var machine = await machines.GetAsync(request.MachineId, ct)
+            ?? throw new RpcException(new Status(StatusCode.NotFound, "Maquina desconocida"));
+
+        if (StatusCalculator.Compute(machine.LastSeen, DateTime.UtcNow) != MachineStatus.Online)
+            throw new RpcException(new Status(StatusCode.FailedPrecondition,
+                "La maquina no esta en linea: un terminal contra una PC desconectada no ejecuta nada"));
+
+        await terminal.CloseInactiveAsync(ct);
+
+        var actor = context.GetHttpContext().User.Identity?.Name ?? "desconocido";
+
+        var sessionId = await sessions.StartAsync(
+            machine.Id, actor, "terminal", null, context.Peer,
+            BuildAudit(context, AuditActions.TerminalStart, machine, AuditEntry.Allowed), ct, kind: "terminal");
+
+        logger.LogWarning("{Actor} abrio TERMINAL sobre {MachineCode} desde {Source}",
+            actor, machine.MachineCode, context.Peer);
+
+        return new TerminalSessionReply
+        {
+            SessionId = sessionId,
+            MachineCode = machine.MachineCode,
+            WorkingDir = @"C:\",
+            StartedAt = Timestamp.FromDateTime(DateTime.UtcNow)
+        };
+    }
+
+    /// <summary>
+    /// Ejecuta dentro de una sesion abierta. No existe la variante suelta: sin
+    /// sesion no hay ejecucion, y con sesion todo queda con su salida.
+    /// </summary>
+    [Authorize(Roles = Roles.Engineer + "," + Roles.Administrator)]
+    public override async Task<TerminalCommandReply> RunTerminalCommand(
+        TerminalCommandRequest request, ServerCallContext context)
+    {
+        var ct = context.CancellationToken;
+
+        await terminal.CloseInactiveAsync(ct);
+
+        var session = await terminal.GetAsync(request.SessionId, ct)
+            ?? throw new RpcException(new Status(StatusCode.NotFound, "Sesion de terminal desconocida"));
+
+        if (session.EndedAt is not null)
+            throw new RpcException(new Status(StatusCode.FailedPrecondition,
+                $"La sesion se cerro por inactividad ({TerminalRepository.InactivityTimeout.TotalMinutes:0} min). Abre una nueva."));
+
+        var actor = context.GetHttpContext().User.Identity?.Name ?? "desconocido";
+
+        // La sesion es de quien la abrio. Compartir un session_id no puede servir
+        // para ejecutar en nombre de otro y que la auditoria culpe al primero.
+        if (!string.Equals(session.UserId, actor, StringComparison.OrdinalIgnoreCase))
+            throw new RpcException(new Status(StatusCode.PermissionDenied, "Esa sesion pertenece a otro usuario"));
+
+        if (string.IsNullOrWhiteSpace(request.Command))
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Comando vacio"));
+
+        var machine = await machines.GetAsync(session.MachineId, ct)
+            ?? throw new RpcException(new Status(StatusCode.NotFound, "Maquina desconocida"));
+
+        var workingDir = string.IsNullOrWhiteSpace(session.WorkingDir) ? @"C:\" : session.WorkingDir;
+        var started = DateTime.UtcNow;
+
+        var parameters = new Dictionary<string, string>
+        {
+            ["command"] = request.Command,
+            ["cwd"] = workingDir
+        };
+
+        var definition = CommandPolicy.Get(CommandType.RunShell);
+
+        var commandId = await commands.CreateAsync(
+            session.MachineId, CommandType.RunShell, parameters, actor, definition.Ttl,
+            BuildAudit(context, AuditActions.TerminalCommand, machine, AuditEntry.Allowed,
+                $"session={session.Id} {request.Command}"), ct);
+
+        var row = await commands.GetAsync(commandId, ct);
+        if (row is not null)
+            registry.TryPush(session.MachineId, new ServerMessage { Command = SummaryMapper.ToRequest(row) });
+
+        var outcome = await WaitForCommandAsync(commandId, definition.Timeout + TimeSpan.FromSeconds(10), ct);
+        var duration = (int)(DateTime.UtcNow - started).TotalMilliseconds;
+
+        var shell = ParseShellResult(outcome, workingDir);
+
+        var sequence = await terminal.RecordAsync(session.Id, request.Command, shell.WorkingDir,
+            shell.Output, shell.ExitCode, shell.Truncated, duration, ct);
+
+        return new TerminalCommandReply
+        {
+            Sequence = sequence,
+            Output = shell.Output,
+            ExitCode = shell.ExitCode,
+            WorkingDir = shell.WorkingDir,
+            Truncated = shell.Truncated,
+            DurationMs = duration
+        };
+    }
+
+    [Authorize(Roles = Roles.Engineer + "," + Roles.Administrator)]
+    public override async Task<TerminalSessionReply> EndTerminalSession(
+        RemoteSessionRef request, ServerCallContext context)
+    {
+        var ct = context.CancellationToken;
+
+        var session = await terminal.GetAsync(request.SessionId, ct)
+            ?? throw new RpcException(new Status(StatusCode.NotFound, "Sesion desconocida"));
+
+        var machine = await machines.GetAsync(session.MachineId, ct);
+
+        await sessions.EndAsync(request.SessionId, "closed",
+            BuildAudit(context, AuditActions.TerminalEnd, machine, AuditEntry.Allowed,
+                $"{session.CommandCount} comandos"), ct);
+
+        return new TerminalSessionReply
+        {
+            SessionId = session.Id,
+            MachineCode = machine?.MachineCode ?? string.Empty,
+            CommandCount = session.CommandCount,
+            StartedAt = Timestamp.FromDateTime(Db.AsUtc(session.StartedAt)),
+            EndedAt = Timestamp.FromDateTime(DateTime.UtcNow)
+        };
+    }
+
+    private async Task<CommandRow?> WaitForCommandAsync(string commandId, TimeSpan timeout, CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow.Add(timeout);
+
+        while (DateTime.UtcNow < deadline && !ct.IsCancellationRequested)
+        {
+            await Task.Delay(300, ct);
+            var row = await commands.GetAsync(commandId, ct);
+
+            if (row is not null && row.Status is not ("pending" or "sent" or "running"))
+                return row;
+        }
+
+        return null;
+    }
+
+    private static ShellOutcome ParseShellResult(CommandRow? row, string fallbackDir)
+    {
+        if (row is null)
+            return new ShellOutcome("Sin respuesta del agente", -1, fallbackDir, false);
+
+        if (row.Status != "completed")
+            return new ShellOutcome($"{row.Status}: {row.Result} {row.ErrorCode}".Trim(), -1, fallbackDir, false);
+
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(row.Result ?? "{}");
+            var root = document.RootElement;
+
+            return new ShellOutcome(
+                root.TryGetProperty("Output", out var output) ? output.GetString() ?? string.Empty : string.Empty,
+                root.TryGetProperty("ExitCode", out var code) ? code.GetInt32() : -1,
+                root.TryGetProperty("WorkingDir", out var dir) ? dir.GetString() ?? fallbackDir : fallbackDir,
+                root.TryGetProperty("Truncated", out var truncated) && truncated.GetBoolean());
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return new ShellOutcome(row.Result ?? string.Empty, -1, fallbackDir, false);
+        }
+    }
+
+    private sealed record ShellOutcome(string Output, int ExitCode, string WorkingDir, bool Truncated);
+
     // -------------------------------------------------- control remoto (Fases 10-11)
 
     /// <summary>
@@ -589,6 +763,12 @@ public sealed class AdminGrpcService(
 
         if (!CommandPolicy.TryGet(request.Type, out var definition))
             throw new RpcException(new Status(StatusCode.InvalidArgument, $"Tipo de comando no permitido: {request.Type}"));
+
+        // Sin esto, RunTerminalCommand seria decorativo: bastaria con saltarse la
+        // UI y pedir RunShell por aqui para ejecutar sin sesion ni registro.
+        if (CommandPolicy.RequiresSession(request.Type))
+            throw new RpcException(new Status(StatusCode.PermissionDenied,
+                $"{request.Type} solo puede emitirse dentro de una sesion de terminal"));
 
         var user = context.GetHttpContext().User;
         var role = user.FindFirst(ClaimTypes.Role)?.Value;

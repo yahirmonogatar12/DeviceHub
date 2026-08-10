@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.ServiceProcess;
 using DeviceHub.Agent.Files;
+using DeviceHub.Agent.Terminal;
 using System.Text.Json;
 using DeviceHub.Contracts;
 
@@ -86,6 +87,13 @@ public sealed class CommandRunner(ILogger<CommandRunner> logger)
         CommandType.RenamePath => Task.FromResult(Audited(
             FileOperations.Rename(Parameter(request, "path"), Parameter(request, "newName")))),
         CommandType.ReadFile => Task.FromResult(FileOperations.ReadFile(Parameter(request, "path"))),
+
+        // Fase 15. El agente no sabe de sesiones: eso lo controla el servidor.
+        // Aqui solo se ejecuta, con timeout y tope de salida.
+        CommandType.RunShell => Task.FromResult(Audited(ShellRunner.Execute(
+            Parameter(request, "command"),
+            request.Parameters.TryGetValue("cwd", out var cwd) ? cwd : Environment.SystemDirectory,
+            CommandPolicy.Get(CommandType.RunShell).Timeout - TimeSpan.FromSeconds(5)))),
         CommandType.WriteFile => Task.FromResult(Audited(
             FileOperations.WriteFile(Parameter(request, "path"), Parameter(request, "content")))),
 

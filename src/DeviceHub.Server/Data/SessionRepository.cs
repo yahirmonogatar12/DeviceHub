@@ -26,7 +26,7 @@ public sealed class SessionRepository(Db db)
     /// <summary>Sesion y auditoria en la misma transaccion: no hay control remoto sin rastro.</summary>
     public async Task<string> StartAsync(
         string machineId, string userId, string provider, string? deviceId, string? sourceIp,
-        AuditEntry audit, CancellationToken ct)
+        AuditEntry audit, CancellationToken ct, string kind = "remote")
     {
         var id = Guid.NewGuid().ToString();
 
@@ -34,10 +34,10 @@ public sealed class SessionRepository(Db db)
         await using var tx = await conn.BeginTransactionAsync(ct);
 
         await conn.ExecuteAsync("""
-            INSERT INTO machine_sessions (id, machine_id, user_id, provider, device_id, source_ip, started_at)
-            VALUES (@id, @machineId, @userId, @provider, @deviceId, @sourceIp, @now)
+            INSERT INTO machine_sessions (id, machine_id, kind, user_id, provider, device_id, source_ip, started_at)
+            VALUES (@id, @machineId, @kind, @userId, @provider, @deviceId, @sourceIp, @now)
             """,
-            new { id, machineId, userId, provider, deviceId, sourceIp, now = DateTime.UtcNow }, tx);
+            new { id, machineId, kind, userId, provider, deviceId, sourceIp, now = DateTime.UtcNow }, tx);
 
         await AuditRepository.WriteAsync(conn, tx, audit with { Details = $"sessionId={id}" });
 

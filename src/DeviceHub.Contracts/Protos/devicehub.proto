@@ -114,6 +114,10 @@ enum CommandType {
   COMMAND_TYPE_RENAME_PATH = 13;
   COMMAND_TYPE_READ_FILE = 14;
   COMMAND_TYPE_WRITE_FILE = 15;
+
+  // Fase 15. Solo se emite dentro de una sesion de terminal abierta y auditada:
+  // el servidor nunca acepta este tipo suelto desde SendCommand.
+  COMMAND_TYPE_RUN_SHELL = 16;
 }
 
 enum CommandStatus {
@@ -247,6 +251,9 @@ service AdminService {
   rpc ChangeOwnPassword (ChangeOwnPasswordRequest) returns (UserRecord);
   rpc GetRotationReadiness (RotationReadinessRequest) returns (RotationReadinessReply);
   rpc ListAudit (AuditQuery) returns (AuditList);
+  rpc StartTerminalSession (MachineRef) returns (TerminalSessionReply);
+  rpc RunTerminalCommand (TerminalCommandRequest) returns (TerminalCommandReply);
+  rpc EndTerminalSession (RemoteSessionRef) returns (TerminalSessionReply);
   rpc StartRemoteSession (MachineRef) returns (RemoteSessionReply);
   rpc EndRemoteSession (RemoteSessionRef) returns (RemoteSessionReply);
   rpc SendCommand (SendCommandRequest) returns (CommandEntry);
@@ -326,6 +333,31 @@ message AuditRecord {
   string source_ip = 7;
   string outcome = 8;      // allowed | denied | failed
   string details = 9;
+}
+
+// Fase 15. No existe "ejecuta este comando" suelto: hay que abrir sesion, y
+// cada comando queda ligado a ella con su salida.
+message TerminalSessionReply {
+  string session_id = 1;
+  string machine_code = 2;
+  string working_dir = 3;
+  google.protobuf.Timestamp started_at = 4;
+  google.protobuf.Timestamp ended_at = 5;
+  int32 command_count = 6;
+}
+
+message TerminalCommandRequest {
+  string session_id = 1;
+  string command = 2;
+}
+
+message TerminalCommandReply {
+  int32 sequence = 1;
+  string output = 2;
+  int32 exit_code = 3;
+  string working_dir = 4;    // puede cambiar si el comando fue un `cd`
+  bool truncated = 5;
+  int32 duration_ms = 6;
 }
 
 message RemoteSessionRef {

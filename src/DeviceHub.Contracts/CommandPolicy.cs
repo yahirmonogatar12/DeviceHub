@@ -81,8 +81,24 @@ public static class CommandPolicy
 
         // Borrar es irreversible y no hay papelera en remoto.
         [CommandType.DeletePath] = new(CommandType.DeletePath, Roles.Administrator,
-            IsDestructive: true, AllowRetry: false, Ttl: TimeSpan.FromMinutes(2), Timeout: TimeSpan.FromSeconds(60))
+            IsDestructive: true, AllowRetry: false, Ttl: TimeSpan.FromMinutes(2), Timeout: TimeSpan.FromSeconds(60)),
+
+        // --- Terminal (Fase 15) ---
+        //
+        // TTL corto: un comando de shell que no se pudo entregar en un minuto ya
+        // no interesa, porque quien lo escribio esta mirando la pantalla.
+        [CommandType.RunShell] = new(CommandType.RunShell, Roles.Engineer,
+            IsDestructive: true, AllowRetry: false, Ttl: TimeSpan.FromMinutes(1), Timeout: TimeSpan.FromSeconds(60))
     };
+
+    /// <summary>
+    /// Comandos que NO pueden pedirse sueltos por SendCommand.
+    ///
+    /// RunShell solo se emite desde una sesion de terminal abierta: de otro modo
+    /// existiria el "POST /execute con lo que sea" que todo el diseño evita, y
+    /// bastaria con saltarse la UI para ejecutar sin sesion ni registro.
+    /// </summary>
+    public static bool RequiresSession(CommandType type) => type == CommandType.RunShell;
 
     /// <summary>Un tipo fuera de la tabla no existe. No hay default permisivo.</summary>
     public static bool TryGet(CommandType type, out CommandDefinition definition)
@@ -102,6 +118,7 @@ public static class CommandPolicy
         CommandType.StartService or CommandType.StopService or CommandType.RestartService => "service",
         CommandType.ListDirectory or CommandType.CreateDirectory or CommandType.DeletePath
             or CommandType.RenamePath or CommandType.ReadFile or CommandType.WriteFile => "path",
+        CommandType.RunShell => "command",
         _ => null
     };
 }
