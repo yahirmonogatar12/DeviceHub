@@ -6,6 +6,7 @@ using DeviceHub.Agent.Monitoring;
 using DeviceHub.Agent.Network;
 using DeviceHub.Agent.Remote;
 using DeviceHub.Agent.Security;
+using DeviceHub.Agent.Updater;
 using DeviceHub.Contracts;
 using Grpc.Core;
 using Grpc.Net.Client;
@@ -18,6 +19,7 @@ public sealed class Worker(
     PinnedChannelFactory channelFactory,
     CommandRunner runner,
     IRemoteAgentDetector remoteDetector,
+    UpdateService updates,
     ILogger<Worker> logger) : BackgroundService
 {
     private static readonly string AgentVersion =
@@ -32,6 +34,7 @@ public sealed class Worker(
     /// instala ni desinstala cada 30 segundos.</summary>
     private RemoteAgentInfo _remote = new();
     private DateTime _nextRemoteScan = DateTime.MinValue;
+    private DateTime _nextUpdateCheck = DateTime.MinValue;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -190,6 +193,11 @@ public sealed class Worker(
 
         logger.LogInformation("Stream abierto contra {Address}", _options.ServerAddress);
 
+        // Marca de salud para el actualizador: se escribe al CONECTAR, no al
+        // arrancar. Un agente que arranca pero no llega al servidor esta tan roto
+        // como uno que no arranca, y el rollback tiene que dispararse igual.
+        updates.WriteHealthMarker(System.Version.Parse(AgentVersion));
+
         // Cola de salida por sesion. Los streams gRPC de cliente no admiten
         // escrituras concurrentes, asi que hay UN solo escritor y todo lo demas
         // encola. Antes el heartbeat escribia directo y no habia hueco para meter
@@ -236,6 +244,15 @@ public sealed class Worker(
             {
                 await FlushMetricsAsync(outbound, ct);
                 nextMetricsFlush = DateTime.UtcNow.AddMinutes(1);
+            }
+
+            if (DateTime.UtcNow >= _nextUpdateCheck)
+            {
+                _nextUpdateCheck = DateTime.UtcNow.AddHours(_options.UpdateCheckHours);
+
+                // Si encuentra algo, el actualizador detendra este servicio en
+                // segundos: no hace falta hacer nada mas aqui.
+                updates.TryCheckAndStage(System.Version.Parse(AgentVersion));
             }
 
             await Task.Delay(interval, ct);

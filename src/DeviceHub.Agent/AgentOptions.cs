@@ -24,6 +24,23 @@ public sealed class AgentOptions
 
     public int HeartbeatSeconds { get; set; } = 30;
 
+    /// <summary>
+    /// Recurso compartido con update.json y los paquetes (Fase 16).
+    /// Vacio = no se auto-actualiza.
+    /// </summary>
+    public string UpdateShare { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Thumbprint del certificado con el que se firman los paquetes.
+    ///
+    /// Vacio significa que la unica proteccion de la flota es la ACL del recurso
+    /// compartido: quien pueda escribir ahi ejecuta codigo como SYSTEM en cada
+    /// PC. El agente lo avisa en el log en cada comprobacion.
+    /// </summary>
+    public string UpdatePublisherThumbprint { get; set; } = string.Empty;
+
+    public int UpdateCheckHours { get; set; } = 6;
+
     public string DataDirectory { get; set; } = MachineIdentity.DefaultDirectory;
 
     public string ServerAddress => $"https://{ServerHost}:{ServerPort}";
