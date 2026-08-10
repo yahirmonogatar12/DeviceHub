@@ -14,7 +14,22 @@ public static class Migrator
 
     public static void Run(string connectionString, ILogger logger)
     {
-        EnsureDatabase.For.MySqlDatabase(connectionString);
+        // Best-effort a proposito. En produccion el schema lo crea un administrador
+        // UNA vez, y el usuario de DeviceHub solo tiene GRANT sobre `devicehub.*`
+        // -- sin permisos globales, que es justo lo que se quiere: un error de
+        // migracion no puede tocar mes_production.
+        //
+        // Si esto falla y la base de verdad no existe, DbUp revienta dos lineas
+        // mas abajo con un mensaje claro. No se le dan permisos globales al
+        // usuario solo para satisfacer a EnsureDatabase.
+        try
+        {
+            EnsureDatabase.For.MySqlDatabase(connectionString);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "EnsureDatabase no pudo crear el schema; se asume que ya existe");
+        }
 
         var upgrader = DeployChanges.To
             .MySqlDatabase(connectionString)

@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    # windows-latest y no ubuntu: el agente y el dashboard son net10.0-windows
+    # (WMI, DPAPI, WPF). En Linux ni siquiera restauran.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - run: dotnet restore
+
+      - run: dotnet build --no-restore --configuration Release
+
+      - run: dotnet test --no-build --configuration Release
+
+      # La regla de UTC no se sostiene sola: un solo DateTime.Now perdido en un
+      # handler produce auditorias que no cuadran y maquinas que aparecen
+      # OFFLINE estando encendidas. Se verifica en cada push, no en la revision.
+      - name: Regla UTC (prohibido DateTime.Now y NOW())
+        shell: pwsh
+        run: |
+          $fallos = @()
+
+          $csharp = Get-ChildItem src -Recurse -Include *.cs -File |
+            Select-String -Pattern 'DateTime\.Now|DateTimeOffset\.Now'
+          if ($csharp) {
+            $fallos += "Usa DateTime.UtcNow. Todo se almacena en UTC; la conversion a local solo ocurre en WPF:"
+            $fallos += $csharp | ForEach-Object { "  $($_.Path):$($_.LineNumber)  $($_.Line.Trim())" }
+          }
+
+          # NOW() y CURRENT_TIMESTAMP dependen del timezone de la sesion MySQL.
+          $sql = Get-ChildItem database/migrations -Recurse -Include *.sql -File |
+            Select-String -Pattern '(?<![_\w])NOW\s*\(|CURRENT_TIMESTAMP'
+          if ($sql) {
+            $fallos += "Usa UTC_TIMESTAMP(3) en vez de NOW()/CURRENT_TIMESTAMP:"
+            $fallos += $sql | ForEach-Object { "  $($_.Path):$($_.LineNumber)  $($_.Line.Trim())" }
+          }
+
+          if ($fallos) {
+            $fallos | ForEach-Object { Write-Host $_ -ForegroundColor Red }
+            exit 1
+          }
+
+          Write-Host "Regla UTC: OK" -ForegroundColor Green

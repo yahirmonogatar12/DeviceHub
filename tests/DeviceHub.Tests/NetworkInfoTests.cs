@@ -43,6 +43,30 @@ public class NetworkInfoTests
         Assert.Null(ip);
     }
 
+    /// <summary>
+    /// Con el servidor en localhost la ruta resuelve a loopback, que esta
+    /// filtrado, asi que ninguna interfaz queda marcada. Y NO se inventa una.
+    ///
+    /// Este test existe porque las dos heuristicas que se probaron fallaron
+    /// contra hardware real: "la primera de la lista" eligio Tailscale (100.x) y
+    /// "la primera con MAC" eligio VirtualBox (192.168.56.1). Una IP equivocada
+    /// es peor que ninguna en un sistema cuyo proposito es saber que PC es cual.
+    /// </summary>
+    [Fact]
+    public void Nothing_is_marked_primary_when_the_route_gives_nothing()
+        => Assert.DoesNotContain(NetworkInfo.Collect("localhost"), n => n.IsPrimary);
+
+    /// <summary>Con un destino ruteable de verdad si debe salir una primaria.</summary>
+    [Fact]
+    public void A_routable_target_resolves_a_primary()
+    {
+        // No envia nada: solo consulta la tabla de rutas.
+        if (NetworkInfo.ResolvePrimaryIp("192.0.2.1") is null)
+            return; // maquina sin ruta por defecto
+
+        Assert.Single(NetworkInfo.Collect("192.0.2.1").Where(n => n.IsPrimary));
+    }
+
     [Fact]
     public void Uptime_is_positive()
         => Assert.True(NetworkInfo.UptimeSeconds() >= 0);

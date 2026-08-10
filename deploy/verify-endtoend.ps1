@@ -19,6 +19,10 @@
 param(
     [int]$Minutes = 2,
     [int]$Port = 5443,
+    # Apuntar a 'localhost' hace que la ruta resuelva a loopback y NINGUNA
+    # interfaz quede marcada como primaria, asi que current_ip queda NULL. Para
+    # probar el camino real hay que dar la IP LAN de esta PC.
+    [string]$ServerHost = 'localhost',
     [string]$DataRoot = "$env:TEMP\devicehub-e2e"
 )
 
@@ -75,7 +79,7 @@ try {
 
     Step 'Arrancando agente en esta PC'
     $env:DeviceHub__DataDirectory = $agentData
-    $env:DeviceHub__ServerHost = 'localhost'
+    $env:DeviceHub__ServerHost = $ServerHost
     $env:DeviceHub__ServerPort = $Port
     $env:DeviceHub__EnrollmentCode = $code
     $env:DeviceHub__HeartbeatSeconds = 10

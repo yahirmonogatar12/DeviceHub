@@ -2,9 +2,26 @@ using MySqlConnector;
 
 namespace DeviceHub.Server.Data;
 
-public sealed class Db(string connectionString)
+public sealed class Db
 {
-    public string ConnectionString { get; } = connectionString;
+    public Db(string connectionString)
+    {
+        // GuidFormat=None es obligatorio, no una preferencia.
+        //
+        // Por defecto MySqlConnector lee las columnas CHAR(36) como Guid, y como
+        // machine_id se maneja como string en todo el sistema, Dapper reventaba
+        // con "Object must implement IConvertible" en CADA lectura de maquina.
+        //
+        // Se fija aqui y no en la cadena de conexion a proposito: es una
+        // invariante del codigo, y dejarla en manos de quien despliega significa
+        // que un dia alguien escriba la cadena a mano y todo falle en runtime.
+        ConnectionString = new MySqlConnectionStringBuilder(connectionString)
+        {
+            GuidFormat = MySqlGuidFormat.None
+        }.ConnectionString;
+    }
+
+    public string ConnectionString { get; }
 
     public async Task<MySqlConnection> OpenAsync(CancellationToken ct = default)
     {

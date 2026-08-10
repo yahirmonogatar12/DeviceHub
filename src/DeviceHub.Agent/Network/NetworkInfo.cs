@@ -60,6 +60,16 @@ public static class NetworkInfo
             }
         }
 
+        // Si la ruta no marco ninguna, NINGUNA queda marcada. No hay fallback a
+        // proposito:
+        //
+        //   "la primera de la lista"      -> eligio la de Tailscale (100.x)
+        //   "la primera con MAC real"     -> eligio la de VirtualBox (192.168.56.1)
+        //
+        // Toda heuristica acaba escogiendo algun adaptador virtual, y este
+        // proyecto existe precisamente porque una IP equivocada es peor que no
+        // tener IP. La tabla de rutas es la unica señal fiable, y en produccion
+        // siempre responde: el servidor es un host remoto real, no localhost.
         return result;
     }
 

@@ -231,7 +231,10 @@ public sealed class MachineRepository(Db db)
             .Distinct()
             .ToList();
 
-        var primary = heartbeat.Interfaces.FirstOrDefault(i => i.IsPrimary) ?? heartbeat.Interfaces.FirstOrDefault();
+        // Sin `?? FirstOrDefault()`: si el agente no pudo determinar la primaria por
+        // ruta, current_ip queda NULL. Mostrar la IP de un adaptador virtual seria
+        // peor que no mostrar ninguna. El historial si guarda todas las IPs.
+        var primary = heartbeat.Interfaces.FirstOrDefault(i => i.IsPrimary);
 
         await using var conn = await db.OpenAsync(ct);
 

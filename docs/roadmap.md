@@ -32,20 +32,56 @@ verificadas ejecutando.
 | 18 | Benchmark de motores remotos | pendiente |
 
 Fuera de la numeracion, tambien hecho: scripts de despliegue self-contained
-(`deploy/`), que son los que convierten "compila" en "instalado en N PCs".
+(`deploy/`), verificacion end-to-end contra MySQL real, bootstrap sin GUI
+(`--enrollment-code`) y CI en GitHub Actions (build + tests + regla UTC).
 
-## Lo que falta para cerrar el hito real
+## End-to-end contra MySQL real: hecho
 
-El objetivo declarado era: **instalar el agente en 5 PCs y verlas las cinco en el
-dashboard con identidad estable**. El codigo esta; falta un solo paso operativo:
+El schema `devicehub` existe en el MySQL central, con un usuario limitado a
+`devicehub.*` (sin permisos globales: un error de migracion no puede tocar
+`mes_production`). Las 9 migraciones se aplicaron y el flujo completo
+**Agent -> Server -> MySQL** quedo verificado con
+[`deploy/verify-endtoend.ps1`](../deploy/verify-endtoend.ps1): registro por
+codigo de un solo uso, heartbeat, historial de IP, interfaces, inventario de
+hardware y metricas por minuto.
 
-> **Crear el schema `devicehub` en el MySQL central.** Las 9 migraciones nunca se
-> han ejecutado contra un MySQL real. Lo hace solo el servidor al arrancar, pero
-> hasta que eso ocurra el sistema no se ha probado de punta a punta.
+**La prueba encontro dos bugs que ninguna prueba unitaria podia encontrar:**
 
-Lo demas si esta verificado ejecutando: generacion y persistencia del `machineId`
-entre reinicios, pin SPKI estable, backoff de reconexion, recoleccion WMI e
-inventario, y muestreo de metricas.
+1. **`CHAR(36)` se leia como `Guid`.** MySqlConnector mapea `CHAR(36)` a `Guid`
+   por defecto, y `machine_id` se maneja como `string` en todo el sistema:
+   Dapper reventaba con *"Object must implement IConvertible"* en cada lectura de
+   maquina, y el agente reconectaba en bucle. Se fija `GuidFormat=None` en `Db`,
+   no en la cadena de conexion: es una invariante del codigo, no algo que deba
+   recordar quien despliega.
+
+2. **La interfaz primaria caia en un fallback ciego.** Cuando la ruta no marcaba
+   ninguna, se tomaba la primera de la lista. Contra hardware real eso eligio la
+   IP de **Tailscale** (`100.x`); cambiarlo por "la primera con MAC real" eligio
+   la de **VirtualBox** (`192.168.56.1`). Toda heuristica acaba escogiendo un
+   adaptador virtual, asi que ahora **no se marca ninguna** y `current_ip` queda
+   NULL. Una IP equivocada es peor que ninguna en un sistema cuyo proposito es
+   saber que PC es cual.
+
+Con el servidor apuntado a la IP LAN real, la seleccion por ruta acierta teniendo
+cuatro adaptadores virtuales presentes:
+
+| Interfaz | IP | primaria |
+|---|---|---|
+| Wi-Fi | 192.168.0.211 | **si** |
+| Ethernet 2 (VirtualBox) | 192.168.56.1 | no |
+| Tailscale | 100.111.108.116 | no |
+| vEthernet (WSL Hyper-V) | 192.168.80.1 | no |
+| vEthernet (WSLCore) | 172.27.32.1 | no |
+
+Tambien se vio funcionar la **degradacion aprendida del fingerprint**: tras
+registrar la misma PC fisica varias veces durante las pruebas, el servidor bajo
+la confianza a `LOW` solo, al detectar el mismo fingerprint en 3 o mas maquinas.
+
+### Lo que sigue faltando
+
+Probarlo en **5 PCs reales de planta**, y sobre todo los escenarios que solo
+existen ahi: cambio de IP, reinicio, servidor apagado, red desconectada, Windows
+sin sesion iniciada, clonado de imagen y cambio de hostname.
 
 ---
 
