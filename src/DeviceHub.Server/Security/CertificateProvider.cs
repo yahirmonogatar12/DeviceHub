@@ -26,7 +26,7 @@ public static class CertificateProvider
         {
             var existing = Load(path);
             logger.LogInformation("Certificado cargado de {Path}", path);
-            LogPin(existing, logger);
+            PublishPin(existing, directory, logger);
             return existing;
         }
 
@@ -50,7 +50,7 @@ public static class CertificateProvider
 
         var certificate = Load(path);
         logger.LogWarning("Certificado autogenerado en {Path}", path);
-        LogPin(certificate, logger);
+        PublishPin(certificate, directory, logger);
         return certificate;
     }
 
@@ -58,10 +58,30 @@ public static class CertificateProvider
         => X509CertificateLoader.LoadPkcs12FromFile(
             path, null, X509KeyStorageFlags.MachineKeySet | X509KeyStorageFlags.PersistKeySet | X509KeyStorageFlags.Exportable);
 
-    private static void LogPin(X509Certificate2 certificate, ILogger logger)
-        => logger.LogInformation(
-            "Pin SPKI del servidor: {Pin}  <- este es el valor que debe llevar el instalador del agente",
-            PublicKeyPin.Compute(certificate));
+    /// <summary>
+    /// Deja el pin en el log Y en un archivo.
+    ///
+    /// Corriendo como servicio de Windows el log va al Visor de eventos, y su
+    /// proveedor descarta todo lo que este por debajo de Warning: el pin no
+    /// aparecia por ningun lado justo cuando el operador lo necesita para
+    /// instalar los agentes. No es un secreto -- es el hash de una clave publica
+    /// y esta pensado para repartirse.
+    /// </summary>
+    private static void PublishPin(X509Certificate2 certificate, string directory, ILogger logger)
+    {
+        var pin = PublicKeyPin.Compute(certificate);
+
+        logger.LogInformation("Pin SPKI del servidor: {Pin}", pin);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "pin.txt"), pin + Environment.NewLine);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "No se pudo escribir pin.txt");
+        }
+    }
 
     private static X509Extension BuildSubjectAlternativeNames()
     {

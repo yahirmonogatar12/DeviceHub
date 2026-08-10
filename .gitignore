@@ -12,3 +12,6 @@ machine.json
 
 # Artefactos de publicacion
 artifacts/
+
+# Instaladores compilados (van fuera del arbol sincronizado)
+installer/Output/
