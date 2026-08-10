@@ -6,8 +6,8 @@ realidad y estan anotadas donde corresponde.
 
 ## Estado
 
-**Vamos en la Fase 14 (File Manager).** Fases 0 a 13 implementadas, con tests
-y verificadas ejecutando contra el MySQL central.
+**Vamos en la Fase 15 (Terminal).** Fases 0 a 14 implementadas, con tests y
+verificadas ejecutando contra el MySQL central.
 
 | # | Fase | Estado |
 |---|---|---|
@@ -25,8 +25,8 @@ y verificadas ejecutando contra el MySQL central.
 | 11 | Sesiones remotas y permisos | hecho |
 | 12 | Auditoria | hecho |
 | 13 | Roles y hardening | hecho (mTLS diferido) |
-| 14 | **File Manager** | **siguiente** |
-| 15 | Terminal | pendiente |
+| 14 | File Manager | hecho |
+| 15 | **Terminal** | **siguiente** |
 | 16 | Auto-update del agente | pendiente |
 | 17 | Integracion MES | pendiente |
 | 18 | Benchmark de motores remotos | pendiente |
@@ -154,6 +154,15 @@ origen e instantes. Las huerfanas se cierran a las 8 h: sin eso, la auditoria
 diria que alguien lleva tres semanas dentro de una PC porque cerro el dashboard
 de golpe.
 
+**14 · File Manager** — las operaciones van por el canal de comandos que ya
+existia: son peticiones con respuesta, no hacia falta un subsistema aparte. La
+validacion de rutas vive en el AGENTE, no en el servidor: `GetFolderPath` en el
+servidor devolveria las carpetas del servidor, y solo la maquina sabe donde estan
+las suyas. Los directorios protegidos son de **solo lectura para todos**, no
+"solo admin": borrar dentro de `C:\Windows` a distancia es como se deja una PC
+inservible, y ningun soporte legitimo lo necesita. No hay borrado recursivo. La
+transferencia va en un mensaje unico con tope de 4 MB en lugar de troceada.
+
 **13 · Roles y hardening** — el hueco real no era la matriz (ya existia en
 `CommandPolicy`) sino que **no habia forma de crear un technician**: solo estaba
 el admin del bootstrap, asi que los permisos eran teoricos. Ahora hay gestion de
@@ -179,13 +188,7 @@ permisos intentara apagar una PC es justo lo que hay que poder ver despues.
 
 ## Fases pendientes
 
-### 14 · File Manager — siguiente
-
-List / Download / Upload / Rename / Move / Delete, por streams gRPC con chunks.
-Rutas protegidas normalizando con `Path.GetFullPath` **antes** de comparar, para
-cerrar el paso a `..\`.
-
-### 15 · Terminal
+### 15 · Terminal — siguiente
 
 Ahora si, con auditoria y roles en pie. Nunca un `POST /execute` suelto: sesion
 con `session_id`, `user_id`, `machine_id`, cada comando registrado con su salida,
@@ -243,6 +246,7 @@ Simplificaciones tomadas a conciencia, con el disparador para revisarlas.
 | `sites` con una sola fila | la UI multi-planta se agrega cuando haya una segunda |
 | Un solo proyecto para el agente | si aparece un agente Linux |
 | mTLS por agente no implementado: se queda en TLS con pin SPKI + token aleatorio de 32 bytes protegido con DPAPI | si aparece un requisito de cumplimiento que lo exija, o si el servidor deja de estar solo en la LAN. Hoy el beneficio marginal es escaso: la amenaza que mTLS ataca es el robo del token desde una maquina comprometida, pero esa maquina filtraria igual la clave privada de su certificado cliente. Montar emision, distribucion y rotacion de certificados por agente es un subsistema entero a cambio de poco |
+| Transferencia de archivos en un solo mensaje, tope 4 MB | cuando alguien necesite bajarse un log de 500 MB. Entonces toca trocear, reensamblar y reanudar, que es un subsistema entero |
 | El rate limiting vive en memoria: reiniciar el servidor limpia los contadores | si alguna vez hay varias instancias detras de un balanceador; ahi tiene que pasar a almacenamiento compartido |
 | `SQLitePCLRaw.bundle_e_sqlite3` fijado a mano en el `.csproj` | cuando `Microsoft.Data.Sqlite` actualice su transitiva (hoy trae una con CVE) |
 

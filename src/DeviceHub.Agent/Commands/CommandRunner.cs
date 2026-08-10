@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.ServiceProcess;
+using DeviceHub.Agent.Files;
 using System.Text.Json;
 using DeviceHub.Contracts;
 
@@ -76,6 +77,17 @@ public sealed class CommandRunner(ILogger<CommandRunner> logger)
         CommandType.RestartService => Task.FromResult(ControlService(Parameter(request, "service"), ServiceAction.Restart)),
         CommandType.RestartMachine => Task.FromResult(Shutdown(restart: true)),
         CommandType.ShutdownMachine => Task.FromResult(Shutdown(restart: false)),
+
+        // Fase 14. La validacion de rutas vive en PathGuard, dentro del agente:
+        // solo esta maquina sabe donde estan sus directorios criticos.
+        CommandType.ListDirectory => Task.FromResult(FileOperations.ListDirectory(Parameter(request, "path"))),
+        CommandType.CreateDirectory => Task.FromResult(FileOperations.CreateDirectory(Parameter(request, "path"))),
+        CommandType.DeletePath => Task.FromResult(Audited(FileOperations.Delete(Parameter(request, "path")))),
+        CommandType.RenamePath => Task.FromResult(Audited(
+            FileOperations.Rename(Parameter(request, "path"), Parameter(request, "newName")))),
+        CommandType.ReadFile => Task.FromResult(FileOperations.ReadFile(Parameter(request, "path"))),
+        CommandType.WriteFile => Task.FromResult(Audited(
+            FileOperations.WriteFile(Parameter(request, "path"), Parameter(request, "content")))),
 
         _ => throw new InvalidOperationException($"Sin implementacion para {request.Type}")
     };
@@ -248,6 +260,15 @@ public sealed class CommandRunner(ILogger<CommandRunner> logger)
             throw new InvalidOperationException($"shutdown.exe devolvio {process.ExitCode}");
 
         return restart ? "Reinicio programado en 5 s" : "Apagado programado en 5 s";
+    }
+
+    /// <summary>Deja constancia local de las operaciones destructivas de archivo,
+    /// ademas de la auditoria del servidor: si alguien discute que paso en la PC,
+    /// el registro de eventos de Windows lo respalda.</summary>
+    private string Audited(string result)
+    {
+        logger.LogWarning("Operacion de archivo por orden remota: {Result}", result);
+        return result;
     }
 
     private static string Parameter(CommandRequest request, string name)

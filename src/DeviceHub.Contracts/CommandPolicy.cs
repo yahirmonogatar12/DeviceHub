@@ -57,7 +57,31 @@ public static class CommandPolicy
             IsDestructive: true, AllowRetry: false, Ttl: TimeSpan.FromSeconds(30), Timeout: TimeSpan.FromSeconds(15)),
 
         [CommandType.ShutdownMachine] = new(CommandType.ShutdownMachine, Roles.Administrator,
-            IsDestructive: true, AllowRetry: false, Ttl: TimeSpan.FromSeconds(30), Timeout: TimeSpan.FromSeconds(15))
+            IsDestructive: true, AllowRetry: false, Ttl: TimeSpan.FromSeconds(30), Timeout: TimeSpan.FromSeconds(15)),
+
+        // --- Archivos (Fase 14) ---
+        //
+        // Listar y leer exigen Engineer, no Technician: el contenido de los
+        // archivos de una PC de planta puede incluir cadenas de conexion,
+        // recetas y configuracion de proceso.
+        [CommandType.ListDirectory] = new(CommandType.ListDirectory, Roles.Engineer,
+            IsDestructive: false, AllowRetry: true, Ttl: TimeSpan.FromMinutes(2), Timeout: TimeSpan.FromSeconds(30)),
+
+        [CommandType.ReadFile] = new(CommandType.ReadFile, Roles.Engineer,
+            IsDestructive: false, AllowRetry: true, Ttl: TimeSpan.FromMinutes(2), Timeout: TimeSpan.FromSeconds(60)),
+
+        [CommandType.CreateDirectory] = new(CommandType.CreateDirectory, Roles.Engineer,
+            IsDestructive: false, AllowRetry: false, Ttl: TimeSpan.FromMinutes(2), Timeout: TimeSpan.FromSeconds(30)),
+
+        [CommandType.RenamePath] = new(CommandType.RenamePath, Roles.Engineer,
+            IsDestructive: true, AllowRetry: false, Ttl: TimeSpan.FromMinutes(2), Timeout: TimeSpan.FromSeconds(30)),
+
+        [CommandType.WriteFile] = new(CommandType.WriteFile, Roles.Engineer,
+            IsDestructive: true, AllowRetry: false, Ttl: TimeSpan.FromMinutes(2), Timeout: TimeSpan.FromSeconds(60)),
+
+        // Borrar es irreversible y no hay papelera en remoto.
+        [CommandType.DeletePath] = new(CommandType.DeletePath, Roles.Administrator,
+            IsDestructive: true, AllowRetry: false, Ttl: TimeSpan.FromMinutes(2), Timeout: TimeSpan.FromSeconds(60))
     };
 
     /// <summary>Un tipo fuera de la tabla no existe. No hay default permisivo.</summary>
@@ -76,6 +100,8 @@ public static class CommandPolicy
     {
         CommandType.KillProcess => "pid",
         CommandType.StartService or CommandType.StopService or CommandType.RestartService => "service",
+        CommandType.ListDirectory or CommandType.CreateDirectory or CommandType.DeletePath
+            or CommandType.RenamePath or CommandType.ReadFile or CommandType.WriteFile => "path",
         _ => null
     };
 }

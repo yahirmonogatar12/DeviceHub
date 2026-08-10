@@ -23,6 +23,10 @@ public static class AuditActions
     public const string UserCreated = "USER_CREATED";
     public const string UserUpdated = "USER_UPDATED";
     public const string PasswordChanged = "PASSWORD_CHANGED";
+    public const string FileDelete = "FILE_DELETE";
+    public const string FileWrite = "FILE_WRITE";
+    public const string FileRename = "FILE_RENAME";
+    public const string FileRead = "FILE_READ";
 
     /// <summary>
     /// Cada comando peligroso tiene su propia accion auditable. Registrar
@@ -38,6 +42,10 @@ public static class AuditActions
         CommandType.RestartService => ServiceRestart,
         CommandType.RestartMachine => MachineReboot,
         CommandType.ShutdownMachine => MachineShutdown,
+        CommandType.DeletePath => FileDelete,
+        CommandType.WriteFile => FileWrite,
+        CommandType.RenamePath => FileRename,
+        CommandType.ReadFile => FileRead,
         _ => CommandRequested
     };
 }

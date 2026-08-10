@@ -3,7 +3,7 @@
 Plataforma interna para inventariar, monitorear y administrar las PCs de planta.
 El control remoto es **un modulo mas**, no el producto.
 
-Estado actual: **Fases 0-13** implementadas. Identidad de maquina, heartbeat
+Estado actual: **Fases 0-14** implementadas. Identidad de maquina, heartbeat
 sobre stream gRPC persistente, historial de IP y de ubicacion, dashboard WPF,
 inventario de hardware, monitoreo, administracion remota (comandos con TTL e
 idempotencia, procesos y servicios), control remoto con sesiones, y auditoria

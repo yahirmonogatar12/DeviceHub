@@ -104,6 +104,16 @@ enum CommandType {
   COMMAND_TYPE_RESTART_SERVICE = 7;
   COMMAND_TYPE_RESTART_MACHINE = 8;
   COMMAND_TYPE_SHUTDOWN_MACHINE = 9;
+
+  // Fase 14. Van por el mismo canal de comandos: son peticiones con respuesta,
+  // no hacia falta un subsistema aparte. La transferencia va en un solo mensaje
+  // con tope de 4 MB en vez de troceada -- ver PathGuard.MaxTransferBytes.
+  COMMAND_TYPE_LIST_DIRECTORY = 10;
+  COMMAND_TYPE_CREATE_DIRECTORY = 11;
+  COMMAND_TYPE_DELETE_PATH = 12;
+  COMMAND_TYPE_RENAME_PATH = 13;
+  COMMAND_TYPE_READ_FILE = 14;
+  COMMAND_TYPE_WRITE_FILE = 15;
 }
 
 enum CommandStatus {
