@@ -31,7 +31,18 @@ if (args.Contains("--metrics"))
     return;
 }
 
-var builder = Host.CreateApplicationBuilder(args);
+// ContentRootPath explicito, no opcional.
+//
+// Por defecto la raiz de contenido es el DIRECTORIO ACTUAL, y para un servicio
+// de Windows ese directorio es C:\Windows\System32. Sin esto el agente no
+// encuentra su appsettings.json y arranca con los valores por defecto: sin
+// servidor, sin codigo de enrolamiento y sin pin, girando en vacio con un error
+// que dice "sin codigo de enrolamiento" aunque el archivo lo tenga.
+var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+{
+    Args = args,
+    ContentRootPath = AppContext.BaseDirectory
+});
 
 builder.Services.Configure<AgentOptions>(builder.Configuration.GetSection(AgentOptions.SectionName));
 

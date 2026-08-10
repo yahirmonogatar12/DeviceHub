@@ -23,12 +23,23 @@ public sealed class DashboardSettings
         if (!File.Exists(path))
             return new DashboardSettings();
 
-        using var stream = File.OpenRead(path);
-        using var document = JsonDocument.Parse(stream);
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var document = JsonDocument.Parse(stream);
 
-        return document.RootElement.TryGetProperty("DeviceHub", out var section)
-            ? section.Deserialize<DashboardSettings>() ?? new DashboardSettings()
-            : new DashboardSettings();
+            return document.RootElement.TryGetProperty("DeviceHub", out var section)
+                ? section.Deserialize<DashboardSettings>() ?? new DashboardSettings()
+                : new DashboardSettings();
+        }
+        catch (JsonException ex)
+        {
+            // Un JSON mal formado no puede impedir abrir la aplicacion sin decir
+            // por que: se avisa y se sigue con los valores por defecto, para que
+            // el operador pueda al menos ver la ventana y corregir la ruta.
+            throw new InvalidOperationException(
+                $"appsettings.json tiene un error de formato: {ex.Message}", ex);
+        }
     }
 }
 

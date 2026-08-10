@@ -113,14 +113,44 @@ begin
     Result := not WizardIsComponentSelected('dashboard');
 end;
 
+function EsNumero(const Texto: String): Boolean;
+var
+  i: Integer;
+begin
+  Result := Length(Trim(Texto)) > 0;
+
+  for i := 1 to Length(Trim(Texto)) do
+    if (Trim(Texto)[i] < '0') or (Trim(Texto)[i] > '9') then
+      Result := False;
+end;
+
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
 
   if (PaginaServidor <> nil) and (CurPageID = PaginaServidor.ID) then
+  begin
     if Trim(PaginaServidor.Values[3]) = '' then
     begin
       MsgBox('Falta la contrasena de MySQL. Sin ella el servicio no arrancara.', mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+
+    { Un puerto vacio o con letras generaba un appsettings.json roto, y entonces
+      el servicio o el dashboard fallaban al arrancar sin explicar por que. }
+    if not EsNumero(PaginaServidor.Values[4]) then
+    begin
+      MsgBox('El puerto debe ser un numero.', mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+  end;
+
+  if (PaginaDashboard <> nil) and (CurPageID = PaginaDashboard.ID) then
+    if not EsNumero(PaginaDashboard.Values[1]) then
+    begin
+      MsgBox('El puerto debe ser un numero.', mbError, MB_OK);
       Result := False;
     end;
 end;

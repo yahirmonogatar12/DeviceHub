@@ -57,12 +57,15 @@ var
 procedure InitializeWizard;
 begin
   PaginaConfig := CreateInputQueryPage(wpSelectDir,
-    'Conexion con el servidor',
-    'Datos para que este equipo se registre en DeviceHub',
-    'El codigo de enrolamiento se genera en el dashboard y vence en 30 minutos.' + #13#10 +
-    'El pin SPKI lo imprime el servidor en su log al arrancar.');
+    'Conexion con el servidor DeviceHub',
+    'A que servidor se conecta este equipo',
+    'Es la PC donde instalaste DeviceHub Server (el servicio que escucha en el' + #13#10 +
+    'puerto 5443). NO es esta PC, NI el servidor de MySQL.' + #13#10#13#10 +
+    'El codigo de enrolamiento se genera en el dashboard y vence en 30 minutos;' + #13#10 +
+    'el pin esta en pin.txt, dentro de C:\ProgramData\ILSANSYSTEM\DeviceHubServer' + #13#10 +
+    'de esa misma PC.');
 
-  PaginaConfig.Add('Servidor (host o IP):', False);
+  PaginaConfig.Add('PC con DeviceHub Server (host o IP):', False);
   PaginaConfig.Add('Puerto:', False);
   PaginaConfig.Add('Codigo de enrolamiento:', False);
   PaginaConfig.Add('Pin SPKI del servidor (opcional):', False);

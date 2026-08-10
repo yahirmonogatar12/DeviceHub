@@ -9,7 +9,14 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.IdentityModel.Tokens;
 
-var builder = WebApplication.CreateBuilder(args);
+// ContentRootPath explicito: por defecto es el directorio actual, que para un
+// servicio de Windows es C:\Windows\System32. Sin esto appsettings.json se
+// ignora y el servidor arranca con los valores por defecto.
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    ContentRootPath = AppContext.BaseDirectory
+});
 
 // Regla 12: corre como servicio, sin sesion iniciada.
 builder.Services.AddWindowsService(options => options.ServiceName = "DeviceHubServer");
