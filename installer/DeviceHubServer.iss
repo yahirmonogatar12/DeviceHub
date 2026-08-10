@@ -55,11 +55,16 @@ Source: "..\artifacts\dashboard\*"; DestDir: "{app}\Dashboard"; Components: dash
 Name: "{group}\DeviceHub Dashboard"; Filename: "{app}\Dashboard\DeviceHub.Dashboard.exe"; Components: dashboard
 Name: "{commondesktop}\DeviceHub Dashboard"; Filename: "{app}\Dashboard\DeviceHub.Dashboard.exe"; Components: dashboard
 
+; El servicio NO se crea aqui.
+;
+; Las entradas [Run] se procesan en un momento que no esta garantizado respecto a
+; CurStepChanged(ssPostInstall), que es donde se escribe la configuracion. El
+; servicio arrancaba ANTES de que existiera la cadena de conexion y moria con
+; "Falta la cadena de conexion", dejando un servicio en estado Stopped y ningun
+; indicio de que el instalador hubiera hecho algo mal.
+;
+; Ahora se hace todo en [Code], en orden explicito: crear, configurar, arrancar.
 [Run]
-Filename: "{sys}\sc.exe"; Parameters: "create {#ServiceName} binPath= ""{app}\Server\DeviceHub.Server.exe"" start= auto DisplayName= ""ILSAN DeviceHub Server"""; Components: servidor; Flags: runhidden waituntilterminated
-Filename: "{sys}\sc.exe"; Parameters: "description {#ServiceName} ""Servidor central de ILSAN DeviceHub (gRPC + MySQL)."""; Components: servidor; Flags: runhidden waituntilterminated
-Filename: "{sys}\sc.exe"; Parameters: "failure {#ServiceName} reset= 86400 actions= restart/5000/restart/15000/restart/60000"; Components: servidor; Flags: runhidden waituntilterminated
-Filename: "{sys}\sc.exe"; Parameters: "start {#ServiceName}"; Components: servidor; Flags: runhidden waituntilterminated
 Filename: "{app}\Dashboard\DeviceHub.Dashboard.exe"; Description: "Abrir el dashboard"; Components: dashboard; Flags: postinstall nowait skipifsilent unchecked
 
 [UninstallRun]
@@ -243,8 +248,41 @@ begin
   begin
     if WizardIsComponentSelected('servidor') then
     begin
+      { ORDEN OBLIGATORIO: crear el servicio, configurarlo y SOLO ENTONCES
+        arrancarlo. Al reves arranca sin cadena de conexion y muere con
+        "Falta la cadena de conexion", dejando un servicio Stopped y ninguna
+        pista de que el instalador hizo algo mal. }
+      Exec(ExpandConstant('{sys}\sc.exe'),
+        ExpandConstant('create {#ServiceName} binPath= "{app}\Server\DeviceHub.Server.exe" start= auto DisplayName= "ILSAN DeviceHub Server"'),
+        '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+
+      Exec(ExpandConstant('{sys}\sc.exe'),
+        'description {#ServiceName} "Servidor central de ILSAN DeviceHub (gRPC + MySQL)."',
+        '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+
+      Exec(ExpandConstant('{sys}\sc.exe'),
+        'failure {#ServiceName} reset= 86400 actions= restart/5000/restart/15000/restart/60000',
+        '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+
       ConfigurarServidor;
       AbrirFirewall;
+
+      Exec(ExpandConstant('{sys}\sc.exe'), 'start {#ServiceName}', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+
+      { Migrar y generar el certificado tarda unos segundos. }
+      Sleep(8000);
+
+      if not FileExists('C:\ProgramData\ILSANSYSTEM\DeviceHubServer\pin.txt') then
+        MsgBox('El servidor quedo instalado pero NO termino de arrancar.' + #13#10#13#10 +
+               'Casi siempre es la conexion a MySQL. Revisa el detalle con:' + #13#10#13#10 +
+               '  Get-EventLog -LogName Application -Newest 20 |' + #13#10 +
+               '    Where-Object Message -match ''DeviceHub'' | Format-List',
+               mbError, MB_OK)
+      else
+        MsgBox('Servidor arrancado correctamente.' + #13#10#13#10 +
+               'El pin SPKI que necesitan los agentes y el dashboard esta en:' + #13#10 +
+               'C:\ProgramData\ILSANSYSTEM\DeviceHubServer\pin.txt',
+               mbInformation, MB_OK);
     end;
 
     if WizardIsComponentSelected('dashboard') then

@@ -67,12 +67,12 @@ Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
 [Files]
 Source: "..\artifacts\agent\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-[Run]
-Filename: "{sys}\sc.exe"; Parameters: "create {#ServiceName} binPath= ""{app}\DeviceHub.Agent.exe"" start= auto obj= LocalSystem DisplayName= ""{#AppName}"""; Flags: runhidden waituntilterminated
-Filename: "{sys}\sc.exe"; Parameters: "description {#ServiceName} ""Agente de inventario, monitoreo y administracion de ILSAN DeviceHub."""; Flags: runhidden waituntilterminated
-; Reinicio automatico: un agente caido deja la PC invisible en el dashboard.
-Filename: "{sys}\sc.exe"; Parameters: "failure {#ServiceName} reset= 86400 actions= restart/5000/restart/15000/restart/60000"; Flags: runhidden waituntilterminated
-Filename: "{sys}\sc.exe"; Parameters: "start {#ServiceName}"; Flags: runhidden waituntilterminated
+; El servicio NO se crea aqui: las entradas [Run] se procesan en un momento que
+; no esta garantizado respecto a CurStepChanged(ssPostInstall), donde se escribe
+; appsettings.json. El agente arrancaba ANTES de tener configuracion y se quedaba
+; girando con "sin codigo de enrolamiento" aunque el archivo lo tuviera.
+;
+; Se hace todo en [Code], en orden explicito: crear, configurar, arrancar.
 
 [UninstallRun]
 Filename: "{sys}\sc.exe"; Parameters: "stop {#ServiceName}"; Flags: runhidden waituntilterminated; RunOnceId: "StopService"
@@ -203,7 +203,25 @@ begin
   end;
 
   if CurStep = ssPostInstall then
+  begin
+    Exec(ExpandConstant('{sys}\sc.exe'),
+      ExpandConstant('create {#ServiceName} binPath= "{app}\DeviceHub.Agent.exe" start= auto obj= LocalSystem DisplayName= "{#AppName}"'),
+      '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+
+    Exec(ExpandConstant('{sys}\sc.exe'),
+      'description {#ServiceName} "Agente de inventario, monitoreo y administracion de ILSAN DeviceHub."',
+      '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+
+    { Reinicio automatico: un agente caido deja la PC invisible en el dashboard. }
+    Exec(ExpandConstant('{sys}\sc.exe'),
+      'failure {#ServiceName} reset= 86400 actions= restart/5000/restart/15000/restart/60000',
+      '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+
+    { La configuracion ANTES de arrancar. }
     EscribirConfiguracion;
+
+    Exec(ExpandConstant('{sys}\sc.exe'), 'start {#ServiceName}', '', SW_HIDE, ewWaitUntilTerminated, Codigo);
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
