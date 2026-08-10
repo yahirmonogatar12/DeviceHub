@@ -49,7 +49,7 @@ cd ILSANNET
 .\deploy\build-installers.ps1 -Version 1.0.0
 ```
 
-Salen dos archivos en `artifacts\installers\`:
+Salen dos archivos en `%LOCALAPPDATA%\ILSAN\DeviceHub-installers\`:
 
 | Archivo | Tamaño | Para |
 |---|---|---|
