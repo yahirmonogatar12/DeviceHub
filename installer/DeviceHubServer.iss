@@ -9,7 +9,12 @@
 ; un servicio hasta reiniciar Windows.
 
 #define AppName "ILSAN DeviceHub"
-#define AppVersion "1.0.0"
+; Guardado con ifndef: un #define plano pisa el /DAppVersion de la linea de
+; comandos, y el instalador salia siempre marcado como 1.0.0 aunque se pidiera
+; otra version -- con el numero equivocado en Programas y caracteristicas.
+#ifndef AppVersion
+  #define AppVersion "1.0.0"
+#endif
 #define ServiceName "DeviceHubServer"
 #define Publisher "ILSAN"
 

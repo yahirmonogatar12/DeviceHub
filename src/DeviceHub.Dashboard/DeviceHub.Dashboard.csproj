@@ -5,6 +5,14 @@
     <OutputType>WinExe</OutputType>
     <UseWPF>true</UseWPF>
     <RootNamespace>DeviceHub.Dashboard</RootNamespace>
+
+    <!-- WPF NO funciona con globalizacion invariante.
+         Directory.Build.props la activa para todo el repositorio (ahorra tamaño
+         en el servidor y el agente), pero el data binding de WPF llama a
+         XmlLanguage.GetSpecificCulture() al renderizar y sin datos de cultura
+         lanza "Cannot find non-neutral culture related to 'en-us'". El dashboard
+         se abria y moria en el acto. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
 
   <ItemGroup>

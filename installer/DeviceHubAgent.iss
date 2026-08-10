@@ -10,9 +10,37 @@
 ; deploy\uninstall.ps1 -RemoveIdentity, que pide confirmacion escrita.
 
 #define AppName "ILSAN DeviceHub Agent"
-#define AppVersion "1.0.0"
+; Guardado con ifndef: un #define plano pisa el /DAppVersion de la linea de
+; comandos, y el instalador salia siempre marcado como 1.0.0 aunque se pidiera
+; otra version -- con el numero equivocado en Programas y caracteristicas.
+#ifndef AppVersion
+  #define AppVersion "1.0.0"
+#endif
 #define ServiceName "DeviceHubAgent"
 #define Publisher "ILSAN"
+
+; Valores horneados en tiempo de compilacion (deploy\build-agent-preconfigured.ps1).
+; Con ellos, instalar en una PC de planta no pide teclear nada: ni la IP del
+; servidor, ni el pin, ni el codigo. Es lo que evita el error de escribir el
+; nombre del equipo o la IP del MySQL donde va el servidor de DeviceHub.
+#ifndef DefaultServer
+  #define DefaultServer ""
+#endif
+#ifndef DefaultPort
+  #define DefaultPort "5443"
+#endif
+#ifndef DefaultCode
+  #define DefaultCode ""
+#endif
+#ifndef DefaultPin
+  #define DefaultPin ""
+#endif
+#ifndef DefaultUpdateShare
+  #define DefaultUpdateShare "\\192.168.1.10\updates\Shared\DeviceHub\production"
+#endif
+#ifndef DefaultThumbprint
+  #define DefaultThumbprint ""
+#endif
 
 [Setup]
 AppId={{8F3D2A61-4C7E-4B19-9E5A-DEVICEHUBAGENT}
@@ -70,16 +98,26 @@ begin
   PaginaConfig.Add('Codigo de enrolamiento:', False);
   PaginaConfig.Add('Pin SPKI del servidor (opcional):', False);
 
-  PaginaConfig.Values[0] := ExpandConstant('{param:SERVER|}');
-  PaginaConfig.Values[1] := ExpandConstant('{param:PORT|5443}');
-  PaginaConfig.Values[2] := ExpandConstant('{param:CODE|}');
-  PaginaConfig.Values[3] := ExpandConstant('{param:PIN|}');
+  PaginaConfig.Values[0] := ExpandConstant('{param:SERVER|{#DefaultServer}}');
+  PaginaConfig.Values[1] := ExpandConstant('{param:PORT|{#DefaultPort}}');
+  PaginaConfig.Values[2] := ExpandConstant('{param:CODE|{#DefaultCode}}');
+  PaginaConfig.Values[3] := ExpandConstant('{param:PIN|{#DefaultPin}}');
+end;
+
+{ Con todo horneado no hay nada que preguntar: se salta la pagina y el instalador
+  queda en "siguiente, siguiente" incluso sin /VERYSILENT. }
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PaginaConfig <> nil) and (PageID = PaginaConfig.ID)
+    and ('{#DefaultServer}' <> '') and ('{#DefaultCode}' <> '');
 end;
 
 function ObtenerValor(Indice: Integer; Parametro, PorDefecto: String): String;
 begin
-  { En silencioso la pagina no se muestra y Values queda vacio: manda el parametro. }
-  if WizardSilent then
+  { En silencioso, o con la pagina saltada por venir todo horneado, Values esta
+    vacio: mandan el parametro de linea de comandos y luego el valor de
+    compilacion. }
+  if WizardSilent or ShouldSkipPage(PaginaConfig.ID) then
     Result := ExpandConstant('{param:' + Parametro + '|' + PorDefecto + '}')
   else
     Result := PaginaConfig.Values[Indice];

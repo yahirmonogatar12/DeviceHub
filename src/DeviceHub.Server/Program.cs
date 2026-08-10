@@ -51,7 +51,7 @@ if (args.Contains("--enrollment-code"))
     }
 
     var uses = int.TryParse(ArgValue(args, "--uses"), out var parsedUses) ? Math.Max(1, parsedUses) : 1;
-    var minutes = int.TryParse(ArgValue(args, "--minutes"), out var parsedMinutes) ? Math.Clamp(parsedMinutes, 5, 120) : 30;
+    var minutes = int.TryParse(ArgValue(args, "--minutes"), out var parsedMinutes) ? Math.Clamp(parsedMinutes, 5, 480) : 30;
     var code = Secrets.NewEnrollmentCode();
 
     await new EnrollmentRepository(db).CreateAsync(
