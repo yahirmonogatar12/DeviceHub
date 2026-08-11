@@ -88,6 +88,10 @@ public sealed class DxgiDesktopCapture : IScreenCapture
     /// un MFT del mismo fabricante y no cruzar frames entre tarjetas.</summary>
     public uint AdapterVendorId { get; private set; }
 
+    /// <summary>Identificador exacto del adaptador DXGI. Es lo que usa el encoder
+    /// para pedir a Windows los MFT de ESTA GPU y no los de la de al lado.</summary>
+    public Vortice.Luid AdapterLuid { get; private set; }
+
     public string Adapter { get; private set; } = string.Empty;
     public string Output { get; private set; } = string.Empty;
     public int Width { get; private set; }
@@ -253,6 +257,7 @@ public sealed class DxgiDesktopCapture : IScreenCapture
         _adapter = adapter;
         Adapter = adapter.Description.Description.Trim();
         AdapterVendorId = adapter.Description.VendorId;
+        AdapterLuid = adapter.Description1.Luid;
 
         if (adapter.EnumOutputs((uint)_outputIndex, out var output).Failure || output is null)
             throw new ScreenCaptureUnavailableException(

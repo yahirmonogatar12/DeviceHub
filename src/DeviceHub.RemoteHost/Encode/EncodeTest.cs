@@ -26,7 +26,8 @@ public static class EncodeTest
         {
             using var capture = new DxgiDesktopCapture(adapterIndex, outputIndex);
             using var encoder = new H264Encoder(
-                capture.Device, capture.Width, capture.Height, fps, bitrate, capture.AdapterVendorId);
+                capture.Device, capture.Width, capture.Height, fps, bitrate,
+                capture.AdapterLuid, capture.AdapterVendorId);
             using var gpu = new GpuCounters(adapterIndex);
 
             var caps = encoder.Capabilities;

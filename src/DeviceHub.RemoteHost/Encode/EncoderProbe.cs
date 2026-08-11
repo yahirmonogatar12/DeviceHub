@@ -1,4 +1,7 @@
+using System.Runtime.InteropServices;
 using SharpGen.Runtime;
+using Vortice;
+using Vortice.DXGI;
 using Vortice.MediaFoundation;
 
 namespace DeviceHub.RemoteHost.Encode;
@@ -18,7 +21,34 @@ public static class EncoderProbe
 
         try
         {
-            Console.WriteLine("Codificadores H.264 (hardware primero):");
+            // Por GPU primero: es como los elige el encoder de verdad, y ver la
+            // lista de cada adaptador por separado es lo que delata un filtro que
+            // no filtra.
+            using (var factory = DXGI.CreateDXGIFactory1<IDXGIFactory1>())
+            {
+                for (uint a = 0; factory.EnumAdapters1(a, out var adapter).Success && adapter is not null; a++)
+                {
+                    using (adapter)
+                    {
+                        var suyos = EnumerateForAdapter(adapter.Description1.Luid);
+
+                        Console.WriteLine($"GPU {a}: {adapter.Description.Description.Trim()}");
+
+                        foreach (var (nombre, hardware, activate) in suyos)
+                        {
+                            Console.WriteLine($"  [{(hardware ? "hardware" : "software")}] {nombre}");
+                            activate.Dispose();
+                        }
+
+                        if (suyos.Count == 0)
+                            Console.WriteLine("  (ninguno)");
+
+                        Console.WriteLine();
+                    }
+                }
+            }
+
+            Console.WriteLine("Todos los codificadores H.264 de la maquina (hardware primero):");
             Console.WriteLine();
 
             var encontrados = 0;
@@ -91,32 +121,88 @@ public static class EncoderProbe
     /// </summary>
     internal static EncoderList Enumerate()
     {
-        const uint SyncMft = 0x1, AsyncMft = 0x2, Hardware = 0x4, SortAndFilter = 0x40;
-
-        var salida = new RegisterTypeInfo
-        {
-            GuidMajorType = MediaTypeGuids.Video,
-            GuidSubtype = VideoFormatGuids.H264
-        };
-
         var coleccion = MediaFactory.MFTEnumEx(
-            TransformCategoryGuids.VideoEncoder,
-            SyncMft | AsyncMft | Hardware | SortAndFilter,
-            null,
-            salida);
+            TransformCategoryGuids.VideoEncoder, EnumFlags, null, OutputH264);
 
         var encontrados = new List<(string, bool, IMFActivate)>();
 
         foreach (var activate in coleccion)
-        {
-            var nombre = Attribute(activate, FriendlyName) ?? "(sin nombre)";
-            var esHardware = Attribute(activate, HardwareUrl) is not null;
-
-            encontrados.Add((nombre, esHardware, activate));
-        }
+            encontrados.Add(Describe(activate));
 
         return new EncoderList(coleccion, encontrados);
     }
+
+    /// <summary>
+    /// Los codificadores de UNA GPU concreta, identificada por su LUID.
+    ///
+    /// El LUID es el identificador exacto del adaptador DXGI, y MFT_ENUM_ADAPTER_LUID
+    /// existe justamente para esto. Es mejor criterio que el ID de fabricante, que
+    /// ademas esta documentado como opcional: dos NVIDIA en la misma maquina
+    /// comparten fabricante y no comparten LUID.
+    ///
+    /// Devuelve una lista vacia si el filtro no encuentra nada; el llamante decide
+    /// si cae al criterio de respaldo.
+    /// </summary>
+    internal static List<(string Name, bool Hardware, IMFActivate Activate)> EnumerateForAdapter(Luid luid)
+    {
+        var encontrados = new List<(string, bool, IMFActivate)>();
+
+        using var filtro = MediaFactory.MFCreateAttributes(1);
+
+        // Blob de 8 bytes con la estructura LUID, no un UINT64. Puesto como
+        // entero el atributo se acepta sin queja y el filtro no filtra: todas
+        // las GPU devuelven la lista completa, que es como se descubrio.
+        var bytes = new byte[8];
+        BitConverter.TryWriteBytes(bytes.AsSpan(0, 4), luid.LowPart);
+        BitConverter.TryWriteBytes(bytes.AsSpan(4, 4), luid.HighPart);
+        filtro.SetBlob(MftEnumAdapterLuid, bytes);
+
+        var salida = OutputH264;
+        MediaFactory.MFTEnum2(
+            TransformCategoryGuids.VideoEncoder, EnumFlags, null, salida, filtro,
+            out var arreglo, out var cuantos);
+
+        if (arreglo == IntPtr.Zero)
+            return encontrados;
+
+        try
+        {
+            for (var i = 0; i < cuantos; i++)
+                encontrados.Add(Describe(new IMFActivate(Marshal.ReadIntPtr(arreglo, i * IntPtr.Size))));
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(arreglo);
+        }
+
+        return encontrados;
+    }
+
+    private static (string, bool, IMFActivate) Describe(IMFActivate activate)
+        => (Attribute(activate, FriendlyName) ?? "(sin nombre)",
+            Attribute(activate, HardwareUrl) is not null,
+            activate);
+
+    /// <summary>El LUID viaja como un UINT64 con la parte alta arriba.</summary>
+    private static ulong Pack(Luid luid) => ((ulong)(uint)luid.HighPart << 32) | luid.LowPart;
+
+    /// <summary>
+    /// SORTANDFILTER pone los de hardware delante; se piden sincronos y
+    /// asincronos porque los de hardware suelen ser asincronos y sin esa bandera
+    /// no aparecen.
+    /// </summary>
+    private const uint EnumFlags = 0x1 | 0x2 | 0x4 | 0x40;
+
+    private static RegisterTypeInfo OutputH264 => new()
+    {
+        GuidMajorType = MediaTypeGuids.Video,
+        GuidSubtype = VideoFormatGuids.H264
+    };
+
+    // GUID sacado de mfapi.h del SDK de Windows, no de memoria: un GUID
+    // equivocado aqui no da error, simplemente se ignora el filtro y todo
+    // aparenta funcionar.
+    private static readonly Guid MftEnumAdapterLuid = new("1d39518c-e220-4da8-a07f-ba172552d6b1");
 
     /// <summary>
     /// Que formatos de entrada acepta de verdad, probando a fijarlos.

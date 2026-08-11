@@ -38,8 +38,17 @@ public sealed class H264Encoder : IVideoEncoder
     private int _needInput;
     private ulong _sequence;
 
-    public H264Encoder(ID3D11Device device, int width, int height, int framesPerSecond, int bitrate, uint vendorId)
+    private readonly int Ancho, Alto, Fps, Bits;
+
+    public H264Encoder(
+        ID3D11Device device, int width, int height, int framesPerSecond, int bitrate,
+        Vortice.Luid adapterLuid, uint vendorId)
     {
+        Ancho = width;
+        Alto = height;
+        Fps = framesPerSecond;
+        Bits = bitrate;
+
         _converter = new Nv12Converter(device, width, height);
         _frameDurationHns = 10_000_000L / framesPerSecond;
 
@@ -48,7 +57,7 @@ public sealed class H264Encoder : IVideoEncoder
         _deviceManager = MediaFactory.MFCreateDXGIDeviceManager();
         _deviceManager.ResetDevice(device).CheckError();
 
-        var (transform, nombre, hardware) = Select(width, height, framesPerSecond, bitrate, _deviceManager, vendorId);
+        var (transform, nombre, hardware) = Select(adapterLuid, vendorId);
         _transform = transform;
 
         var asincrono = Flag(_transform, TransformAsync);
@@ -222,42 +231,39 @@ public sealed class H264Encoder : IVideoEncoder
     /// garantiza que acepte esta configuracion -- el AVC DX12 de Microsoft, por
     /// ejemplo, aparece y luego rechaza todo sin un dispositivo D3D12.
     /// </summary>
-    private static (IMFTransform Transform, string Name, bool Hardware) Select(
-        int width, int height, int fps, int bitrate, IMFDXGIDeviceManager deviceManager, uint vendorId)
+    private (IMFTransform Transform, string Name, bool Hardware) Select(Vortice.Luid luid, uint vendorId)
     {
         var fallos = new List<string>();
 
+        // 1) Los MFT que Windows asocia a ESTA GPU. Es el criterio exacto:
+        //    MFT_ENUM_ADAPTER_LUID existe justo para esto, y distingue dos
+        //    tarjetas del mismo fabricante, cosa que el vendor ID no puede.
+        var propios = EncoderProbe.EnumerateForAdapter(luid);
+
+        try
+        {
+            foreach (var candidato in propios)
+            {
+                if (Intentar(candidato, out var elegido, fallos))
+                    return elegido;
+            }
+        }
+        finally
+        {
+            foreach (var (_, _, activate) in propios)
+                activate.Dispose();
+        }
+
+        // 2) Respaldo: cualquier codificador de la maquina, con el vendor ID
+        //    solo para ordenar. Se llega aqui si el filtro por LUID no devolvio
+        //    nada util -- una GPU sin encoder propio, o un Windows que no
+        //    soporte MFTEnum2 -- y entonces vale mas un software MFT que nada.
         using var lista = EncoderProbe.Enumerate();
 
-        foreach (var (nombre, hardware, activate) in Ordenar(lista.Items, vendorId))
+        foreach (var candidato in Ordenar(lista.Items, vendorId))
         {
-            {
-                IMFTransform? transform = null;
-
-                try
-                {
-                    transform = activate.ActivateObject<IMFTransform>();
-
-                    if (Flag(transform, TransformAsync))
-                        transform.Attributes?.Set(TransformAsyncUnlock, 1u);
-
-                    // El gestor DXGI ANTES de los tipos: algunos MFT rechazan la
-                    // configuracion si todavia no saben sobre que dispositivo van.
-                    transform.ProcessMessage(
-                        TMessageType.MessageSetD3DManager,
-                        (UIntPtr)(ulong)(long)deviceManager.NativePointer);
-
-                    Configure(transform, width, height, fps, bitrate);
-
-                    return (transform, nombre, hardware);
-                }
-                catch (Exception ex)
-                {
-                    var donde = ex.StackTrace?.Split('\n').FirstOrDefault()?.Trim() ?? "";
-                    fallos.Add($"{nombre}: {ex.GetType().Name}: {ex.Message.Split('\n')[0]}  {donde}");
-                    transform?.Dispose();
-                }
-            }
+            if (Intentar(candidato, out var elegido, fallos))
+                return elegido;
         }
 
         throw new VideoEncoderUnavailableException(
@@ -267,8 +273,49 @@ public sealed class H264Encoder : IVideoEncoder
     }
 
     /// <summary>
-    /// Pone delante los codificadores del MISMO fabricante que la GPU donde vive
-    /// la textura.
+    /// Activa y configura un candidato. Devuelve false y anota el motivo si no
+    /// sirve: estar en la lista no garantiza que acepte esta configuracion.
+    /// </summary>
+    private bool Intentar(
+        (string Name, bool Hardware, IMFActivate Activate) candidato,
+        out (IMFTransform, string, bool) elegido, List<string> fallos)
+    {
+        IMFTransform? transform = null;
+
+        try
+        {
+            transform = candidato.Activate.ActivateObject<IMFTransform>();
+
+            if (Flag(transform, TransformAsync))
+                transform.Attributes?.Set(TransformAsyncUnlock, 1u);
+
+            // El gestor DXGI ANTES de los tipos: algunos MFT rechazan la
+            // configuracion si todavia no saben sobre que dispositivo van.
+            transform.ProcessMessage(
+                TMessageType.MessageSetD3DManager,
+                (UIntPtr)(ulong)(long)_deviceManager.NativePointer);
+
+            Configure(transform, Ancho, Alto, Fps, Bits);
+
+            elegido = (transform, candidato.Name, candidato.Hardware);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            fallos.Add($"{candidato.Name}: {ex.Message.Split('\n')[0]}");
+            transform?.Dispose();
+            elegido = default;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Respaldo cuando el filtro por LUID no da nada: pone delante los del mismo
+    /// fabricante que la GPU donde vive la textura.
+    ///
+    /// Es peor criterio que el LUID -- no distingue dos tarjetas iguales, y el ID
+    /// de fabricante del MFT esta documentado como opcional -- pero sirve para
+    /// ordenar cuando no hay nada mejor.
     ///
     /// Sin esto, en un equipo con dos GPUs se elige el primero de la lista y sale
     /// un disparate silencioso: capturar en la NVIDIA y codificar en el MFT de
