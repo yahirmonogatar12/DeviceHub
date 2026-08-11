@@ -23,12 +23,13 @@ public static class EncoderProbe
 
             var encontrados = 0;
 
-            foreach (var (nombre, hardware, activate) in Enumerate())
+            using var lista = Enumerate();
+
+            foreach (var (nombre, hardware, activate) in lista.Items)
             {
                 encontrados++;
                 Console.WriteLine($"  [{(hardware ? "hardware" : "software")}] {nombre}");
 
-                using (activate)
                 {
                     IMFTransform? transform = null;
 
@@ -69,11 +70,26 @@ public static class EncoderProbe
     }
 
     /// <summary>
+    /// Los codificadores encontrados Y la coleccion que los sostiene.
+    ///
+    /// Van juntos a proposito: los IMFActivate son hijos de la coleccion y mueren
+    /// con ella. Enumerarlos de forma perezosa y soltar la coleccion al terminar
+    /// devuelve una lista de objetos COM ya liberados, que fallan con un
+    /// NullReferenceException dentro de Vortice sin decir por que.
+    /// </summary>
+    internal sealed record EncoderList(
+        IMFActivateCollection Collection,
+        IReadOnlyList<(string Name, bool Hardware, IMFActivate Activate)> Items) : IDisposable
+    {
+        public void Dispose() => Collection.Dispose();
+    }
+
+    /// <summary>
     /// SORTANDFILTER pone los de hardware delante, que es lo que queremos; se
     /// piden ademas los sincronos y asincronos porque los MFT de hardware suelen
     /// ser asincronos y sin esa bandera no aparecen.
     /// </summary>
-    internal static IEnumerable<(string Name, bool Hardware, IMFActivate Activate)> Enumerate()
+    internal static EncoderList Enumerate()
     {
         const uint SyncMft = 0x1, AsyncMft = 0x2, Hardware = 0x4, SortAndFilter = 0x40;
 
@@ -83,19 +99,23 @@ public static class EncoderProbe
             GuidSubtype = VideoFormatGuids.H264
         };
 
-        using var coleccion = MediaFactory.MFTEnumEx(
+        var coleccion = MediaFactory.MFTEnumEx(
             TransformCategoryGuids.VideoEncoder,
             SyncMft | AsyncMft | Hardware | SortAndFilter,
             null,
             salida);
+
+        var encontrados = new List<(string, bool, IMFActivate)>();
 
         foreach (var activate in coleccion)
         {
             var nombre = Attribute(activate, FriendlyName) ?? "(sin nombre)";
             var esHardware = Attribute(activate, HardwareUrl) is not null;
 
-            yield return (nombre, esHardware, activate);
+            encontrados.Add((nombre, esHardware, activate));
         }
+
+        return new EncoderList(coleccion, encontrados);
     }
 
     /// <summary>

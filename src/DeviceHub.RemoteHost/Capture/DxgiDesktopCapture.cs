@@ -77,6 +77,17 @@ public sealed class DxgiDesktopCapture : IScreenCapture
         }
     }
 
+    /// <summary>
+    /// El dispositivo sobre el que llegan las texturas. El encoder tiene que usar
+    /// ESTE y no crear el suyo: dos dispositivos distintos obligarian a copiar
+    /// cada frame entre ellos, que es justo lo que se evita trabajando en GPU.
+    /// </summary>
+    public ID3D11Device Device => _device;
+
+    /// <summary>ID de fabricante de la GPU (PCI). Lo usa el encoder para elegir
+    /// un MFT del mismo fabricante y no cruzar frames entre tarjetas.</summary>
+    public uint AdapterVendorId { get; private set; }
+
     public string Adapter { get; private set; } = string.Empty;
     public string Output { get; private set; } = string.Empty;
     public int Width { get; private set; }
@@ -241,6 +252,7 @@ public sealed class DxgiDesktopCapture : IScreenCapture
 
         _adapter = adapter;
         Adapter = adapter.Description.Description.Trim();
+        AdapterVendorId = adapter.Description.VendorId;
 
         if (adapter.EnumOutputs((uint)_outputIndex, out var output).Failure || output is null)
             throw new ScreenCaptureUnavailableException(
