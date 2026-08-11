@@ -55,6 +55,12 @@ if (-not $SkipPublish) {
     # RemoteHost va con el agente y RemoteViewer con el dashboard, en la MISMA
     # carpeta: asi comparten los archivos del runtime en vez de duplicar .NET
     # entero. Mismo criterio que deploy\publish.ps1.
+    #
+    # INVARIANTE: quienes comparten carpeta van con el mismo RID, el mismo
+    # TargetFramework y el mismo self-contained. Aqui esta garantizado porque el
+    # bucle usa los mismos parametros para todos. Publicar uno aparte con otra
+    # configuracion deja los archivos del runtime sobreescritos y una app que
+    # falla al arrancar sin que el error diga por que.
     $proyectos = @{
         'server'    = @('src\DeviceHub.Server')
         'agent'     = @('src\DeviceHub.Agent', 'src\DeviceHub.RemoteHost')

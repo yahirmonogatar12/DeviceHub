@@ -26,6 +26,15 @@ $root = Resolve-Path "$PSScriptRoot\.."
 # De regalo, RemoteHost entra solo en el zip de actualizacion (publish-update.ps1
 # empaqueta la carpeta del agente completa) y en el instalador (el .iss copia
 # artifacts\agent\* de forma recursiva).
+#
+# INVARIANTE: los proyectos que comparten carpeta se publican con el MISMO RID,
+# el mismo TargetFramework y el mismo valor de self-contained. Este bucle lo
+# garantiza por construccion, porque aplica los mismos parametros a todos.
+#
+# Si alguna vez se publica uno por separado con otra configuracion, el segundo
+# publish sobreescribe los archivos del runtime del primero y queda una carpeta
+# con dos apps y un runtime que solo le sirve a una. El sintoma no apunta a
+# nada: la app falla al arrancar por un ensamblado que "esta ahi".
 $projects = @{
     'server'    = @('src\DeviceHub.Server\DeviceHub.Server.csproj')
     'agent'     = @('src\DeviceHub.Agent\DeviceHub.Agent.csproj',
