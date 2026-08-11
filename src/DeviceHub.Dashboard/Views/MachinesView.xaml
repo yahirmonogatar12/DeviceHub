@@ -1,0 +1,146 @@
+<UserControl x:Class="DeviceHub.Dashboard.Views.MachinesView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid Margin="24,20,24,20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Titulo + accion de administrador -->
+        <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,16">
+            <TextBlock Text="Equipos" Style="{StaticResource H1}" />
+            <TextBlock Style="{StaticResource Caption}" Margin="10,6,0,0" VerticalAlignment="Bottom">
+                <Run Text="{Binding TotalCount, Mode=OneWay}" /><Run Text=" registrados" />
+            </TextBlock>
+
+            <Button DockPanel.Dock="Right" Content="Generar codigo de enrolamiento"
+                    Style="{StaticResource BtnGhost}"
+                    Command="{Binding CreateEnrollmentCodeCommand}"
+                    Visibility="{Binding IsAdministrator, Converter={StaticResource BoolToVis}}" />
+        </DockPanel>
+
+        <!-- KPIs: tambien son el filtro por estado -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,16">
+            <Button Style="{StaticResource KpiCard}"
+                    Command="{Binding FilterByStatusCommand}" CommandParameter=""
+                    Background="{Binding StatusFilter, Converter={StaticResource FondoKpi}}"
+                    BorderBrush="{Binding StatusFilter, Converter={StaticResource BordeKpi}}">
+                <StackPanel>
+                    <TextBlock Text="{Binding TotalCount}" Style="{StaticResource KpiNumero}" />
+                    <TextBlock Text="Todos" Style="{StaticResource Caption}" />
+                </StackPanel>
+            </Button>
+
+            <Button Style="{StaticResource KpiCard}"
+                    Command="{Binding FilterByStatusCommand}" CommandParameter="ONLINE"
+                    Background="{Binding StatusFilter, Converter={StaticResource FondoKpi}, ConverterParameter=ONLINE}"
+                    BorderBrush="{Binding StatusFilter, Converter={StaticResource BordeKpi}, ConverterParameter=ONLINE}">
+                <StackPanel>
+                    <TextBlock Text="{Binding OnlineCount}" Style="{StaticResource KpiNumero}"
+                               Foreground="{StaticResource Online}" />
+                    <TextBlock Text="Online" Style="{StaticResource Caption}" />
+                </StackPanel>
+            </Button>
+
+            <Button Style="{StaticResource KpiCard}"
+                    Command="{Binding FilterByStatusCommand}" CommandParameter="UNREACHABLE"
+                    Background="{Binding StatusFilter, Converter={StaticResource FondoKpi}, ConverterParameter=UNREACHABLE}"
+                    BorderBrush="{Binding StatusFilter, Converter={StaticResource BordeKpi}, ConverterParameter=UNREACHABLE}">
+                <StackPanel>
+                    <TextBlock Text="{Binding UnreachableCount}" Style="{StaticResource KpiNumero}"
+                               Foreground="{StaticResource Warn}" />
+                    <TextBlock Text="Sin respuesta" Style="{StaticResource Caption}" />
+                </StackPanel>
+            </Button>
+
+            <Button Style="{StaticResource KpiCard}"
+                    Command="{Binding FilterByStatusCommand}" CommandParameter="OFFLINE"
+                    Background="{Binding StatusFilter, Converter={StaticResource FondoKpi}, ConverterParameter=OFFLINE}"
+                    BorderBrush="{Binding StatusFilter, Converter={StaticResource BordeKpi}, ConverterParameter=OFFLINE}">
+                <StackPanel>
+                    <TextBlock Text="{Binding OfflineCount}" Style="{StaticResource KpiNumero}"
+                               Foreground="{StaticResource Offline}" />
+                    <TextBlock Text="Offline" Style="{StaticResource Caption}" />
+                </StackPanel>
+            </Button>
+
+            <Button Style="{StaticResource KpiCard}"
+                    Command="{Binding FilterByStatusCommand}" CommandParameter="CONFLICT"
+                    Background="{Binding StatusFilter, Converter={StaticResource FondoKpi}, ConverterParameter=CONFLICT}"
+                    BorderBrush="{Binding StatusFilter, Converter={StaticResource BordeKpi}, ConverterParameter=CONFLICT}">
+                <StackPanel>
+                    <TextBlock Text="{Binding ConflictCount}" Style="{StaticResource KpiNumero}"
+                               Foreground="{StaticResource Danger}" />
+                    <TextBlock Text="Conflicto" Style="{StaticResource Caption}" />
+                </StackPanel>
+            </Button>
+        </StackPanel>
+
+        <!-- Listado -->
+        <Border Grid.Row="2" Style="{StaticResource CardPanel}" Padding="0" ClipToBounds="True">
+            <Grid>
+                <TextBlock Style="{StaticResource Caption}" Margin="0,40,0,0"
+                           HorizontalAlignment="Center" VerticalAlignment="Top" TextAlignment="Center"
+                           Visibility="{Binding TotalCount, Converter={StaticResource BoolToVis}, ConverterParameter=invert}"
+                           Text="Ningun equipo registrado todavia.&#x0a;Genera un codigo de enrolamiento e instala el agente en una PC." />
+
+                <DataGrid ItemsSource="{Binding MachinesView}"
+                          SelectedItem="{Binding SelectedMachine}">
+                    <DataGrid.Columns>
+                        <DataGridTemplateColumn Header="Estado" Width="128">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <Border BorderBrush="{Binding Status, Converter={StaticResource StatusBrush}}"
+                                            BorderThickness="1" CornerRadius="10" Padding="8,3"
+                                            HorizontalAlignment="Left">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Ellipse Width="7" Height="7" Margin="0,0,6,0"
+                                                     Fill="{Binding Status, Converter={StaticResource StatusBrush}}" />
+                                            <TextBlock Text="{Binding StatusText}" FontSize="10" FontWeight="SemiBold"
+                                                       Foreground="{Binding Status, Converter={StaticResource StatusBrush}}" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+
+                        <!-- Codigo y hostname en dos lineas: ahorra una columna entera -->
+                        <DataGridTemplateColumn Header="Equipo" Width="270">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding MachineCode}" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding Hostname}" Style="{StaticResource Caption}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+
+                        <DataGridTextColumn Header="IP" Binding="{Binding CurrentIp}" Width="130" />
+                        <DataGridTextColumn Header="Usuario" Binding="{Binding LoggedUser}" Width="160" />
+                        <DataGridTextColumn Header="CPU" Binding="{Binding Cpu}" Width="70" />
+                        <DataGridTextColumn Header="RAM" Binding="{Binding Memory}" Width="70" />
+                        <DataGridTextColumn Header="Ultimo visto" Binding="{Binding LastSeenAgo}" Width="110" />
+
+                        <DataGridTemplateColumn Header="" Width="36">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="&#x26A0;" FontSize="14" Foreground="{StaticResource Danger}"
+                                               ToolTip="Conflicto de identidad"
+                                               Visibility="{Binding HasConflict, Converter={StaticResource BoolToVis}}" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+
+                        <!-- Relleno: sin el, "*" se lo lleva la columna del nombre y
+                             los datos quedan desperdigados en pantallas anchas. -->
+                        <DataGridTemplateColumn Width="*" CanUserSort="False" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

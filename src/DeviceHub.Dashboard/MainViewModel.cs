@@ -6,6 +6,7 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using DeviceHub.Contracts;
+using DeviceHub.Dashboard.Views;
 
 namespace DeviceHub.Dashboard;
 
@@ -29,6 +30,11 @@ public sealed partial class MainViewModel : ObservableObject
         {
             foreach (var machine in Machines)
                 machine.RefreshDerived();
+
+            // Los contadores se recalculan en el mismo tick y no al recibir
+            // mensajes: el estado se deriva de last_seen, asi que una PC pasa a
+            // OFFLINE sin que llegue nada.
+            RefreshCounts();
         };
         _clock.Start();
     }
@@ -56,11 +62,88 @@ public sealed partial class MainViewModel : ObservableObject
 
     public bool IsAdministrator => _client.IsAdministrator;
 
+    // ================= Navegacion =================
+
+    /// <summary>Pagina activa del menu lateral: "machines" o "audit".</summary>
+    [ObservableProperty] private string _page = "machines";
+
+    /// <summary>Filtro por estado que activan las tarjetas de KPI. Vacio = todos.</summary>
+    [ObservableProperty] private string _statusFilter = string.Empty;
+
+    // Al seleccionar una maquina se entra en su ficha a pantalla completa: en un
+    // panel lateral de 420 px las pestanas no caben y todo compite por el espacio.
+    public bool ShowList => Page == "machines" && SelectedMachine is null;
+    public bool ShowDetail => Page == "machines" && SelectedMachine is not null;
+    public bool ShowAudit => Page == "audit";
+
+    public int TotalCount => Machines.Count;
+    public int OnlineCount => Machines.Count(m => m.Status == MachineStatus.Online);
+    public int UnreachableCount => Machines.Count(m => m.Status == MachineStatus.Unreachable);
+    public int OfflineCount => Machines.Count(m => m.Status == MachineStatus.Offline);
+    public int ConflictCount => Machines.Count(m => m.HasConflict);
+
+    /// <summary>Indicador de la barra superior.</summary>
+    public bool ServerOk => IsLoggedIn && string.IsNullOrEmpty(StatusMessage);
+
+    private void RefreshCounts()
+    {
+        OnPropertyChanged(nameof(TotalCount));
+        OnPropertyChanged(nameof(OnlineCount));
+        OnPropertyChanged(nameof(UnreachableCount));
+        OnPropertyChanged(nameof(OfflineCount));
+        OnPropertyChanged(nameof(ConflictCount));
+    }
+
+    /// <summary>El historial se deriva de Detail: cuando llega otro, se repinta.</summary>
+    partial void OnDetailChanged(MachineDetail? value)
+    {
+        OnPropertyChanged(nameof(IpHistoryFiltered));
+        OnPropertyChanged(nameof(PlacementHistoryFiltered));
+    }
+
+    private void RefreshPages()
+    {
+        OnPropertyChanged(nameof(ShowList));
+        OnPropertyChanged(nameof(ShowDetail));
+        OnPropertyChanged(nameof(ShowAudit));
+    }
+
+    partial void OnPageChanged(string value)
+    {
+        RefreshPages();
+
+        if (value == "audit")
+            _ = RefreshGlobalAuditAsync();
+    }
+
+    partial void OnStatusMessageChanged(string value) => OnPropertyChanged(nameof(ServerOk));
+
+    partial void OnIsLoggedInChanged(bool value) => OnPropertyChanged(nameof(ServerOk));
+
+    /// <summary>Vuelve de la ficha de un equipo al listado.</summary>
+    [RelayCommand]
+    private void BackToList() => SelectedMachine = null;
+
+    [RelayCommand]
+    private void Navigate(string pagina) => Page = pagina;
+
+    /// <summary>
+    /// Las tarjetas de KPI SON el filtro por estado: pulsar "Offline" deja solo
+    /// las offline y volver a pulsarla las devuelve todas. No hacen falta cuatro
+    /// ComboBox que preguntan lo que ya contesta la barra de busqueda.
+    /// </summary>
+    [RelayCommand]
+    private void FilterByStatus(string estado)
+        => StatusFilter = StatusFilter == estado ? string.Empty : estado;
+
+    partial void OnStatusFilterChanged(string value) => MachinesView.Refresh();
+
     partial void OnFilterChanged(string value) => MachinesView.Refresh();
 
     partial void OnSelectedMachineChanged(MachineViewModel? value)
     {
         Detail = null;
+        RefreshPages();
 
         if (value is null)
             return;
@@ -131,6 +214,8 @@ public sealed partial class MainViewModel : ObservableObject
                         if (SelectedMachine?.MachineId == summary.MachineId)
                             _ = LoadDetailAsync(summary.MachineId);
                     }
+
+                    RefreshCounts();
                 }
             }
             catch (OperationCanceledException)
@@ -183,6 +268,27 @@ public sealed partial class MainViewModel : ObservableObject
         {
             StatusMessage = Describe(ex);
         }
+    }
+
+    /// <summary>
+    /// Renombrar / mover en un dialogo. Antes eran seis TextBox siempre visibles
+    /// en el panel de detalle: ocupaban mas que los datos del equipo para algo
+    /// que se hace una vez en la vida de la PC.
+    /// </summary>
+    [RelayCommand]
+    private async Task EditMachineAsync()
+    {
+        if (SelectedMachine is null)
+            return;
+
+        var dialogo = new EditMachineWindow
+        {
+            DataContext = this,
+            Owner = Application.Current?.MainWindow
+        };
+
+        if (dialogo.ShowDialog() == true)
+            await MoveMachineAsync();
     }
 
     /// <summary>Renombrar y mover: machineId intacto, historial conservado.</summary>
@@ -250,7 +356,20 @@ public sealed partial class MainViewModel : ObservableObject
 
     private bool MatchesFilter(object item)
     {
-        if (string.IsNullOrWhiteSpace(Filter) || item is not MachineViewModel machine)
+        if (item is not MachineViewModel machine)
+            return true;
+
+        if (StatusFilter.Length > 0)
+        {
+            var coincide = StatusFilter == "CONFLICT"
+                ? machine.HasConflict
+                : machine.StatusText == StatusFilter;
+
+            if (!coincide)
+                return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(Filter))
             return true;
 
         var needle = Filter.Trim();

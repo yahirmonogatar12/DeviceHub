@@ -7,9 +7,11 @@ namespace DeviceHub.Dashboard;
 
 public sealed class StatusToBrushConverter : IValueConverter
 {
-    private static readonly SolidColorBrush Online = new(Color.FromRgb(0x1F, 0xA5, 0x4F));
-    private static readonly SolidColorBrush Unreachable = new(Color.FromRgb(0xE0, 0x9B, 0x13));
-    private static readonly SolidColorBrush Offline = new(Color.FromRgb(0x8A, 0x8A, 0x8A));
+    // Mismos tonos que Styles/Theme.xaml: el color de estado aparece en la lista
+    // (converter) y en las tarjetas de KPI (XAML), y tienen que coincidir.
+    private static readonly SolidColorBrush Online = new(Color.FromRgb(0x12, 0xB7, 0x6A));
+    private static readonly SolidColorBrush Unreachable = new(Color.FromRgb(0xF7, 0x90, 0x09));
+    private static readonly SolidColorBrush Offline = new(Color.FromRgb(0x98, 0xA2, 0xB3));
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value switch
     {
@@ -37,6 +39,33 @@ public sealed class BytesToSizeConverter : IValueConverter
             ? $"{bytes / 1_000_000_000_000d:0.#} TB"
             : $"{bytes / 1_000_000_000d:0.#} GB";
     }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}
+
+/// <summary>
+/// Pinta lo seleccionado: devuelve <see cref="Igual"/> cuando el valor coincide
+/// con el parametro y <see cref="Distinto"/> cuando no.
+///
+/// Existe porque un Style compartido no puede comparar contra un valor distinto
+/// por instancia. La primera version usaba RadioButton con IsChecked enlazado en
+/// dos sentidos y salio mal: el control escribe de vuelta al enlace tanto al
+/// marcarse como al desmarcarse, y el menu lateral saltaba solo entre Equipos y
+/// Auditoria varias veces por segundo. Asi el resaltado se calcula en un solo
+/// sentido y no queda estado que se pueda desincronizar.
+/// </summary>
+public sealed class MatchBrushConverter : IValueConverter
+{
+    public Brush? Igual { get; set; }
+    public Brush? Distinto { get; set; }
+
+    /// <summary>Sin parametro equivale a cadena vacia: en XAML no hay forma
+    /// directa de escribir ConverterParameter="" (queda como null).</summary>
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => string.Equals(value as string ?? string.Empty, parameter as string ?? string.Empty, StringComparison.Ordinal)
+            ? Igual
+            : Distinto;
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
         => throw new NotSupportedException();

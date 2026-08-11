@@ -1,36 +1,15 @@
 <Window x:Class="DeviceHub.Dashboard.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:local="clr-namespace:DeviceHub.Dashboard"
-        Title="ILSAN DeviceHub" Height="740" Width="1320"
+        xmlns:views="clr-namespace:DeviceHub.Dashboard.Views"
+        Title="ILSAN DeviceHub" Height="800" Width="1400" MinWidth="1100" MinHeight="640"
+        Background="{StaticResource Bg}"
+        Foreground="{StaticResource Ink}"
         WindowStartupLocation="CenterScreen">
 
-    <Window.Resources>
-        <local:StatusToBrushConverter x:Key="StatusBrush" />
-        <local:BooleanToVisibilityConverter x:Key="BoolToVis" />
-        <local:BytesToSizeConverter x:Key="Bytes" />
-    </Window.Resources>
-
     <Grid>
-        <!-- ================= Login ================= -->
-        <Border Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVis}, ConverterParameter=invert}"
-                Background="#F4F5F7">
-            <StackPanel Width="320" VerticalAlignment="Center" HorizontalAlignment="Center">
-                <TextBlock Text="ILSAN DeviceHub" FontSize="24" FontWeight="SemiBold" Margin="0,0,0,18" />
-                <Label Content="Usuario" />
-                <TextBox Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}" Padding="6" />
-                <Label Content="Password" Margin="0,10,0,0" />
-                <PasswordBox x:Name="PasswordInput" Padding="6" />
-                <Button Content="Entrar" Margin="0,18,0,0" Padding="8"
-                        IsDefault="True"
-                        Command="{Binding LoginCommand}"
-                        CommandParameter="{Binding ElementName=PasswordInput}"
-                        IsEnabled="{Binding IsBusy, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
-                <TextBlock Text="{Binding StatusMessage}" Foreground="#C0392B" TextWrapping="Wrap" Margin="0,12,0,0" />
-            </StackPanel>
-        </Border>
+        <views:LoginView Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
 
-        <!-- ================= Dashboard ================= -->
         <Grid Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVis}}">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
@@ -38,339 +17,71 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <!-- Barra superior -->
-            <DockPanel Grid.Row="0" Margin="10,8" LastChildFill="False">
-                <TextBlock Text="Equipos" FontSize="18" FontWeight="SemiBold" Margin="0,0,16,0" />
-                <TextBox Width="260" Padding="5" VerticalContentAlignment="Center"
-                         Text="{Binding Filter, UpdateSourceTrigger=PropertyChanged}"
-                         ToolTip="Filtra por codigo, hostname, IP, area, linea o estado" />
-                <Button DockPanel.Dock="Right" Content="Generar codigo de enrolamiento" Padding="10,5"
-                        Command="{Binding CreateEnrollmentCodeCommand}"
-                        Visibility="{Binding IsAdministrator, Converter={StaticResource BoolToVis}}" />
-                <TextBlock DockPanel.Dock="Right" Text="{Binding SessionLabel}" Margin="0,0,14,0" Foreground="#666" />
-            </DockPanel>
+            <!-- ================= Barra superior ================= -->
+            <Border Grid.Row="0" Background="{StaticResource Card}" Height="58"
+                    BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
+                <DockPanel LastChildFill="False" Margin="16,0">
+                    <Border Width="30" Height="30" CornerRadius="8" Background="{StaticResource Brand}"
+                            VerticalAlignment="Center">
+                        <TextBlock Text="&#x25C8;" FontSize="15" Foreground="White"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock Text="DeviceHub" Style="{StaticResource H2}" Margin="10,0,26,0" />
+
+                    <TextBox Width="300" VerticalAlignment="Center"
+                             Tag="Buscar equipo, IP, area o linea..."
+                             Text="{Binding Filter, UpdateSourceTrigger=PropertyChanged}"
+                             ToolTip="Filtra por codigo, hostname, IP, area, linea o estado" />
+
+                    <!-- Usuario y estado del servidor a la derecha -->
+                    <TextBlock DockPanel.Dock="Right" Text="{Binding SessionLabel}"
+                               Style="{StaticResource Caption}" Margin="16,0,0,0" />
+
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Ellipse Width="8" Height="8" Margin="0,0,6,0" Fill="{StaticResource Online}"
+                                 Visibility="{Binding ServerOk, Converter={StaticResource BoolToVis}}" />
+                        <Ellipse Width="8" Height="8" Margin="0,0,6,0" Fill="{StaticResource Danger}"
+                                 Visibility="{Binding ServerOk, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
+                        <TextBlock Text="Servidor" Style="{StaticResource Caption}" />
+                    </StackPanel>
+                </DockPanel>
+            </Border>
 
             <Grid Grid.Row="1">
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="204" />
                     <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="420" />
                 </Grid.ColumnDefinitions>
 
-                <!-- Lista de maquinas -->
-                <DataGrid Grid.Column="0" Margin="10,0,6,10"
-                          ItemsSource="{Binding MachinesView}"
-                          SelectedItem="{Binding SelectedMachine}"
-                          AutoGenerateColumns="False" IsReadOnly="True"
-                          HeadersVisibility="Column" GridLinesVisibility="Horizontal"
-                          RowHeaderWidth="0" SelectionMode="Single">
-                    <DataGrid.Columns>
-                        <DataGridTemplateColumn Header="Estado" Width="120">
-                            <DataGridTemplateColumn.CellTemplate>
-                                <DataTemplate>
-                                    <StackPanel Orientation="Horizontal">
-                                        <Ellipse Width="10" Height="10" Margin="0,0,7,0"
-                                                 Fill="{Binding Status, Converter={StaticResource StatusBrush}}" />
-                                        <TextBlock Text="{Binding StatusText}" FontSize="11" />
-                                    </StackPanel>
-                                </DataTemplate>
-                            </DataGridTemplateColumn.CellTemplate>
-                        </DataGridTemplateColumn>
-                        <DataGridTextColumn Header="Codigo" Binding="{Binding MachineCode}" Width="150" />
-                        <DataGridTextColumn Header="Hostname" Binding="{Binding Hostname}" Width="140" />
-                        <DataGridTextColumn Header="IP" Binding="{Binding CurrentIp}" Width="120" />
-                        <DataGridTextColumn Header="MAC" Binding="{Binding PrimaryMac}" Width="140" />
-                        <DataGridTextColumn Header="Usuario" Binding="{Binding LoggedUser}" Width="150" />
-                        <DataGridTextColumn Header="CPU" Binding="{Binding Cpu}" Width="60" />
-                        <DataGridTextColumn Header="RAM" Binding="{Binding Memory}" Width="60" />
-                        <DataGridTextColumn Header="Disco libre" Binding="{Binding DiskFree}" Width="80" />
-                        <DataGridTextColumn Header="Uptime" Binding="{Binding Uptime}" Width="80" />
-                        <DataGridTextColumn Header="Agente" Binding="{Binding AgentVersion}" Width="70" />
-                        <DataGridTextColumn Header="Visto" Binding="{Binding LastSeenAgo}" Width="100" />
-                        <DataGridTemplateColumn Header="" Width="30">
-                            <DataGridTemplateColumn.CellTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="!" FontWeight="Bold" Foreground="#C0392B"
-                                               ToolTip="Conflicto de identidad"
-                                               Visibility="{Binding HasConflict, Converter={StaticResource BoolToVis}}" />
-                                </DataTemplate>
-                            </DataGridTemplateColumn.CellTemplate>
-                        </DataGridTemplateColumn>
-                    </DataGrid.Columns>
-                </DataGrid>
-
-                <!-- Detalle -->
-                <Border Grid.Column="1" Margin="0,0,10,10" BorderBrush="#DDD" BorderThickness="1" Padding="12">
-                  <Grid>
-                    <!-- Sin equipo seleccionado NO se pinta el panel.
-                         Antes se mostraba entero, incluida la alarma de conflicto
-                         de identidad, porque con SelectedMachine en null los
-                         bindings fallan, y un binding fallido no llama al converter:
-                         Visibility se queda en su valor por defecto, que es Visible. -->
-                    <TextBlock Text="Selecciona un equipo de la lista"
-                               Foreground="#999" HorizontalAlignment="Center" VerticalAlignment="Center"
-                               Visibility="{Binding SelectedMachine, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
-
-                    <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                  Visibility="{Binding SelectedMachine, Converter={StaticResource BoolToVis}}"
-                                  DataContext="{Binding SelectedMachine}">
-                        <StackPanel>
-                            <TextBlock Text="{Binding MachineCode}" FontSize="16" FontWeight="SemiBold" />
-                            <TextBlock Text="{Binding MachineId}" FontSize="10" Foreground="#999"
-                                       TextWrapping="Wrap" Margin="0,2,0,10" />
-
-                            <Border Background="#FDECEA" Padding="8" Margin="0,0,0,10"
-                                    Visibility="{Binding HasConflict, Converter={StaticResource BoolToVis}}">
-                                <StackPanel>
-                                    <TextBlock Text="CONFLICTO DE IDENTIDAD" FontWeight="Bold" Foreground="#C0392B" />
-                                    <TextBlock TextWrapping="Wrap" FontSize="11" Margin="0,4,0,8"
-                                               Text="Otro agente reclama este machineId, o el hardware cambio. Lo resuelve un administrador." />
-                                    <StackPanel Orientation="Horizontal"
-                                                DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
-                                        <Button Content="Aprobar hardware nuevo" Padding="6,3" Margin="0,0,6,0"
-                                                Command="{Binding ApproveHardwareCommand}" />
-                                        <Button Content="Emitir identidad nueva" Padding="6,3"
-                                                Command="{Binding IssueNewIdentityCommand}" />
-                                    </StackPanel>
-                                </StackPanel>
-                            </Border>
-
-                            <Label Content="Ultimo visto (hora local)" />
-                            <TextBlock Text="{Binding LastSeenLocal}" />
-                            <Label Content="Sitio / area / linea / estacion" />
-                            <TextBlock>
-                                <Run Text="{Binding SiteCode, Mode=OneWay}" />
-                                <Run Text=" / " /><Run Text="{Binding Area, Mode=OneWay}" />
-                                <Run Text=" / " /><Run Text="{Binding Line, Mode=OneWay}" />
-                                <Run Text=" / " /><Run Text="{Binding Station, Mode=OneWay}" />
-                            </TextBlock>
-
-                            <!-- Renombrar / mover -->
-                            <StackPanel DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}"
-                                        Visibility="{Binding IsAdministrator, Converter={StaticResource BoolToVis}}"
-                                        Margin="0,14,0,0">
-                                <TextBlock Text="Renombrar / mover" FontWeight="SemiBold" Margin="0,0,0,4" />
-                                <TextBlock FontSize="10" Foreground="#888" TextWrapping="Wrap" Margin="0,0,0,6"
-                                           Text="El machineId no cambia y el historial se conserva. El agente adopta el nombre solo." />
-                                <Label Content="Sitio" />
-                                <TextBox Text="{Binding EditSiteCode}" Padding="4" />
-                                <Label Content="Codigo" />
-                                <TextBox Text="{Binding EditMachineCode}" Padding="4" />
-                                <Label Content="Nombre visible" />
-                                <TextBox Text="{Binding EditDisplayName}" Padding="4" />
-                                <Grid Margin="0,6,0,0">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" Margin="0,0,4,0">
-                                        <Label Content="Area" />
-                                        <TextBox Text="{Binding EditArea}" Padding="4" />
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="1" Margin="2,0">
-                                        <Label Content="Linea" />
-                                        <TextBox Text="{Binding EditLine}" Padding="4" />
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="2" Margin="4,0,0,0">
-                                        <Label Content="Estacion" />
-                                        <TextBox Text="{Binding EditStation}" Padding="4" />
-                                    </StackPanel>
-                                </Grid>
-                                <Button Content="Guardar" Padding="8,4" Margin="0,10,0,0" HorizontalAlignment="Left"
-                                        Command="{Binding MoveMachineCommand}" />
-                            </StackPanel>
-
-                            <!-- Inventario de hardware (Fase 5) -->
-                            <StackPanel DataContext="{Binding DataContext.Detail, RelativeSource={RelativeSource AncestorType=Window}}">
-                                <StackPanel Visibility="{Binding Hardware, Converter={StaticResource BoolToVis}}">
-                                    <TextBlock Text="Hardware" FontWeight="SemiBold" Margin="0,18,0,4" />
-                                    <Grid DataContext="{Binding Hardware}">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition /><RowDefinition /><RowDefinition />
-                                            <RowDefinition /><RowDefinition /><RowDefinition />
-                                        </Grid.RowDefinitions>
-
-                                        <Label Grid.Row="0" Grid.Column="0" Content="CPU" />
-                                        <TextBlock Grid.Row="0" Grid.Column="1" TextWrapping="Wrap" FontSize="11">
-                                            <Run Text="{Binding CpuModel, Mode=OneWay}" />
-                                            <Run Text=" (" /><Run Text="{Binding CpuCores, Mode=OneWay}" />
-                                            <Run Text="c /" /><Run Text="{Binding CpuThreads, Mode=OneWay}" /><Run Text="t)" />
-                                        </TextBlock>
-
-                                        <Label Grid.Row="1" Grid.Column="0" Content="RAM" />
-                                        <TextBlock Grid.Row="1" Grid.Column="1" FontSize="11"
-                                                   Text="{Binding TotalMemoryBytes, Converter={StaticResource Bytes}}" />
-
-                                        <Label Grid.Row="2" Grid.Column="0" Content="GPU" />
-                                        <TextBlock Grid.Row="2" Grid.Column="1" FontSize="11" TextWrapping="Wrap"
-                                                   Text="{Binding GpuModel}" />
-
-                                        <Label Grid.Row="3" Grid.Column="0" Content="Placa" />
-                                        <TextBlock Grid.Row="3" Grid.Column="1" FontSize="11" TextWrapping="Wrap"
-                                                   Text="{Binding Motherboard}" />
-
-                                        <Label Grid.Row="4" Grid.Column="0" Content="BIOS" />
-                                        <TextBlock Grid.Row="4" Grid.Column="1" FontSize="11" TextWrapping="Wrap">
-                                            <Run Text="{Binding BiosVersion, Mode=OneWay}" />
-                                            <Run Text="  S/N " Foreground="#888" />
-                                            <Run Text="{Binding BiosSerial, Mode=OneWay}" />
-                                        </TextBlock>
-
-                                        <Label Grid.Row="5" Grid.Column="0" Content="Windows" />
-                                        <TextBlock Grid.Row="5" Grid.Column="1" FontSize="11" TextWrapping="Wrap">
-                                            <Run Text="{Binding OsCaption, Mode=OneWay}" />
-                                            <Run Text=" build " Foreground="#888" />
-                                            <Run Text="{Binding OsBuild, Mode=OneWay}" />
-                                        </TextBlock>
-                                    </Grid>
-
-                                    <ItemsControl ItemsSource="{Binding Hardware.Disks}" Margin="0,6,0,0">
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate>
-                                                <TextBlock FontSize="11" TextWrapping="Wrap">
-                                                    <Run Text="Disco  " Foreground="#888" />
-                                                    <Run Text="{Binding Model, Mode=OneWay}" />
-                                                    <Run Text="  " />
-                                                    <Run Text="{Binding SizeBytes, Mode=OneWay, Converter={StaticResource Bytes}}" />
-                                                </TextBlock>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                </StackPanel>
-                            </StackPanel>
-
-                            <!-- Administracion (Fases 7-9) -->
-                            <StackPanel DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}"
-                                        Margin="0,18,0,0">
-                                <TextBlock Text="Administrar" FontWeight="SemiBold" Margin="0,0,0,6" />
-
-                                <!-- El ID del motor remoto NO se muestra: al tecnico le basta el boton. -->
-                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6"
-                                            Visibility="{Binding SelectedMachine.RemoteAvailable, Converter={StaticResource BoolToVis}}">
-                                    <Button Content="CONTROLAR PC" Padding="12,5" FontWeight="SemiBold"
-                                            Command="{Binding RemoteControlCommand}" />
-                                    <Button Content="Cerrar sesion" Padding="8,5" Margin="6,0,0,0"
-                                            Command="{Binding EndRemoteSessionCommand}" />
-                                </StackPanel>
-
-                                <WrapPanel>
-                                    <Button Content="Ping" Padding="8,3" Margin="0,0,4,4" Command="{Binding PingCommand}" />
-                                    <Button Content="Procesos" Padding="8,3" Margin="0,0,4,4" Command="{Binding RefreshProcessesCommand}" />
-                                    <Button Content="Servicios" Padding="8,3" Margin="0,0,4,4" Command="{Binding RefreshServicesCommand}" />
-                                    <Button Content="Auditoria" Padding="8,3" Margin="0,0,4,4" Command="{Binding RefreshAuditCommand}" />
-                                    <Button Content="Reiniciar PC" Padding="8,3" Margin="0,0,4,4" Command="{Binding RestartMachineCommand}" />
-                                    <Button Content="Apagar" Padding="8,3" Margin="0,0,4,4" Foreground="#C0392B"
-                                            Command="{Binding ShutdownMachineCommand}" />
-                                </WrapPanel>
-
-                                <TextBlock Text="{Binding CommandFeedback}" FontSize="11" Foreground="#555"
-                                           TextWrapping="Wrap" Margin="0,4,0,0" />
-
-                                <!-- Procesos -->
-                                <StackPanel Visibility="{Binding Processes.Count, Converter={StaticResource BoolToVis}}">
-                                    <DataGrid ItemsSource="{Binding Processes}" SelectedItem="{Binding SelectedProcess}"
-                                              AutoGenerateColumns="False" IsReadOnly="True" MaxHeight="220"
-                                              HeadersVisibility="Column" RowHeaderWidth="0" FontSize="11" Margin="0,8,0,0">
-                                        <DataGrid.Columns>
-                                            <DataGridTextColumn Header="Proceso" Binding="{Binding Name}" Width="*" />
-                                            <DataGridTextColumn Header="PID" Binding="{Binding Pid}" Width="55" />
-                                            <DataGridTextColumn Header="CPU" Binding="{Binding Cpu}" Width="55" />
-                                            <DataGridTextColumn Header="RAM" Binding="{Binding Memory}" Width="70" />
-                                        </DataGrid.Columns>
-                                    </DataGrid>
-                                    <Button Content="Matar proceso" Padding="8,3" Margin="0,4,0,0" HorizontalAlignment="Left"
-                                            Foreground="#C0392B" Command="{Binding KillProcessCommand}" />
-                                </StackPanel>
-
-                                <!-- Auditoria: quien hizo que sobre esta maquina -->
-                                <ItemsControl ItemsSource="{Binding Audit}" Margin="0,8,0,0"
-                                              Visibility="{Binding Audit.Count, Converter={StaticResource BoolToVis}}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <TextBlock FontFamily="Consolas" FontSize="10" TextWrapping="Wrap" Margin="0,1">
-                                                <Run Text="{Binding When, Mode=OneWay}" Foreground="#888" />
-                                                <Run Text="  " />
-                                                <Run Text="{Binding Action, Mode=OneWay}" FontWeight="Bold" />
-                                                <Run Text="  " />
-                                                <Run Text="{Binding Who, Mode=OneWay}" />
-                                                <Run Text="  " />
-                                                <Run Text="{Binding Details, Mode=OneWay}" Foreground="#888" />
-                                            </TextBlock>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-
-                                <!-- Servicios -->
-                                <StackPanel Visibility="{Binding Services.Count, Converter={StaticResource BoolToVis}}">
-                                    <DataGrid ItemsSource="{Binding Services}" SelectedItem="{Binding SelectedService}"
-                                              AutoGenerateColumns="False" IsReadOnly="True" MaxHeight="220"
-                                              HeadersVisibility="Column" RowHeaderWidth="0" FontSize="11" Margin="0,8,0,0">
-                                        <DataGrid.Columns>
-                                            <DataGridTextColumn Header="Servicio" Binding="{Binding DisplayName}" Width="*" />
-                                            <DataGridTextColumn Header="Estado" Binding="{Binding Status}" Width="75" />
-                                            <DataGridTextColumn Header="Inicio" Binding="{Binding StartType}" Width="70" />
-                                        </DataGrid.Columns>
-                                    </DataGrid>
-                                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                        <Button Content="Start" Padding="8,3" Margin="0,0,4,0"
-                                                Command="{Binding ServiceActionCommand}" CommandParameter="start" />
-                                        <Button Content="Stop" Padding="8,3" Margin="0,0,4,0"
-                                                Command="{Binding ServiceActionCommand}" CommandParameter="stop" />
-                                        <Button Content="Restart" Padding="8,3"
-                                                Command="{Binding ServiceActionCommand}" CommandParameter="restart" />
-                                    </StackPanel>
-                                </StackPanel>
-                            </StackPanel>
-
-                            <!-- Historiales -->
-                            <StackPanel DataContext="{Binding DataContext.Detail, RelativeSource={RelativeSource AncestorType=Window}}">
-                                <TextBlock Text="Historial de IP" FontWeight="SemiBold" Margin="0,18,0,4" />
-                                <ItemsControl ItemsSource="{Binding IpHistory}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <TextBlock FontFamily="Consolas" FontSize="11" Margin="0,1">
-                                                <Run Text="{Binding Ip, Mode=OneWay}" />
-                                                <Run Text="  " />
-                                                <Run Text="{Binding ValidFrom, Mode=OneWay}" Foreground="#888" />
-                                                <Run Text=" -> " Foreground="#888" />
-                                                <Run Text="{Binding ValidTo, Mode=OneWay}" Foreground="#888" />
-                                            </TextBlock>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-
-                                <TextBlock Text="Historial de ubicacion" FontWeight="SemiBold" Margin="0,16,0,4" />
-                                <ItemsControl ItemsSource="{Binding PlacementHistory}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <TextBlock FontFamily="Consolas" FontSize="11" Margin="0,1" TextWrapping="Wrap">
-                                                <Run Text="{Binding MachineCode, Mode=OneWay}" />
-                                                <Run Text=" @ " Foreground="#888" />
-                                                <Run Text="{Binding Area, Mode=OneWay}" />
-                                                <Run Text="/" /><Run Text="{Binding Line, Mode=OneWay}" />
-                                                <Run Text="/" /><Run Text="{Binding Station, Mode=OneWay}" />
-                                                <Run Text="  " />
-                                                <Run Text="{Binding ValidFrom, Mode=OneWay}" Foreground="#888" />
-                                            </TextBlock>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </StackPanel>
-                        </StackPanel>
-                    </ScrollViewer>
-                  </Grid>
+                <!-- ================= Menu lateral ================= -->
+                <Border Grid.Column="0" Background="{StaticResource Navy}">
+                    <StackPanel Margin="0,14,0,0">
+                        <Button Style="{StaticResource NavItem}" Content="Equipos"
+                                Command="{Binding NavigateCommand}" CommandParameter="machines"
+                                Background="{Binding Page, Converter={StaticResource FondoNav}, ConverterParameter=machines}"
+                                Foreground="{Binding Page, Converter={StaticResource TextoNav}, ConverterParameter=machines}" />
+                        <Button Style="{StaticResource NavItem}" Content="Auditoria"
+                                Command="{Binding NavigateCommand}" CommandParameter="audit"
+                                Background="{Binding Page, Converter={StaticResource FondoNav}, ConverterParameter=audit}"
+                                Foreground="{Binding Page, Converter={StaticResource TextoNav}, ConverterParameter=audit}" />
+                    </StackPanel>
                 </Border>
+
+                <!-- ================= Contenido ================= -->
+                <Grid Grid.Column="1">
+                    <views:MachinesView Visibility="{Binding ShowList, Converter={StaticResource BoolToVis}}" />
+                    <views:MachineDetailView Visibility="{Binding ShowDetail, Converter={StaticResource BoolToVis}}" />
+                    <views:AuditView Visibility="{Binding ShowAudit, Converter={StaticResource BoolToVis}}" />
+                </Grid>
             </Grid>
 
-            <StatusBar Grid.Row="2">
-                <StatusBarItem>
-                    <TextBlock Text="{Binding StatusMessage}" Foreground="#C0392B" />
-                </StatusBarItem>
-            </StatusBar>
+            <!-- Solo aparece cuando hay algo que decir. -->
+            <Border Grid.Row="2" Background="{StaticResource DangerSoft}" Padding="16,8"
+                    BorderBrush="#FDA29B" BorderThickness="0,1,0,0"
+                    Visibility="{Binding StatusMessage, Converter={StaticResource BoolToVis}}">
+                <TextBlock Text="{Binding StatusMessage}" Foreground="{StaticResource Danger}"
+                           FontSize="12" TextWrapping="Wrap" />
+            </Border>
         </Grid>
     </Grid>
 </Window>

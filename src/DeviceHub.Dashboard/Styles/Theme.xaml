@@ -1,0 +1,552 @@
+<!--
+    Sistema visual de ILSAN DeviceHub.
+
+    Un solo diccionario en vez de Colors/Buttons/DataGrid/Typography por separado:
+    son 300 lineas en total y partirlas en cuatro archivos obliga a saltar entre
+    ellos para cambiar un color. Cuando alguno crezca de verdad, ahi se parte.
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:local="clr-namespace:DeviceHub.Dashboard">
+
+    <!-- ================= Converters =================
+         Aqui y no en cada vista: las cuatro los usan. -->
+    <local:StatusToBrushConverter x:Key="StatusBrush" />
+    <local:BooleanToVisibilityConverter x:Key="BoolToVis" />
+    <local:BytesToSizeConverter x:Key="Bytes" />
+
+    <!-- ================= Paleta ================= -->
+    <SolidColorBrush x:Key="Navy"        Color="#0B1F55" />
+    <SolidColorBrush x:Key="Primary"     Color="#146CFF" />
+    <SolidColorBrush x:Key="PrimarySoft" Color="#EAF1FF" />
+    <SolidColorBrush x:Key="Accent"      Color="#19C6D1" />
+    <SolidColorBrush x:Key="Bg"          Color="#F5F7FA" />
+    <SolidColorBrush x:Key="Card"        Color="#FFFFFF" />
+    <SolidColorBrush x:Key="Ink"         Color="#1D2939" />
+    <SolidColorBrush x:Key="Muted"       Color="#667085" />
+    <SolidColorBrush x:Key="Faint"       Color="#98A2B3" />
+    <SolidColorBrush x:Key="Line"        Color="#E4E7EC" />
+
+    <SolidColorBrush x:Key="Online"      Color="#12B76A" />
+    <SolidColorBrush x:Key="Warn"        Color="#F79009" />
+    <SolidColorBrush x:Key="Offline"     Color="#98A2B3" />
+    <SolidColorBrush x:Key="Danger"      Color="#D92D20" />
+    <SolidColorBrush x:Key="DangerSoft"  Color="#FEF3F2" />
+
+    <LinearGradientBrush x:Key="Brand" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#0B1F55" Offset="0" />
+        <GradientStop Color="#146CFF" Offset="0.6" />
+        <GradientStop Color="#19C6D1" Offset="1" />
+    </LinearGradientBrush>
+
+    <!-- ================= Tipografia ================= -->
+    <!-- Sin Foreground a proposito: un Setter implicito gana al valor heredado,
+         y entonces el texto del menu lateral se pintaba en gris oscuro sobre el
+         azul marino, ilegible. El color base lo pone la ventana (TextElement.
+         Foreground se hereda) y quien necesita otro lo declara. -->
+    <Style TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+    </Style>
+
+    <!-- Todos con BasedOn: un estilo con nombre NO hereda del implicito, y sin
+         esto perdian VerticalAlignment y salian descuadrados en la barra. -->
+    <Style x:Key="H1" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+        <Setter Property="FontFamily" Value="Segoe UI Variable Display, Segoe UI" />
+        <Setter Property="FontSize" Value="22" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{StaticResource Ink}" />
+    </Style>
+
+    <Style x:Key="H2" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+        <Setter Property="FontFamily" Value="Segoe UI Variable Display, Segoe UI" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{StaticResource Ink}" />
+    </Style>
+
+    <Style x:Key="Caption" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+        <Setter Property="FontFamily" Value="Segoe UI Variable Small, Segoe UI" />
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="Foreground" Value="{StaticResource Muted}" />
+    </Style>
+
+    <Style x:Key="FieldLabel" TargetType="TextBlock" BasedOn="{StaticResource Caption}">
+        <Setter Property="Margin" Value="0,10,0,3" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+    </Style>
+
+    <Style x:Key="Mono" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+        <Setter Property="FontFamily" Value="Cascadia Mono, Consolas" />
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="Foreground" Value="{StaticResource Ink}" />
+    </Style>
+
+    <!-- Label heredado: queda por compatibilidad, alineado a la paleta. -->
+    <Style TargetType="Label">
+        <Setter Property="Padding" Value="0,4,6,2" />
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="Foreground" Value="{StaticResource Muted}" />
+    </Style>
+
+    <!-- ================= Tarjeta ================= -->
+    <Style x:Key="CardPanel" TargetType="Border">
+        <Setter Property="Background" Value="{StaticResource Card}" />
+        <Setter Property="BorderBrush" Value="{StaticResource Line}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="16" />
+    </Style>
+
+    <!-- ================= Botones ================= -->
+    <Style x:Key="BtnBase" TargetType="Button">
+        <Setter Property="Height" Value="34" />
+        <Setter Property="Padding" Value="14,0" />
+        <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Fondo"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="6"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Fondo" Property="Opacity" Value="0.85" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Fondo" Property="Opacity" Value="0.7" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Fondo" Property="Opacity" Value="0.4" />
+                            <Setter Property="Cursor" Value="Arrow" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="BtnPrimary" TargetType="Button" BasedOn="{StaticResource BtnBase}">
+        <Setter Property="Background" Value="{StaticResource Primary}" />
+        <Setter Property="Foreground" Value="White" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
+    <Style x:Key="BtnGhost" TargetType="Button" BasedOn="{StaticResource BtnBase}">
+        <Setter Property="Background" Value="{StaticResource Card}" />
+        <Setter Property="Foreground" Value="{StaticResource Ink}" />
+        <Setter Property="BorderBrush" Value="{StaticResource Line}" />
+        <Setter Property="BorderThickness" Value="1" />
+    </Style>
+
+    <Style x:Key="BtnDanger" TargetType="Button" BasedOn="{StaticResource BtnBase}">
+        <Setter Property="Background" Value="{StaticResource DangerSoft}" />
+        <Setter Property="Foreground" Value="{StaticResource Danger}" />
+        <Setter Property="BorderBrush" Value="#FDA29B" />
+        <Setter Property="BorderThickness" Value="1" />
+    </Style>
+
+    <Style x:Key="BtnLink" TargetType="Button" BasedOn="{StaticResource BtnBase}">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource Primary}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="6,0" />
+    </Style>
+
+    <Style TargetType="Button" BasedOn="{StaticResource BtnGhost}" />
+
+    <!-- ================= Navegacion lateral =================
+         Boton normal: el resaltado sale de comparar Page con el parametro, no de
+         un estado marcado. Ver MatchBrushConverter. -->
+    <local:MatchBrushConverter x:Key="FondoNav" Igual="{StaticResource Primary}" Distinto="Transparent" />
+    <local:MatchBrushConverter x:Key="TextoNav" Igual="White" Distinto="#B6C2DC" />
+
+    <Style x:Key="NavItem" TargetType="Button">
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="Margin" Value="8,1" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Fondo" Background="{TemplateBinding Background}"
+                            CornerRadius="6" Padding="12,9">
+                        <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <MultiTrigger>
+                            <MultiTrigger.Conditions>
+                                <Condition Property="IsMouseOver" Value="True" />
+                                <Condition Property="Background" Value="Transparent" />
+                            </MultiTrigger.Conditions>
+                            <Setter TargetName="Fondo" Property="Background" Value="#16305F" />
+                        </MultiTrigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ================= Tarjeta de KPI =================
+         La tarjeta ES el filtro por estado: pulsar "Offline" deja solo las
+         offline y volver a pulsarla las devuelve todas. -->
+    <local:MatchBrushConverter x:Key="FondoKpi" Igual="{StaticResource PrimarySoft}" Distinto="{StaticResource Card}" />
+    <local:MatchBrushConverter x:Key="BordeKpi" Igual="{StaticResource Primary}" Distinto="{StaticResource Line}" />
+
+    <Style x:Key="KpiCard" TargetType="Button">
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Margin" Value="0,0,10,0" />
+        <Setter Property="MinWidth" Value="118" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Fondo" Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                            CornerRadius="8" Padding="14,10">
+                        <ContentPresenter HorizontalAlignment="Left" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Fondo" Property="Opacity" Value="0.85" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="KpiNumero" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+        <Setter Property="FontFamily" Value="Segoe UI Variable Display, Segoe UI" />
+        <Setter Property="FontSize" Value="26" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{StaticResource Ink}" />
+    </Style>
+
+    <!-- ================= Entradas ================= -->
+    <Style TargetType="TextBox">
+        <Setter Property="Height" Value="34" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Foreground" Value="{StaticResource Ink}" />
+        <Setter Property="CaretBrush" Value="{StaticResource Ink}" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Background" Value="{StaticResource Card}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TextBox">
+                    <Border x:Name="Fondo" Background="{TemplateBinding Background}"
+                            BorderBrush="{StaticResource Line}" BorderThickness="1"
+                            CornerRadius="6" Padding="{TemplateBinding Padding}">
+                        <Grid>
+                            <!-- Texto de ayuda: WPF no tiene placeholder. Se toma de
+                                 Tag para no inventar una propiedad adjunta que solo
+                                 llevaria una cadena. Uso: <TextBox Tag="Buscar..." /> -->
+                            <TextBlock Text="{TemplateBinding Tag}" Foreground="{StaticResource Faint}"
+                                       FontSize="12" VerticalAlignment="Center" IsHitTestVisible="False"
+                                       Visibility="{Binding Text, RelativeSource={RelativeSource TemplatedParent},
+                                                    Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
+                            <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Fondo" Property="BorderBrush" Value="{StaticResource Primary}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Fondo" Property="Background" Value="{StaticResource Bg}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="PasswordBox">
+        <Setter Property="Height" Value="34" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Foreground" Value="{StaticResource Ink}" />
+        <Setter Property="CaretBrush" Value="{StaticResource Ink}" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="PasswordBox">
+                    <Border x:Name="Fondo" Background="{StaticResource Card}"
+                            BorderBrush="{StaticResource Line}" BorderThickness="1"
+                            CornerRadius="6" Padding="{TemplateBinding Padding}">
+                        <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Fondo" Property="BorderBrush" Value="{StaticResource Primary}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ================= DataGrid ================= -->
+    <Style TargetType="DataGrid">
+        <Setter Property="Background" Value="{StaticResource Card}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="AutoGenerateColumns" Value="False" />
+        <Setter Property="IsReadOnly" Value="True" />
+        <Setter Property="SelectionMode" Value="Single" />
+        <Setter Property="HeadersVisibility" Value="Column" />
+        <Setter Property="RowHeaderWidth" Value="0" />
+        <Setter Property="GridLinesVisibility" Value="None" />
+        <Setter Property="CanUserResizeRows" Value="False" />
+        <Setter Property="RowHeight" Value="44" />
+        <Setter Property="ColumnHeaderHeight" Value="34" />
+        <Setter Property="VerticalGridLinesBrush" Value="Transparent" />
+        <Setter Property="HorizontalGridLinesBrush" Value="{StaticResource Line}" />
+    </Style>
+
+    <Style TargetType="DataGridColumnHeader">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource Muted}" />
+        <Setter Property="FontFamily" Value="Segoe UI Variable Small, Segoe UI" />
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="DataGridColumnHeader">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter VerticalAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="DataGridRow">
+        <Setter Property="Background" Value="{StaticResource Card}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="#F9FAFB" />
+            </Trigger>
+            <Trigger Property="IsSelected" Value="True">
+                <Setter Property="Background" Value="{StaticResource PrimarySoft}" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <Style TargetType="DataGridCell">
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Foreground" Value="{StaticResource Ink}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="DataGridCell">
+                    <Border Background="Transparent" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter VerticalAlignment="Center" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ================= Pestanas ================= -->
+    <Style TargetType="TabControl">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+    </Style>
+
+    <!-- El color y el grosor van SOBRE LA CABECERA, nunca sobre el TabItem: el
+         contenido de la pestana hereda de el por el arbol logico, y ponerle el
+         azul de "seleccionada" pintaba de azul toda la ficha del equipo. -->
+    <Style TargetType="TabItem">
+        <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TabItem">
+                    <Border x:Name="Fondo" Background="Transparent"
+                            BorderBrush="Transparent" BorderThickness="0,0,0,2"
+                            Padding="14,9" TextElement.Foreground="{StaticResource Muted}">
+                        <ContentPresenter ContentSource="Header" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Fondo" Property="TextElement.Foreground" Value="{StaticResource Ink}" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Fondo" Property="BorderBrush" Value="{StaticResource Primary}" />
+                            <Setter TargetName="Fondo" Property="TextElement.Foreground" Value="{StaticResource Primary}" />
+                            <Setter TargetName="Fondo" Property="TextElement.FontWeight" Value="SemiBold" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ================= Menu de acciones ================= -->
+    <Style x:Key="MenuAcciones" TargetType="Menu">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Height" Value="34" />
+    </Style>
+
+    <Style x:Key="MenuAccionesRaiz" TargetType="MenuItem">
+        <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Foreground" Value="{StaticResource Ink}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="MenuItem">
+                    <Border x:Name="Fondo" Background="{StaticResource Card}"
+                            BorderBrush="{StaticResource Line}" BorderThickness="1"
+                            CornerRadius="6" Height="34" Padding="14,0">
+                        <Grid>
+                            <ContentPresenter ContentSource="Header" VerticalAlignment="Center" />
+                            <Popup IsOpen="{TemplateBinding IsSubmenuOpen}" Placement="Bottom"
+                                   AllowsTransparency="True" StaysOpen="False" Focusable="False"
+                                   HorizontalOffset="-14" VerticalOffset="4">
+                                <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Line}"
+                                        BorderThickness="1" CornerRadius="8" Padding="4" MinWidth="190">
+                                    <Border.Effect>
+                                        <DropShadowEffect BlurRadius="14" ShadowDepth="2" Opacity="0.14" Color="#0B1F55" />
+                                    </Border.Effect>
+                                    <StackPanel IsItemsHost="True" />
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Fondo" Property="Background" Value="{StaticResource Bg}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="MenuAccion" TargetType="MenuItem">
+        <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Foreground" Value="{StaticResource Ink}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="MenuItem">
+                    <Border x:Name="Fondo" Background="Transparent" CornerRadius="5" Padding="12,8">
+                        <ContentPresenter ContentSource="Header" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsHighlighted" Value="True">
+                            <Setter TargetName="Fondo" Property="Background" Value="{StaticResource Bg}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.4" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="MenuAccionPeligro" TargetType="MenuItem" BasedOn="{StaticResource MenuAccion}">
+        <Setter Property="Foreground" Value="{StaticResource Danger}" />
+    </Style>
+
+    <!-- ================= Linea de auditoria =================
+         Compartida por la pestana de un equipo y la pagina de toda la planta:
+         es el mismo registro, no tiene por que verse distinto. -->
+    <DataTemplate x:Key="LineaAuditoria">
+        <Border x:Name="Fila" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Padding="6,7">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="120" />
+                    <ColumnDefinition Width="215" />
+                    <ColumnDefinition Width="190" />
+                    <ColumnDefinition Width="140" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" Text="{Binding When}" Style="{StaticResource Mono}"
+                           Foreground="{StaticResource Muted}" />
+                <TextBlock Grid.Column="1" Text="{Binding Action}" FontSize="12" FontWeight="SemiBold"
+                           Margin="0,0,10,0" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="2" Text="{Binding Who}" FontSize="12"
+                           Margin="0,0,10,0" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="3" Text="{Binding Machine}" FontSize="12"
+                           Margin="0,0,10,0" TextTrimming="CharacterEllipsis"
+                           Foreground="{StaticResource Muted}" />
+                <TextBlock Grid.Column="4" Text="{Binding Details}" FontSize="12"
+                           Foreground="{StaticResource Muted}" TextTrimming="CharacterEllipsis" />
+            </Grid>
+        </Border>
+        <DataTemplate.Triggers>
+            <!-- Un intento denegado es la linea que importa de una auditoria. -->
+            <DataTrigger Binding="{Binding IsDenied}" Value="True">
+                <Setter TargetName="Fila" Property="Background" Value="{StaticResource DangerSoft}" />
+            </DataTrigger>
+        </DataTemplate.Triggers>
+    </DataTemplate>
+
+    <!-- ================= Linea de historial =================
+         Sirve para IP y para ubicacion: las dos son "que / donde / desde cuando
+         hasta cuando". Sin "hasta" es el valor vigente. -->
+    <DataTemplate x:Key="LineaHistorial">
+        <Border BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Padding="6,7">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="190" />
+                    <ColumnDefinition Width="230" />
+                    <ColumnDefinition Width="150" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" Text="{Binding Que}" FontSize="12" FontWeight="SemiBold"
+                           Margin="0,0,10,0" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="1" Text="{Binding Donde}" FontSize="12"
+                           Foreground="{StaticResource Muted}" Margin="0,0,10,0"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="2" Text="{Binding Desde}" Style="{StaticResource Mono}"
+                           Foreground="{StaticResource Muted}" />
+
+                <TextBlock Grid.Column="3" Text="{Binding Hasta}" Style="{StaticResource Mono}"
+                           Foreground="{StaticResource Muted}"
+                           Visibility="{Binding EsVigente, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
+                <Border Grid.Column="3" Background="#E7F8F0" BorderBrush="{StaticResource Online}"
+                        BorderThickness="1" CornerRadius="9" Padding="8,2" HorizontalAlignment="Left"
+                        Visibility="{Binding EsVigente, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="vigente" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{StaticResource Online}" />
+                </Border>
+            </Grid>
+        </Border>
+    </DataTemplate>
+
+    <!-- ================= Barra de desplazamiento ================= -->
+    <Style TargetType="ScrollViewer">
+        <Setter Property="PanningMode" Value="VerticalOnly" />
+    </Style>
+
+</ResourceDictionary>

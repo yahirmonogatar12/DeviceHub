@@ -17,8 +17,35 @@ public sealed record ProcessRow(string Name, int Pid, long MemoryBytes, double C
 
 public sealed record ServiceRow(string Name, string DisplayName, string Status, string StartType);
 
+/// <summary>
+/// Una fila del historial de IP o de ubicacion, ya con la fecha en hora local.
+///
+/// Antes se enlazaba directo al Timestamp del protobuf y se pintaba su ToString:
+/// un ISO en UTC. En planta eso son seis horas de diferencia leidas como si nada.
+/// </summary>
+public sealed record HistoryLine(string Que, string Donde, string Desde, string Hasta)
+{
+    public bool EsVigente => Hasta.Length == 0;
+
+    public static HistoryLine From(IpHistoryEntry entry) => new(
+        Que: entry.Ip,
+        Donde: entry.Mac,
+        Desde: Local(entry.ValidFrom),
+        Hasta: Local(entry.ValidTo));
+
+    public static HistoryLine From(PlacementHistoryEntry entry) => new(
+        Que: entry.MachineCode,
+        Donde: string.Join("/", new[] { entry.Area, entry.Line, entry.Station }.Where(s => s.Length > 0)),
+        Desde: Local(entry.ValidFrom),
+        Hasta: Local(entry.ValidTo));
+
+    private static string Local(Google.Protobuf.WellKnownTypes.Timestamp? stamp) => stamp is null
+        ? string.Empty
+        : DateTime.SpecifyKind(stamp.ToDateTime(), DateTimeKind.Utc).ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+}
+
 /// <summary>Una linea de auditoria lista para mostrar (Fase 12).</summary>
-public sealed record AuditLine(string When, string Who, string Action, string Outcome, string Details)
+public sealed record AuditLine(string When, string Who, string Action, string Machine, string Outcome, string Details)
 {
     public bool IsDenied => Outcome == "denied";
 
@@ -28,6 +55,7 @@ public sealed record AuditLine(string When, string Who, string Action, string Ou
             : DateTime.SpecifyKind(record.OccurredAt.ToDateTime(), DateTimeKind.Utc).ToLocalTime().ToString("MM-dd HH:mm:ss"),
         Who: string.IsNullOrEmpty(record.UserRole) ? record.UserId : $"{record.UserId} ({record.UserRole})",
         Action: record.Action,
+        Machine: record.MachineCode,
         Outcome: record.Outcome,
         Details: string.Join("  ", new[] { record.Details, record.SourceIp }.Where(s => !string.IsNullOrEmpty(s))));
 }
@@ -45,21 +73,72 @@ public sealed partial class MainViewModel
     public ObservableCollection<ServiceRow> Services { get; } = [];
     public ObservableCollection<AuditLine> Audit { get; } = [];
 
+    // ================= Buscadores de las pestanas =================
+    //
+    // Proyecciones filtradas en vez de ICollectionView: las listas se rellenan de
+    // golpe al pulsar Actualizar, asi que basta con recalcular y avisar. Un
+    // CollectionView aqui solo anadiria plumbing para el mismo resultado.
+
+    [ObservableProperty] private string _processFilter = string.Empty;
+    [ObservableProperty] private string _serviceFilter = string.Empty;
+    [ObservableProperty] private string _auditFilter = string.Empty;
+    [ObservableProperty] private string _historyFilter = string.Empty;
+
+    public IEnumerable<ProcessRow> ProcessesFiltered
+        => Processes.Where(p => Coincide(ProcessFilter, p.Name, p.Pid.ToString()));
+
+    public IEnumerable<ServiceRow> ServicesFiltered
+        => Services.Where(s => Coincide(ServiceFilter, s.Name, s.DisplayName, s.Status, s.StartType));
+
+    public IEnumerable<AuditLine> AuditFiltered
+        => Audit.Where(a => Coincide(AuditFilter, a.When, a.Who, a.Action, a.Machine, a.Details));
+
+    public IEnumerable<HistoryLine> IpHistoryFiltered
+        => (Detail?.IpHistory ?? []).Select(HistoryLine.From)
+            .Where(h => Coincide(HistoryFilter, h.Que, h.Donde, h.Desde, h.Hasta));
+
+    public IEnumerable<HistoryLine> PlacementHistoryFiltered
+        => (Detail?.PlacementHistory ?? []).Select(HistoryLine.From)
+            .Where(h => Coincide(HistoryFilter, h.Que, h.Donde, h.Desde, h.Hasta));
+
+    private static bool Coincide(string filtro, params string?[] campos)
+        => string.IsNullOrWhiteSpace(filtro)
+            || campos.Any(campo => campo is not null
+                && campo.Contains(filtro.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    partial void OnProcessFilterChanged(string value) => OnPropertyChanged(nameof(ProcessesFiltered));
+    partial void OnServiceFilterChanged(string value) => OnPropertyChanged(nameof(ServicesFiltered));
+    partial void OnAuditFilterChanged(string value) => OnPropertyChanged(nameof(AuditFiltered));
+
+    partial void OnHistoryFilterChanged(string value)
+    {
+        OnPropertyChanged(nameof(IpHistoryFiltered));
+        OnPropertyChanged(nameof(PlacementHistoryFiltered));
+    }
+
     /// <summary>Auditoria de la maquina seleccionada (Fase 12).</summary>
     [RelayCommand]
-    private async Task RefreshAuditAsync()
-    {
-        if (SelectedMachine is null)
-            return;
+    private Task RefreshAuditAsync()
+        => SelectedMachine is null ? Task.CompletedTask : CargarAuditoriaAsync(SelectedMachine.MachineId);
 
+    /// <summary>Auditoria de toda la planta: el servidor la devuelve sin filtro
+    /// de maquina cuando machineId va vacio.</summary>
+    [RelayCommand]
+    private Task RefreshGlobalAuditAsync() => CargarAuditoriaAsync(string.Empty);
+
+    // Una sola coleccion para las dos vistas: la ficha de un equipo y la pagina
+    // de auditoria nunca estan visibles a la vez.
+    private async Task CargarAuditoriaAsync(string machineId)
+    {
         try
         {
-            var list = await _client.ListAuditAsync(SelectedMachine.MachineId, CancellationToken.None);
+            var list = await _client.ListAuditAsync(machineId, CancellationToken.None);
 
             Audit.Clear();
             foreach (var entry in list.Entries)
                 Audit.Add(AuditLine.From(entry));
 
+            OnPropertyChanged(nameof(AuditFiltered));
             CommandFeedback = $"{Audit.Count} eventos auditados";
         }
         catch (Exception ex)
@@ -221,6 +300,7 @@ public sealed partial class MainViewModel
         foreach (var row in Deserialize<ProcessRow>(entry.Result))
             Processes.Add(row);
 
+        OnPropertyChanged(nameof(ProcessesFiltered));
         CommandFeedback = $"{Processes.Count} procesos";
     }
 
@@ -236,6 +316,7 @@ public sealed partial class MainViewModel
         foreach (var row in Deserialize<ServiceRow>(entry.Result))
             Services.Add(row);
 
+        OnPropertyChanged(nameof(ServicesFiltered));
         CommandFeedback = $"{Services.Count} servicios";
     }
 

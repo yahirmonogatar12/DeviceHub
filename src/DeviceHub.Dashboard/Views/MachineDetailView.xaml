@@ -1,0 +1,313 @@
+<UserControl x:Class="DeviceHub.Dashboard.Views.MachineDetailView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid Margin="24,20,24,20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Cabecera -->
+        <Border Grid.Row="0" Style="{StaticResource CardPanel}" Margin="0,0,0,14">
+            <StackPanel>
+                <Button Content="&#x2190;  Equipos" Style="{StaticResource BtnLink}"
+                        HorizontalAlignment="Left" Height="22" Margin="-6,0,0,8"
+                        Command="{Binding BackToListCommand}" />
+
+                <DockPanel LastChildFill="False">
+                    <StackPanel Orientation="Horizontal" DataContext="{Binding SelectedMachine}">
+                        <TextBlock Text="{Binding MachineCode}" Style="{StaticResource H1}" />
+                        <Border BorderBrush="{Binding Status, Converter={StaticResource StatusBrush}}"
+                                BorderThickness="1" CornerRadius="10" Padding="9,3" Margin="12,3,0,0"
+                                VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal">
+                                <Ellipse Width="7" Height="7" Margin="0,0,6,0"
+                                         Fill="{Binding Status, Converter={StaticResource StatusBrush}}" />
+                                <TextBlock Text="{Binding StatusText}" FontSize="10" FontWeight="SemiBold"
+                                           Foreground="{Binding Status, Converter={StaticResource StatusBrush}}" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <Button DockPanel.Dock="Right" Content="Editar" Style="{StaticResource BtnGhost}"
+                            Command="{Binding EditMachineCommand}"
+                            Visibility="{Binding IsAdministrator, Converter={StaticResource BoolToVis}}" />
+                </DockPanel>
+
+                <TextBlock Style="{StaticResource Caption}" Margin="0,4,0,0"
+                           DataContext="{Binding SelectedMachine}">
+                    <Run Text="{Binding Hostname, Mode=OneWay}" />
+                    <Run Text=" &#x00B7; " /><Run Text="{Binding CurrentIp, Mode=OneWay}" />
+                    <Run Text=" &#x00B7; " /><Run Text="{Binding SiteCode, Mode=OneWay}" />
+                    <Run Text=" / " /><Run Text="{Binding Area, Mode=OneWay}" />
+                    <Run Text=" / " /><Run Text="{Binding Line, Mode=OneWay}" />
+                    <Run Text=" / " /><Run Text="{Binding Station, Mode=OneWay}" />
+                </TextBlock>
+
+                <!-- Acciones -->
+                <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                    <Button Content="&#x1F5A5;  Controlar PC" Style="{StaticResource BtnPrimary}"
+                            Margin="0,0,8,0" Command="{Binding RemoteControlCommand}"
+                            Visibility="{Binding SelectedMachine.RemoteAvailable, Converter={StaticResource BoolToVis}}" />
+                    <Button Content="Cerrar remoto" Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
+                            Command="{Binding EndRemoteSessionCommand}"
+                            Visibility="{Binding SelectedMachine.RemoteAvailable, Converter={StaticResource BoolToVis}}" />
+
+                    <Button Content="Ping" Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
+                            Command="{Binding PingCommand}" />
+
+                    <!-- Reiniciar y apagar no viven junto a Ping: se pulsan por error. -->
+                    <Menu Style="{StaticResource MenuAcciones}">
+                        <MenuItem Header="Mas acciones  &#x25BE;" Style="{StaticResource MenuAccionesRaiz}">
+                            <MenuItem Header="Reiniciar PC" Style="{StaticResource MenuAccion}"
+                                      Command="{Binding RestartMachineCommand}" />
+                            <Separator Margin="8,4" Background="{StaticResource Line}" />
+                            <MenuItem Header="Apagar PC" Style="{StaticResource MenuAccionPeligro}"
+                                      Command="{Binding ShutdownMachineCommand}" />
+                        </MenuItem>
+                    </Menu>
+                </StackPanel>
+
+                <TextBlock Text="{Binding CommandFeedback}" Style="{StaticResource Caption}"
+                           TextWrapping="Wrap" Margin="0,10,0,0"
+                           Visibility="{Binding CommandFeedback, Converter={StaticResource BoolToVis}}" />
+            </StackPanel>
+        </Border>
+
+        <!-- Conflicto de identidad -->
+        <Border Grid.Row="1" Background="{StaticResource DangerSoft}" BorderBrush="#FDA29B"
+                BorderThickness="1" CornerRadius="8" Padding="16" Margin="0,0,0,14"
+                Visibility="{Binding SelectedMachine.HasConflict, Converter={StaticResource BoolToVis}}">
+            <StackPanel>
+                <TextBlock Text="&#x26A0;  CONFLICTO DE IDENTIDAD" FontWeight="SemiBold"
+                           Foreground="{StaticResource Danger}" />
+                <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource Danger}" Margin="0,4,0,10"
+                           Text="Otro agente reclama este machineId, o el hardware cambio. Lo resuelve un administrador." />
+                <StackPanel Orientation="Horizontal">
+                    <Button Content="Aprobar hardware nuevo" Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
+                            Command="{Binding ApproveHardwareCommand}" />
+                    <Button Content="Emitir identidad nueva" Style="{StaticResource BtnDanger}"
+                            Command="{Binding IssueNewIdentityCommand}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- Pestanas -->
+        <Border Grid.Row="2" Style="{StaticResource CardPanel}" Padding="16,6,16,16">
+            <TabControl>
+
+                <!-- Resumen -->
+                <TabItem Header="Resumen">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,14,0,0">
+                        <StackPanel DataContext="{Binding SelectedMachine}">
+                            <UniformGrid Columns="4">
+                                <StackPanel>
+                                    <TextBlock Text="CPU" Style="{StaticResource Caption}" />
+                                    <TextBlock Text="{Binding Cpu}" Style="{StaticResource KpiNumero}" />
+                                </StackPanel>
+                                <StackPanel>
+                                    <TextBlock Text="RAM" Style="{StaticResource Caption}" />
+                                    <TextBlock Text="{Binding Memory}" Style="{StaticResource KpiNumero}" />
+                                </StackPanel>
+                                <StackPanel>
+                                    <TextBlock Text="Disco libre" Style="{StaticResource Caption}" />
+                                    <TextBlock Text="{Binding DiskFree}" Style="{StaticResource KpiNumero}" />
+                                </StackPanel>
+                                <StackPanel>
+                                    <TextBlock Text="Uptime" Style="{StaticResource Caption}" />
+                                    <TextBlock Text="{Binding Uptime}" Style="{StaticResource KpiNumero}" />
+                                </StackPanel>
+                            </UniformGrid>
+
+                            <Border Background="{StaticResource Line}" Height="1" Margin="0,18" />
+
+                            <UniformGrid Columns="2">
+                                <StackPanel Margin="0,0,20,0">
+                                    <TextBlock Text="Ultima comunicacion" Style="{StaticResource FieldLabel}" />
+                                    <TextBlock>
+                                        <Run Text="{Binding LastSeenAgo, Mode=OneWay}" />
+                                        <Run Text="  " />
+                                        <Run Text="{Binding LastSeenLocal, Mode=OneWay}" Foreground="#98A2B3" />
+                                    </TextBlock>
+
+                                    <TextBlock Text="Usuario con sesion" Style="{StaticResource FieldLabel}" />
+                                    <TextBlock Text="{Binding LoggedUser}" />
+
+                                    <TextBlock Text="MAC principal" Style="{StaticResource FieldLabel}" />
+                                    <TextBlock Text="{Binding PrimaryMac}" />
+                                </StackPanel>
+
+                                <StackPanel>
+                                    <TextBlock Text="Version del agente" Style="{StaticResource FieldLabel}" />
+                                    <TextBlock Text="{Binding AgentVersion}" />
+
+                                    <TextBlock Text="Nombre visible" Style="{StaticResource FieldLabel}" />
+                                    <TextBlock Text="{Binding DisplayName}" />
+
+                                    <TextBlock Text="machineId" Style="{StaticResource FieldLabel}" />
+                                    <TextBlock Text="{Binding MachineId}" Style="{StaticResource Mono}"
+                                               Foreground="{StaticResource Muted}" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </UniformGrid>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- Hardware -->
+                <TabItem Header="Hardware">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,14,0,0">
+                        <Grid DataContext="{Binding Detail}">
+                            <TextBlock Text="Sin inventario todavia. El agente lo envia al arrancar y cada 12 h."
+                                       Style="{StaticResource Caption}" HorizontalAlignment="Center" Margin="0,30,0,0"
+                                       Visibility="{Binding Hardware, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
+
+                            <StackPanel Visibility="{Binding Hardware, Converter={StaticResource BoolToVis}}"
+                                        DataContext="{Binding Hardware}">
+                                <UniformGrid Columns="2">
+                                    <StackPanel Margin="0,0,20,0">
+                                        <TextBlock Text="Procesador" Style="{StaticResource FieldLabel}" />
+                                        <TextBlock TextWrapping="Wrap">
+                                            <Run Text="{Binding CpuModel, Mode=OneWay}" />
+                                            <Run Text="  (" /><Run Text="{Binding CpuCores, Mode=OneWay}" />
+                                            <Run Text=" nucleos / " /><Run Text="{Binding CpuThreads, Mode=OneWay}" />
+                                            <Run Text=" hilos)" />
+                                        </TextBlock>
+
+                                        <TextBlock Text="Memoria" Style="{StaticResource FieldLabel}" />
+                                        <TextBlock Text="{Binding TotalMemoryBytes, Converter={StaticResource Bytes}}" />
+
+                                        <TextBlock Text="Grafica" Style="{StaticResource FieldLabel}" />
+                                        <TextBlock Text="{Binding GpuModel}" TextWrapping="Wrap" />
+                                    </StackPanel>
+
+                                    <StackPanel>
+                                        <TextBlock Text="Placa base" Style="{StaticResource FieldLabel}" />
+                                        <TextBlock Text="{Binding Motherboard}" TextWrapping="Wrap" />
+
+                                        <TextBlock Text="BIOS" Style="{StaticResource FieldLabel}" />
+                                        <TextBlock TextWrapping="Wrap">
+                                            <Run Text="{Binding BiosVersion, Mode=OneWay}" />
+                                            <Run Text="   S/N " Foreground="#98A2B3" />
+                                            <Run Text="{Binding BiosSerial, Mode=OneWay}" />
+                                        </TextBlock>
+
+                                        <TextBlock Text="Sistema operativo" Style="{StaticResource FieldLabel}" />
+                                        <TextBlock TextWrapping="Wrap">
+                                            <Run Text="{Binding OsCaption, Mode=OneWay}" />
+                                            <Run Text="  build " Foreground="#98A2B3" />
+                                            <Run Text="{Binding OsBuild, Mode=OneWay}" />
+                                        </TextBlock>
+                                    </StackPanel>
+                                </UniformGrid>
+
+                                <TextBlock Text="Discos" Style="{StaticResource FieldLabel}" Margin="0,18,0,4" />
+                                <ItemsControl ItemsSource="{Binding Disks}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Style="{StaticResource Mono}" Margin="0,2" TextWrapping="Wrap">
+                                                <Run Text="{Binding Model, Mode=OneWay}" />
+                                                <Run Text="   " />
+                                                <Run Text="{Binding SizeBytes, Mode=OneWay, Converter={StaticResource Bytes}}" />
+                                            </TextBlock>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Grid>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- Procesos -->
+                <TabItem Header="Procesos">
+                    <DockPanel Margin="0,14,0,0">
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
+                            <Button Content="Actualizar" Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
+                                    Command="{Binding RefreshProcessesCommand}" />
+                            <Button Content="Matar proceso" Style="{StaticResource BtnDanger}" Margin="0,0,8,0"
+                                    Command="{Binding KillProcessCommand}" />
+                            <TextBox Width="260" Tag="Buscar proceso o PID..."
+                                     Text="{Binding ProcessFilter, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+
+                        <DataGrid ItemsSource="{Binding ProcessesFiltered}" SelectedItem="{Binding SelectedProcess}"
+                                  RowHeight="30" FontSize="12">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Proceso" Binding="{Binding Name}" Width="*" />
+                                <DataGridTextColumn Header="PID" Binding="{Binding Pid}" Width="80" />
+                                <DataGridTextColumn Header="CPU" Binding="{Binding Cpu}" Width="80" />
+                                <DataGridTextColumn Header="RAM" Binding="{Binding Memory}" Width="100" />
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </DockPanel>
+                </TabItem>
+
+                <!-- Servicios -->
+                <TabItem Header="Servicios">
+                    <DockPanel Margin="0,14,0,0">
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
+                            <Button Content="Actualizar" Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
+                                    Command="{Binding RefreshServicesCommand}" />
+                            <Button Content="Iniciar" Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
+                                    Command="{Binding ServiceActionCommand}" CommandParameter="start" />
+                            <Button Content="Detener" Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
+                                    Command="{Binding ServiceActionCommand}" CommandParameter="stop" />
+                            <Button Content="Reiniciar" Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
+                                    Command="{Binding ServiceActionCommand}" CommandParameter="restart" />
+                            <TextBox Width="260" Tag="Buscar servicio o estado..."
+                                     Text="{Binding ServiceFilter, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+
+                        <DataGrid ItemsSource="{Binding ServicesFiltered}" SelectedItem="{Binding SelectedService}"
+                                  RowHeight="30" FontSize="12">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Servicio" Binding="{Binding DisplayName}" Width="*" />
+                                <DataGridTextColumn Header="Nombre" Binding="{Binding Name}" Width="180" />
+                                <DataGridTextColumn Header="Estado" Binding="{Binding Status}" Width="100" />
+                                <DataGridTextColumn Header="Inicio" Binding="{Binding StartType}" Width="100" />
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </DockPanel>
+                </TabItem>
+
+                <!-- Auditoria -->
+                <TabItem Header="Auditoria">
+                    <DockPanel Margin="0,14,0,0">
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
+                            <Button Content="Actualizar" Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
+                                    Command="{Binding RefreshAuditCommand}" />
+                            <TextBox Width="300" Tag="Buscar accion, usuario o detalle..."
+                                     Text="{Binding AuditFilter, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding AuditFiltered}"
+                                          ItemTemplate="{StaticResource LineaAuditoria}" />
+                        </ScrollViewer>
+                    </DockPanel>
+                </TabItem>
+
+                <!-- Historial -->
+                <TabItem Header="Historial">
+                    <DockPanel Margin="0,14,0,0">
+                        <TextBox DockPanel.Dock="Top" Width="300" HorizontalAlignment="Left" Margin="0,0,0,12"
+                                 Tag="Buscar IP, estacion o fecha..."
+                                 Text="{Binding HistoryFilter, UpdateSourceTrigger=PropertyChanged}" />
+
+                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <StackPanel>
+                                <TextBlock Text="Historial de IP" Style="{StaticResource H2}" />
+                                <ItemsControl ItemsSource="{Binding IpHistoryFiltered}" Margin="0,6,0,0"
+                                              ItemTemplate="{StaticResource LineaHistorial}" />
+
+                                <TextBlock Text="Historial de ubicacion" Style="{StaticResource H2}" Margin="0,20,0,0" />
+                                <ItemsControl ItemsSource="{Binding PlacementHistoryFiltered}" Margin="0,6,0,0"
+                                              ItemTemplate="{StaticResource LineaHistorial}" />
+                            </StackPanel>
+                        </ScrollViewer>
+                    </DockPanel>
+                </TabItem>
+            </TabControl>
+        </Border>
+    </Grid>
+</UserControl>
