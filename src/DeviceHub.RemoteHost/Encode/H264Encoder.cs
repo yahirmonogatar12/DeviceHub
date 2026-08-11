@@ -99,6 +99,18 @@ public sealed class H264Encoder : IVideoEncoder
     /// <summary>Motivo por el que ProcessOutput no devolvio nada, si aplica.</summary>
     public string? LastOutputIssue { get; private set; }
 
+    /// <summary>Veces que el MFT pidio renegociar el tipo de salida.</summary>
+    public long StreamChanges { get; private set; }
+
+    public uint LastBufferStatus { get; private set; }
+    public uint LastProcessStatus { get; private set; }
+    public string OutputTypeBefore { get; private set; } = "-";
+    public string OutputTypeAfter { get; private set; } = "-";
+
+    private const uint StreamChange = 0xC00D6D61;   // MF_E_TRANSFORM_STREAM_CHANGE
+    private const int MaxRenegotiations = 3;
+    private int _renegotiationsSinFruto;
+
     public IReadOnlyList<EncodedFrame> Encode(VideoFrame frame, CancellationToken cancellationToken)
     {
         var salidas = new List<EncodedFrame>(1);
@@ -219,7 +231,21 @@ public sealed class H264Encoder : IVideoEncoder
                 buffers[0].Sample = propia;
             }
 
-            var resultado = _transform.ProcessOutput(ProcessOutputFlags.None, 1, ref buffers[0], out _);
+            var resultado = _transform.ProcessOutput(ProcessOutputFlags.None, 1, ref buffers[0], out var estado);
+
+            LastBufferStatus = (uint)buffers[0].Status;
+            LastProcessStatus = (uint)estado;
+
+            // MF_E_TRANSFORM_STREAM_CHANGE: no hay muestra y hay que volver a
+            // fijar el tipo de salida antes de seguir. Sin tratarlo, el MFT deja
+            // de pedir entrada y todo se para en silencio -- que es justo lo que
+            // paso en la PC de planta: 416 capturados, 0 codificados.
+            if ((uint)resultado.Code == StreamChange)
+            {
+                propia?.Dispose();
+                Renegotiate();
+                continue;
+            }
 
             if (resultado.Failure)
             {
@@ -246,6 +272,9 @@ public sealed class H264Encoder : IVideoEncoder
                 salidas.Add(Read(muestra));
 
             Produced++;
+
+            // Hubo fruto: el contador de renegociaciones seguidas se reinicia.
+            _renegotiationsSinFruto = 0;
         }
     }
 
@@ -414,18 +443,95 @@ public sealed class H264Encoder : IVideoEncoder
         }
     }
 
+    /// <summary>
+    /// Reaplica EXACTAMENTE el mismo tipo de salida tras un STREAM_CHANGE.
+    ///
+    /// Cuando ProcessOutput devuelve MF_E_TRANSFORM_STREAM_CHANGE no produce
+    /// muestra y hay que volver a fijar un tipo de salida antes de seguir. No
+    /// significa que la resolucion haya cambiado: el MFT puede tener una
+    /// preferencia nueva, y es valido responder que seguimos queriendo lo mismo.
+    ///
+    /// Se insiste en el mismo formato a proposito. Aceptar lo que el codificador
+    /// proponga haria que la resolucion del stream dependiera del driver de cada
+    /// PC, y el protocolo dejaria de ser determinista.
+    /// </summary>
+    private void Renegotiate()
+    {
+        StreamChanges++;
+
+        if (++_renegotiationsSinFruto > MaxRenegotiations)
+            throw new VideoEncoderUnavailableException(
+                $"{Capabilities.Name} pidio renegociar {MaxRenegotiations} veces seguidas sin producir " +
+                $"ni pedir entrada. Tipo antes: {OutputTypeBefore}. Despues: {OutputTypeAfter}.");
+
+        OutputTypeBefore = DescribeOutputType();
+
+        try
+        {
+            ApplyOutputType(_transform, Ancho, Alto, Fps, Bits);
+        }
+        catch (SharpGenException ex)
+        {
+            throw new VideoEncoderUnavailableException(
+                $"{Capabilities.Name} rechaza H.264 {Ancho}x{Alto}@{Fps} tras STREAM_CHANGE ({ex.Message.Split('\n')[0]}).\n" +
+                "Lo que ofrece:\n" + string.Join("\n", OfferedOutputTypes().Select(t => "  " + t)) + "\n\n" +
+                "No se acepta otra resolucion en silencio: el stream dejaria de ser el mismo en cada PC.");
+        }
+
+        OutputTypeAfter = DescribeOutputType();
+    }
+
+    private IEnumerable<string> OfferedOutputTypes()
+    {
+        for (var i = 0; i < 16; i++)
+        {
+            IMFMediaType? tipo;
+
+            try { tipo = _transform.GetOutputAvailableType(0, i); }
+            catch (SharpGenException) { yield break; }
+
+            if (tipo is null)
+                yield break;
+
+            using (tipo)
+                yield return Describe(tipo);
+        }
+    }
+
+    private string DescribeOutputType()
+    {
+        try
+        {
+            using var tipo = _transform.GetOutputCurrentType(0);
+            return tipo is null ? "(ninguno)" : Describe(tipo);
+        }
+        catch (SharpGenException)
+        {
+            return "(no legible)";
+        }
+    }
+
+    private static string Describe(IMFMediaType tipo)
+    {
+        try
+        {
+            var tamano = tipo.GetUInt64(MediaTypeAttributeKeys.FrameSize);
+            var subtipo = tipo.GetGUID(MediaTypeAttributeKeys.Subtype);
+            var nombre = subtipo == VideoFormatGuids.H264 ? "H264" : subtipo.ToString();
+
+            return $"{nombre} {tamano >> 32}x{tamano & 0xFFFFFFFF}";
+        }
+        catch (SharpGenException)
+        {
+            return "(incompleto)";
+        }
+    }
+
     /// <summary>SALIDA primero y entrada despues: un codificador H.264 no sabe
     /// que entradas admite hasta saber que tiene que producir.</summary>
     private static void Configure(IMFTransform transform, int width, int height, int fps, int bitrate)
     {
-        using var salida = MediaFactory.MFCreateMediaType();
-        salida.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
-        salida.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.H264);
-        salida.Set(MediaTypeAttributeKeys.AvgBitrate, (uint)bitrate);
-        salida.Set(MediaTypeAttributeKeys.FrameSize, Pack((uint)width, (uint)height));
-        salida.Set(MediaTypeAttributeKeys.FrameRate, Pack((uint)fps, 1));
-        salida.Set(MediaTypeAttributeKeys.InterlaceMode, 2u);
-        transform.SetOutputType(0, salida, 0);
+        ApplyOutputType(transform, width, height, fps, bitrate);
 
         using var entrada = MediaFactory.MFCreateMediaType();
         entrada.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
@@ -466,6 +572,18 @@ public sealed class H264Encoder : IVideoEncoder
         {
             return false;
         }
+    }
+
+    private static void ApplyOutputType(IMFTransform transform, int width, int height, int fps, int bitrate)
+    {
+        using var salida = MediaFactory.MFCreateMediaType();
+        salida.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
+        salida.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.H264);
+        salida.Set(MediaTypeAttributeKeys.AvgBitrate, (uint)bitrate);
+        salida.Set(MediaTypeAttributeKeys.FrameSize, Pack((uint)width, (uint)height));
+        salida.Set(MediaTypeAttributeKeys.FrameRate, Pack((uint)fps, 1));
+        salida.Set(MediaTypeAttributeKeys.InterlaceMode, 2u);
+        transform.SetOutputType(0, salida, 0);
     }
 
     private static ulong Pack(uint alto, uint bajo) => ((ulong)alto << 32) | bajo;

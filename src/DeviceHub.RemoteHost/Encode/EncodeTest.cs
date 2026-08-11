@@ -148,6 +148,10 @@ public static class EncodeTest
             Console.WriteLine($"MFT outflags:  0x{encoder.OutputFlags:X}  (0x100 = reserva sus propias muestras)");
             Console.WriteLine($"MFT events:    {(encoder.Events.Count == 0 ? "ninguno" : string.Join("  ", encoder.Events.OrderBy(e => e.Key).Select(e => $"{Nombrar(e.Key)}={e.Value}")))}");
 
+            Console.WriteLine($"MFT changes:   {encoder.StreamChanges}  (renegociaciones del tipo de salida)");
+            Console.WriteLine($"MFT bufstatus: 0x{encoder.LastBufferStatus:X}   procstatus: 0x{encoder.LastProcessStatus:X}");
+            Console.WriteLine($"MFT outtype:   antes {encoder.OutputTypeBefore}  despues {encoder.OutputTypeAfter}");
+
             if (encoder.LastOutputIssue is not null)
                 Console.WriteLine($"MFT lastout:   {encoder.LastOutputIssue}");
 
