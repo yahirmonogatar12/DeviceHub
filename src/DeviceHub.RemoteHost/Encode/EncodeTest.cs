@@ -139,6 +139,18 @@ public static class EncodeTest
             Console.WriteLine($"VRAM:          {(gpu.VideoMemoryBytes() is { } v ? $"{v / 1024 / 1024} MB" : "n/d")}");
             Console.WriteLine($"RAM trace:     {string.Join(" ", trazaRam.Select(b => b / 1024 / 1024))} MB");
 
+            // Diagnostico del MFT. Sirve cuando salen 0 frames codificados: dice
+            // si el codificador pidio entrada, si acepto muestras y si devolvio
+            // algo, en vez de dejar adivinar cual de las tres fallo.
+            Console.WriteLine();
+            Console.WriteLine($"MFT submitted: {encoder.Submitted}");
+            Console.WriteLine($"MFT produced:  {encoder.Produced}");
+            Console.WriteLine($"MFT outflags:  0x{encoder.OutputFlags:X}  (0x100 = reserva sus propias muestras)");
+            Console.WriteLine($"MFT events:    {(encoder.Events.Count == 0 ? "ninguno" : string.Join("  ", encoder.Events.OrderBy(e => e.Key).Select(e => $"{Nombrar(e.Key)}={e.Value}")))}");
+
+            if (encoder.LastOutputIssue is not null)
+                Console.WriteLine($"MFT lastout:   {encoder.LastOutputIssue}");
+
             if (output is not null)
                 Console.WriteLine($"\nH.264 en {output} ({new FileInfo(output).Length / 1024 / 1024} MB). Abrelo en un reproductor.");
 
@@ -161,4 +173,14 @@ public static class EncodeTest
     }
 
     private static long Micros(long ticks) => ticks * 1_000_000L / Stopwatch.Frequency;
+
+    private static string Nombrar(int evento) => evento switch
+    {
+        601 => "NeedInput",
+        602 => "HaveOutput",
+        603 => "DrainComplete",
+        604 => "MarkerReceived",
+        605 => "InputStreamStateChanged",
+        _ => evento.ToString()
+    };
 }

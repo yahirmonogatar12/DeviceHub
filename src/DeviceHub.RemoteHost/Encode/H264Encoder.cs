@@ -83,6 +83,22 @@ public sealed class H264Encoder : IVideoEncoder
     public VideoEncoderCapabilities Capabilities { get; }
     public long Dropped { get; private set; }
 
+    /// <summary>Eventos recibidos del MFT por tipo. 601 = pide entrada,
+    /// 602 = tiene salida, 603 = drenaje terminado.</summary>
+    public Dictionary<int, long> Events { get; } = [];
+
+    /// <summary>Muestras entregadas al MFT y salidas obtenidas. Si la primera
+    /// crece y la segunda no, el codificador se esta tragando los frames.</summary>
+    public long Submitted { get; private set; }
+    public long Produced { get; private set; }
+
+    /// <summary>Banderas del stream de salida. El bit 0x100 dice si el
+    /// codificador reserva sus propias muestras o hay que darselas.</summary>
+    public uint OutputFlags { get; private set; }
+
+    /// <summary>Motivo por el que ProcessOutput no devolvio nada, si aplica.</summary>
+    public string? LastOutputIssue { get; private set; }
+
     public IReadOnlyList<EncodedFrame> Encode(VideoFrame frame, CancellationToken cancellationToken)
     {
         var salidas = new List<EncodedFrame>(1);
@@ -123,6 +139,7 @@ public sealed class H264Encoder : IVideoEncoder
         sample.SampleDuration = _frameDurationHns;
 
         _transform.ProcessInput(0, sample, 0);
+        Submitted++;
     }
 
     /// <summary>Consume los eventos que haya SIN bloquear.</summary>
@@ -150,7 +167,14 @@ public sealed class H264Encoder : IVideoEncoder
 
             using (evento)
             {
-                switch ((int)evento.EventType)
+                var tipo = (int)evento.EventType;
+
+                // Cuenta de TODO lo que llega, no solo lo que se entiende. Un
+                // encoder que produce cero frames se diagnostica mirando que
+                // eventos manda y cuales no: sin esto solo se puede adivinar.
+                Events[tipo] = 1 + Events.GetValueOrDefault(tipo);
+
+                switch (tipo)
                 {
                     case MessageNeedInput:
                         _needInput++;
@@ -168,25 +192,60 @@ public sealed class H264Encoder : IVideoEncoder
     {
         var info = _transform.GetOutputStreamInfo(0);
 
+        // 0x100 = MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.
+        //
+        // NO todos los codificadores las proveen, y darlo por hecho costo la
+        // primera prueba en planta: NVIDIA las reserva, Intel Quick Sync NO, y
+        // el codigo salia sin llamar nunca a ProcessOutput. Resultado: 121
+        // frames capturados, 0 codificados, y ni un error.
+        OutputFlags = (uint)info.Flags;
+        var proveeMuestras = (OutputFlags & 0x100) != 0;
+
         while (true)
         {
             var buffers = new OutputDataBuffer[1];
             buffers[0].StreamID = 0;
 
-            // Si el MFT no reserva sus propias muestras, hay que darselas hechas.
-            // Bandera 0x100 = MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.
-            var proveeMuestras = ((uint)info.Flags & 0x100) != 0;
+            IMFSample? propia = null;
 
             if (!proveeMuestras)
-                return; // los encoders H.264 siempre las proveen; si no, no hay ruta simple
+            {
+                // La reservamos nosotros, del tamano que pide el MFT.
+                propia = MediaFactory.MFCreateSample();
+                var buffer = MediaFactory.MFCreateMemoryBuffer((int)Math.Max(info.Size, 1));
+                propia.AddBuffer(buffer);
+                buffer.Dispose();
+
+                buffers[0].Sample = propia;
+            }
 
             var resultado = _transform.ProcessOutput(ProcessOutputFlags.None, 1, ref buffers[0], out _);
 
-            if (resultado.Failure || buffers[0].Sample is null)
-                return;
+            if (resultado.Failure)
+            {
+                // Se anota SIEMPRE el ultimo codigo, sin decidir cual es benigno:
+                // 0xC00D6D72 (NEED_MORE_INPUT) y 0x8000FFFF son lo normal al
+                // vaciar la cola en NVIDIA, pero no se en que devuelve Intel, y
+                // filtrar por lo que conozco de una GPU ocultaria justo el dato
+                // que hace falta en la otra.
+                LastOutputIssue = $"0x{resultado.Code:X8} tras {Produced} salidas";
 
-            using var muestra = buffers[0].Sample;
-            salidas.Add(Read(muestra));
+                propia?.Dispose();
+                return;
+            }
+
+            var muestra = buffers[0].Sample;
+
+            if (muestra is null)
+            {
+                propia?.Dispose();
+                return;
+            }
+
+            using (muestra)
+                salidas.Add(Read(muestra));
+
+            Produced++;
         }
     }
 
@@ -389,11 +448,19 @@ public sealed class H264Encoder : IVideoEncoder
         }
     }
 
+    /// <summary>
+    /// Lee un atributo booleano del MFT. Sin atributos, FALSE.
+    ///
+    /// Estaba escrito `transform.Attributes?.GetUInt32(key) != 0`, que con
+    /// Attributes en null da `null != 0`, es decir TRUE: un MFT sin tienda de
+    /// atributos se declaraba asincrono y entraba en el camino equivocado.
+    /// </summary>
     private static bool Flag(IMFTransform transform, Guid key)
     {
         try
         {
-            return transform.Attributes?.GetUInt32(key) != 0;
+            var atributos = transform.Attributes;
+            return atributos is not null && atributos.GetUInt32(key) != 0;
         }
         catch (SharpGenException)
         {
