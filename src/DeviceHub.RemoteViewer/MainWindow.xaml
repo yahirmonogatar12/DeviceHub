@@ -1,0 +1,15 @@
+<Window x:Class="DeviceHub.RemoteViewer.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DeviceHub - Control remoto" Height="620" Width="1000"
+        Background="#0B1F55" WindowStartupLocation="CenterScreen">
+
+    <!-- La superficie de video llega en la Fase 3: un HwndHost con swapchain
+         D3D11, no un WriteableBitmap. Por eso este Grid se queda vacio. -->
+    <Grid>
+        <TextBlock Foreground="#B6C2DC" FontFamily="Segoe UI" FontSize="13"
+                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                   TextAlignment="Center" LineHeight="22"
+                   Text="DeviceHub Remote Viewer&#x0a;&#x0a;Sin sesion. Este visor lo abre el dashboard al pulsar CONTROLAR PC." />
+    </Grid>
+</Window>

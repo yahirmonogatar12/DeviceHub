@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>DeviceHub.RemoteViewer</RootNamespace>
+    <AssemblyName>DeviceHub.RemoteViewer</AssemblyName>
+
+    <!-- Igual que el dashboard: WPF llama a XmlLanguage.GetSpecificCulture() al
+         renderizar y sin datos de cultura muere con "Cannot find non-neutral
+         culture related to 'en-us'". Directory.Build.props activa la
+         globalizacion invariante para todo el repositorio. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DeviceHub.Remote.Contracts\DeviceHub.Remote.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -52,20 +52,25 @@ No se encontro Inno Setup 6. Instalalo con:
 if (-not $SkipPublish) {
     Write-Host "Publicando componentes $Version..." -ForegroundColor Cyan
 
+    # RemoteHost va con el agente y RemoteViewer con el dashboard, en la MISMA
+    # carpeta: asi comparten los archivos del runtime en vez de duplicar .NET
+    # entero. Mismo criterio que deploy\publish.ps1.
     $proyectos = @{
-        'server'    = 'src\DeviceHub.Server'
-        'agent'     = 'src\DeviceHub.Agent'
-        'dashboard' = 'src\DeviceHub.Dashboard'
+        'server'    = @('src\DeviceHub.Server')
+        'agent'     = @('src\DeviceHub.Agent', 'src\DeviceHub.RemoteHost')
+        'dashboard' = @('src\DeviceHub.Dashboard', 'src\DeviceHub.RemoteViewer')
     }
 
     foreach ($nombre in $proyectos.Keys) {
-        Write-Host "  $nombre" -ForegroundColor DarkGray
+        foreach ($proyecto in $proyectos[$nombre]) {
+            Write-Host "  $proyecto" -ForegroundColor DarkGray
 
-        dotnet publish (Join-Path $root $proyectos[$nombre]) `
-            --configuration Release --runtime win-x64 --self-contained true `
-            -p:Version=$Version --output (Join-Path $root "artifacts\$nombre") --nologo -v q
+            dotnet publish (Join-Path $root $proyecto) `
+                --configuration Release --runtime win-x64 --self-contained true `
+                -p:Version=$Version --output (Join-Path $root "artifacts\$nombre") --nologo -v q
 
-        if ($LASTEXITCODE -ne 0) { throw "Fallo la publicacion de $nombre" }
+            if ($LASTEXITCODE -ne 0) { throw "Fallo la publicacion de $proyecto" }
+        }
     }
 }
 

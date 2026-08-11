@@ -18,24 +18,37 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Resolve-Path "$PSScriptRoot\.."
 
+# Varios proyectos por carpeta a proposito. RemoteHost acompana al agente y
+# RemoteViewer al dashboard, y publicados EN LA MISMA carpeta comparten los
+# archivos del runtime: si cada uno fuera a la suya, el instalador del agente
+# pasaria de ~80 MB a ~160 MB por duplicar .NET entero.
+#
+# De regalo, RemoteHost entra solo en el zip de actualizacion (publish-update.ps1
+# empaqueta la carpeta del agente completa) y en el instalador (el .iss copia
+# artifacts\agent\* de forma recursiva).
 $projects = @{
-    'server'    = 'src\DeviceHub.Server\DeviceHub.Server.csproj'
-    'agent'     = 'src\DeviceHub.Agent\DeviceHub.Agent.csproj'
-    'dashboard' = 'src\DeviceHub.Dashboard\DeviceHub.Dashboard.csproj'
+    'server'    = @('src\DeviceHub.Server\DeviceHub.Server.csproj')
+    'agent'     = @('src\DeviceHub.Agent\DeviceHub.Agent.csproj',
+                    'src\DeviceHub.RemoteHost\DeviceHub.RemoteHost.csproj')
+    'dashboard' = @('src\DeviceHub.Dashboard\DeviceHub.Dashboard.csproj',
+                    'src\DeviceHub.RemoteViewer\DeviceHub.RemoteViewer.csproj')
 }
 
 foreach ($name in $projects.Keys) {
     $target = Join-Path $Output $name
-    Write-Host "Publicando $name -> $target" -ForegroundColor Cyan
 
-    dotnet publish (Join-Path $root $projects[$name]) `
-        --configuration $Configuration `
-        --runtime $Runtime `
-        --self-contained $SelfContained `
-        --output $target `
-        --nologo
+    foreach ($project in $projects[$name]) {
+        Write-Host "Publicando $project -> $target" -ForegroundColor Cyan
 
-    if ($LASTEXITCODE -ne 0) { throw "Fallo la publicacion de $name" }
+        dotnet publish (Join-Path $root $project) `
+            --configuration $Configuration `
+            --runtime $Runtime `
+            --self-contained $SelfContained `
+            --output $target `
+            --nologo
+
+        if ($LASTEXITCODE -ne 0) { throw "Fallo la publicacion de $project" }
+    }
 }
 
 Write-Host ""
