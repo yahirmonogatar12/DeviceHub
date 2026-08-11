@@ -1,4 +1,5 @@
 using DeviceHub.RemoteHost.Capture;
+using DeviceHub.RemoteHost.Encode;
 
 // Host de control remoto: corre en la PC CONTROLADA, dentro de la sesion
 // interactiva del usuario (nunca en la sesion 0, donde no hay escritorio que
@@ -14,6 +15,9 @@ if (args.Contains("--displays"))
 
     return 0;
 }
+
+if (args.Contains("--encoders"))
+    return EncoderProbe.Run();
 
 if (args.Contains("--capture-test"))
     return CaptureTest.Run(Indice(args, "--adapter"), Indice(args, "--output"), Indice(args, "--seconds", 30));
