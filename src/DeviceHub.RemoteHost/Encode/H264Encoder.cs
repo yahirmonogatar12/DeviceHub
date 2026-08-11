@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using DeviceHub.RemoteHost.Capture;
 using SharpGen.Runtime;
@@ -117,6 +118,16 @@ public sealed class H264Encoder : IVideoEncoder
 
         DrainEvents(salidas);
 
+        // NO se espera al evento NeedInput. Se intento -- media duracion de frame
+        // sondeando -- para recuperar los frames que en la PC Intel se perdian
+        // por unos milisegundos, y el resultado en NVIDIA con movimiento continuo
+        // fue: 95.64 -> 46.31 FPS, p95 de 0.74 -> 26.91 ms, de 0 a 229 drops.
+        //
+        // El motivo es que las dos situaciones se parecen y no son la misma. Con
+        // el escritorio casi quieto el codificador esta libre y el evento solo va
+        // tarde; a pantalla completa esta saturado y esperarlo es tiempo tirado
+        // que ademas atrasa la captura. Sin poder distinguirlas desde aqui, la
+        // espera perjudica el caso que importa.
         if (_needInput > 0)
         {
             _converter.Convert(frame.Texture);
