@@ -68,6 +68,17 @@ if (-not $SkipPublish) {
     }
 
     foreach ($nombre in $proyectos.Keys) {
+        # Se vacia la carpeta ANTES de publicar en ella, y una sola vez para los
+        # dos proyectos que la comparten. `dotnet publish` sobreescribe lo que
+        # vuelve a generar, pero no borra lo que dejo de existir: un DLL de un
+        # proyecto renombrado se quedaria ahi y acabaria dentro del instalador,
+        # porque los .iss empaquetan la carpeta entera con comodin.
+        $destino = Join-Path $root "artifacts\$nombre"
+
+        if (Test-Path $destino) {
+            Remove-Item "$destino\*" -Recurse -Force
+        }
+
         foreach ($proyecto in $proyectos[$nombre]) {
             Write-Host "  $proyecto" -ForegroundColor DarkGray
 
