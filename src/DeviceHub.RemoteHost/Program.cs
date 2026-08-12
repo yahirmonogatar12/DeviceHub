@@ -27,6 +27,7 @@ if (args.Contains("--relay-test"))
     return await RelayTest.RunAsync(
         Texto(args, "--server") ?? "https://192.168.1.10:5443",
         Texto(args, "--session") ?? Guid.NewGuid().ToString("n"),
+        Texto(args, "--machine-id") ?? Environment.MachineName,
         Indice(args, "--adapter"), Indice(args, "--output"), Indice(args, "--seconds", 60),
         Indice(args, "--fps", 60), Indice(args, "--bitrate", 6_000_000),
         args.Contains("--allow-untrusted"));
@@ -64,6 +65,7 @@ Console.Error.WriteLine("""
     Solo --relay-test:
       --server URL       por defecto https://192.168.1.10:5443
       --session ID       identificador de la sesion; se comparte con el viewer
+      --machine-id ID    el machine_id de DeviceHub al que se ato el ticket
       --allow-untrusted  no valida el certificado (solo para probar)
 
     El ticket NO se pasa por linea de comandos ni aqui ni nunca: los argumentos

@@ -21,7 +21,7 @@ namespace DeviceHub.RemoteHost.Relay;
 public static class RelayTest
 {
     public static async Task<int> RunAsync(
-        string servidor, string sesionId, int adapterIndex, int outputIndex,
+        string servidor, string sesionId, string machineId, int adapterIndex, int outputIndex,
         int seconds, int fps, int bitrate, bool permitirSinConfianza)
     {
         // El ticket llega por stdin, nunca por argumento. Se usa una vez y se
@@ -58,7 +58,15 @@ public static class RelayTest
                 Hello = new Hello
                 {
                     Role = RemoteRole.Host,
-                    MachineId = Environment.MachineName,
+                    // El identificador de DEVICEHUB, no el hostname de Windows.
+                    // El ticket se ata a este, y son cosas distintas: mandar el
+                    // nombre de la maquina hacia que todo saliera rechazado por
+                    // WrongMachine sin que el mensaje dijera por que.
+                    //
+                    // No es un secreto, asi que puede viajar por argumento. En la
+                    // Fase 7 lo entrega el agente junto con el ticket por el
+                    // named pipe, que ya lo conoce.
+                    MachineId = machineId,
 
                     Ticket = ticket,
                     Capabilities = new RemoteCapabilities

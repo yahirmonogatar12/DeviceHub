@@ -26,16 +26,21 @@ public partial class RelayWindow : Window
 {
     private readonly string _servidor;
     private readonly string _sesion;
+
+    /// <summary>El identificador al que se ato el ticket. No es el hostname de
+    /// Windows, y confundirlos hace que todo salga rechazado por WrongMachine.</summary>
+    private readonly string _machineId;
     private readonly bool _permitirSinConfianza;
 
     private readonly CancellationTokenSource _cancelacion = new();
 
-    public RelayWindow(string servidor, string sesion, bool permitirSinConfianza)
+    public RelayWindow(string servidor, string sesion, string machineId, bool permitirSinConfianza)
     {
         InitializeComponent();
 
         _servidor = servidor;
         _sesion = sesion;
+        _machineId = machineId;
         _permitirSinConfianza = permitirSinConfianza;
 
         Title = $"DeviceHub - sesion {sesion}";
@@ -141,7 +146,7 @@ public partial class RelayWindow : Window
             Hello = new Hello
             {
                 Role = RemoteRole.Viewer,
-                MachineId = Environment.MachineName,
+                MachineId = _machineId,
 
                 // Exclusivos: arranque con ticket, reconexion con token. Mandar
                 // los dos es un error de protocolo y el relay lo rechaza.

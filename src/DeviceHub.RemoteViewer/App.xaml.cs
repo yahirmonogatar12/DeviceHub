@@ -23,6 +23,7 @@ public partial class App : Application
             new RelayWindow(
                 Texto(e.Args, "--server") ?? "https://192.168.1.10:5443",
                 Texto(e.Args, "--session") ?? string.Empty,
+                Texto(e.Args, "--machine-id") ?? Environment.MachineName,
                 e.Args.Contains("--allow-untrusted")).Show();
 
             return;
