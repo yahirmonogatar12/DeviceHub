@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Net.Security;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using DeviceHub.Remote.Contracts;
 using DeviceHub.RemoteHost.Capture;
 using DeviceHub.RemoteHost.Encode;
@@ -8,26 +11,57 @@ using Vortice.MediaFoundation;
 
 namespace DeviceHub.RemoteHost.Relay;
 
+/// <summary>Lo que hace falta para sostener una sesion contra el relay.</summary>
+public sealed record RelayOptions
+{
+    public required string Servidor { get; init; }
+    public required string SesionId { get; init; }
+
+    /// <summary>El identificador de DEVICEHUB, no el hostname de Windows. El
+    /// ticket se ata a este, y son cosas distintas: mandar el nombre de la
+    /// maquina hacia que todo saliera rechazado por WrongMachine sin que el
+    /// mensaje dijera por que.</summary>
+    public required string MachineId { get; init; }
+
+    /// <summary>Null = se lee de stdin. En produccion lo entrega el agente por
+    /// el named pipe; nunca llega por linea de comandos.</summary>
+    public string? Ticket { get; init; }
+
+    /// <summary>Pines SPKI del servidor. Vacio = validacion normal de TLS.</summary>
+    public IReadOnlyList<string> PinnedKeys { get; init; } = [];
+
+    public bool AllowUntrusted { get; init; }
+
+    public int Adapter { get; init; }
+    public int Output { get; init; }
+
+    /// <summary>Cero o menos = hasta que alguien la corte, que es como corre una
+    /// sesion de verdad.</summary>
+    public int Seconds { get; init; }
+
+    public int Fps { get; init; } = 60;
+    public int Bitrate { get; init; } = 6_000_000;
+
+    /// <summary>A donde va el progreso. En --relay-test, a la consola; lanzado
+    /// por el agente, al named pipe, porque el proceso no tiene consola.</summary>
+    public Action<string> Escribir { get; init; } = Console.WriteLine;
+}
+
 /// <summary>
-/// Modo --relay-test: la cadena de las Fases 1 y 2, pero con la salida enchufada
-/// al relay en vez de a un archivo.
+/// La cadena de las Fases 1 y 2 con la salida enchufada al relay:
 ///
 ///   DXGI -> H264 -> VideoFrameChunks -> RemoteRelayService.HostChannel
 ///
-/// Es un modo de DIAGNOSTICO. En produccion a este proceso lo lanza el agente
-/// dentro de la sesion interactiva y le pasa la sesion y el ticket por un named
-/// pipe: eso es la Fase 7, y el ticket nunca viaja por linea de comandos.
+/// Corre en la PC CONTROLADA. En produccion la lanza el agente dentro de la
+/// sesion interactiva (Fase 7); --relay-test es la misma cadena a mano.
 /// </summary>
-public static class RelayTest
+public static class RelaySession
 {
-    public static async Task<int> RunAsync(
-        string servidor, string sesionId, string machineId, int adapterIndex, int outputIndex,
-        int seconds, int fps, int bitrate, bool permitirSinConfianza)
+    public static async Task<int> RunAsync(RelayOptions opciones, CancellationToken cancellationToken)
     {
-        // El ticket llega por stdin, nunca por argumento. Se usa una vez y se
-        // suelta: a partir del HelloAccepted quien sostiene la sesion es el
-        // token de reconexion, que vive solo en memoria.
-        var ticket = BootstrapTicket.Read();
+        // El ticket se usa una vez y se suelta: a partir del HelloAccepted quien
+        // sostiene la sesion es el token de reconexion, que vive solo en memoria.
+        var ticket = opciones.Ticket ?? BootstrapTicket.Read();
 
         if (ticket is null)
         {
@@ -46,7 +80,7 @@ public static class RelayTest
 
         try
         {
-            using var canal = Conectar(servidor, permitirSinConfianza);
+            using var canal = Conectar(opciones);
             var cliente = new RemoteRelayService.RemoteRelayServiceClient(canal);
 
             using var llamada = cliente.HostChannel();
@@ -54,20 +88,11 @@ public static class RelayTest
             await EscribirAsync(llamada, new RemotePacket
             {
                 ProtocolVersion = RemoteSessionProtocol.Version,
-                SessionId = sesionId,
+                SessionId = opciones.SesionId,
                 Hello = new Hello
                 {
+                    MachineId = opciones.MachineId,
                     Role = RemoteRole.Host,
-                    // El identificador de DEVICEHUB, no el hostname de Windows.
-                    // El ticket se ata a este, y son cosas distintas: mandar el
-                    // nombre de la maquina hacia que todo saliera rechazado por
-                    // WrongMachine sin que el mensaje dijera por que.
-                    //
-                    // No es un secreto, asi que puede viajar por argumento. En la
-                    // Fase 7 lo entrega el agente junto con el ticket por el
-                    // named pipe, que ya lo conoce.
-                    MachineId = machineId,
-
                     Ticket = ticket,
                     Capabilities = new RemoteCapabilities
                     {
@@ -79,17 +104,16 @@ public static class RelayTest
                 }
             }, CancellationToken.None);
 
-            using var cancelacion = new CancellationTokenSource();
-            var entrante = LeerAsync(llamada, sesionId, cancelacion.Token);
+            using var cancelacion = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var entrante = LeerAsync(llamada, opciones, cancelacion);
 
-            var codigo = await EmitirAsync(
-                llamada, sesionId, adapterIndex, outputIndex, seconds, fps, bitrate, cancelacion.Token);
+            var codigo = await EmitirAsync(llamada, opciones, cancelacion.Token);
 
             await EscribirAsync(llamada, new RemotePacket
             {
                 ProtocolVersion = RemoteSessionProtocol.Version,
-                SessionId = sesionId,
-                Close = new SessionClose { Reason = SessionCloseReason.Normal, Detail = "fin de --relay-test" }
+                SessionId = opciones.SesionId,
+                Close = new SessionClose { Reason = SessionCloseReason.Normal, Detail = "fin de la sesion" }
             }, CancellationToken.None);
 
             await llamada.RequestStream.CompleteAsync();
@@ -148,8 +172,7 @@ public static class RelayTest
     /// sin explicar: DXGI, D3D11 y el MFT quieren UN hilo, y hay que darselo.
     /// </summary>
     private static async Task<int> EmitirAsync(
-        AsyncDuplexStreamingCall<RemotePacket, RemotePacket> llamada,
-        string sesionId, int adapterIndex, int outputIndex, int seconds, int fps, int bitrate,
+        AsyncDuplexStreamingCall<RemotePacket, RemotePacket> llamada, RelayOptions opciones,
         CancellationToken cancellationToken)
     {
         // Acotada y CON ESPERA, no con descarte: tirar un frame ya codificado
@@ -166,8 +189,7 @@ public static class RelayTest
 
         var cuenta = new Contadores();
 
-        var hilo = new Thread(() => Capturar(
-            cola.Writer, cuenta, sesionId, adapterIndex, outputIndex, seconds, fps, bitrate, cancellationToken))
+        var hilo = new Thread(() => Capturar(cola.Writer, cuenta, opciones, cancellationToken))
         {
             IsBackground = true,
             Name = "devicehub-captura"
@@ -178,47 +200,54 @@ public static class RelayTest
         var reloj = Stopwatch.StartNew();
         var siguienteAviso = TimeSpan.FromSeconds(2);
 
-        await foreach (var pieza in cola.Reader.ReadAllAsync(cancellationToken))
+        try
         {
-            if (pieza.Config is not null)
+            await foreach (var pieza in cola.Reader.ReadAllAsync(cancellationToken))
             {
-                await EscribirAsync(llamada, new RemotePacket
-                {
-                    ProtocolVersion = RemoteSessionProtocol.Version,
-                    SessionId = sesionId,
-                    VideoConfig = pieza.Config
-                }, cancellationToken);
-            }
-
-            if (pieza.Grupo is not null)
-            {
-                foreach (var trozo in pieza.Grupo.Chunks)
+                if (pieza.Config is not null)
                 {
                     await EscribirAsync(llamada, new RemotePacket
                     {
                         ProtocolVersion = RemoteSessionProtocol.Version,
-                        SessionId = sesionId,
-                        VideoChunk = trozo
+                        SessionId = opciones.SesionId,
+                        VideoConfig = pieza.Config
                     }, cancellationToken);
-
-                    cuenta.Trozos++;
                 }
 
-                cuenta.Enviados++;
-                cuenta.Bytes += pieza.Grupo.PayloadBytes;
-            }
+                if (pieza.Grupo is not null)
+                {
+                    foreach (var trozo in pieza.Grupo.Chunks)
+                    {
+                        await EscribirAsync(llamada, new RemotePacket
+                        {
+                            ProtocolVersion = RemoteSessionProtocol.Version,
+                            SessionId = opciones.SesionId,
+                            VideoChunk = trozo
+                        }, cancellationToken);
 
-            if (reloj.Elapsed >= siguienteAviso)
-            {
-                Console.WriteLine(
-                    $"{reloj.Elapsed:mm\\:ss}  capturados {cuenta.Capturados}  codificados {cuenta.Codificados}  " +
-                    $"frames enviados {cuenta.Enviados}  chunks {cuenta.Trozos}  " +
-                    $"{cuenta.Bytes * 8 / reloj.Elapsed.TotalSeconds / 1_000_000:0.00} Mbps  " +
-                    $"keyframes {cuenta.Claves}  config {cuenta.ConfigVersion}  cola {cola.Reader.Count}");
+                        cuenta.Trozos++;
+                    }
 
-                Console.Out.Flush();
-                siguienteAviso += TimeSpan.FromSeconds(2);
+                    cuenta.Enviados++;
+                    cuenta.Bytes += pieza.Grupo.PayloadBytes;
+                }
+
+                if (reloj.Elapsed >= siguienteAviso)
+                {
+                    opciones.Escribir(
+                        $"{reloj.Elapsed:mm\\:ss}  capturados {cuenta.Capturados}  codificados {cuenta.Codificados}  " +
+                        $"frames enviados {cuenta.Enviados}  chunks {cuenta.Trozos}  " +
+                        $"{cuenta.Bytes * 8 / reloj.Elapsed.TotalSeconds / 1_000_000:0.00} Mbps  " +
+                        $"keyframes {cuenta.Claves}  config {cuenta.ConfigVersion}  cola {cola.Reader.Count}");
+
+                    siguienteAviso += TimeSpan.FromSeconds(2);
+                }
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // La sesion se corto: el relay la cerro o el agente mando STOP. Se
+            // sale a informar, no a propagar.
         }
 
         hilo.Join(TimeSpan.FromSeconds(3));
@@ -228,16 +257,11 @@ public static class RelayTest
 
         var segundos = Math.Max(reloj.Elapsed.TotalSeconds, 0.001);
 
-        Console.WriteLine();
-        Console.WriteLine($"Captured:      {cuenta.Capturados}");
-        Console.WriteLine($"Encoded:       {cuenta.Codificados}");
-        Console.WriteLine($"Frames sent:   {cuenta.Enviados}");
-        Console.WriteLine($"Chunks sent:   {cuenta.Trozos}");
-        Console.WriteLine($"Mbps:          {cuenta.Bytes * 8 / segundos / 1_000_000:0.00}");
-        Console.WriteLine($"Keyframes:     {cuenta.Claves}");
-        Console.WriteLine($"Config:        v{cuenta.ConfigVersion}");
-        Console.WriteLine($"Encode drops:  {cuenta.DescartesEncoder}  (captura {cuenta.DescartesCaptura})");
-        Console.Out.Flush();
+        opciones.Escribir(
+            $"Captured {cuenta.Capturados}  Encoded {cuenta.Codificados}  Frames sent {cuenta.Enviados}  " +
+            $"Chunks {cuenta.Trozos}  {cuenta.Bytes * 8 / segundos / 1_000_000:0.00} Mbps  " +
+            $"Keyframes {cuenta.Claves}  Config v{cuenta.ConfigVersion}  " +
+            $"Encode drops {cuenta.DescartesEncoder} (captura {cuenta.DescartesCaptura})");
 
         return cuenta.Enviados > 0 ? 0 : 5;
     }
@@ -251,26 +275,22 @@ public static class RelayTest
     /// </summary>
     private static void Capturar(
         System.Threading.Channels.ChannelWriter<Enviable> salida, Contadores cuenta,
-        string sesionId, int adapterIndex, int outputIndex, int seconds, int fps, int bitrate,
-        CancellationToken cancellationToken)
+        RelayOptions opciones, CancellationToken cancellationToken)
     {
         try
         {
-            using var captura = new DxgiDesktopCapture(adapterIndex, outputIndex);
+            using var captura = new DxgiDesktopCapture(opciones.Adapter, opciones.Output);
             using var codificador = new H264Encoder(
-                captura.Device, captura.Width, captura.Height, fps, bitrate,
+                captura.Device, captura.Width, captura.Height, opciones.Fps, opciones.Bitrate,
                 captura.AdapterLuid, captura.AdapterVendorId);
 
-            Console.WriteLine($"Sesion:        {sesionId}");
-            Console.WriteLine($"Adapter:       {captura.Adapter}");
-            Console.WriteLine($"MFT:           {codificador.Capabilities.Name}");
-            Console.WriteLine($"Hardware:      {(codificador.Capabilities.Hardware ? "TRUE" : "FALSE")}");
-            Console.WriteLine($"Resolution:    {captura.Width}x{captura.Height}");
-            Console.WriteLine();
-            Console.Out.Flush();
+            opciones.Escribir(
+                $"Sesion {opciones.SesionId}  Adapter {captura.Adapter}  MFT {codificador.Capabilities.Name}  " +
+                $"Hardware {(codificador.Capabilities.Hardware ? "TRUE" : "FALSE")}  " +
+                $"Resolution {captura.Width}x{captura.Height}");
 
             var reloj = Stopwatch.StartNew();
-            var duracion = TimeSpan.FromSeconds(seconds);
+            var duracion = opciones.Seconds > 0 ? TimeSpan.FromSeconds(opciones.Seconds) : TimeSpan.MaxValue;
 
             while (reloj.Elapsed < duracion && !cancellationToken.IsCancellationRequested)
             {
@@ -316,8 +336,8 @@ public static class RelayTest
                             Codec = VideoCodec.H264,
                             Width = (uint)frameCodificado.Width,
                             Height = (uint)frameCodificado.Height,
-                            FramesPerSecond = (uint)fps,
-                            BitrateBitsPerSecond = (uint)bitrate,
+                            FramesPerSecond = (uint)opciones.Fps,
+                            BitrateBitsPerSecond = (uint)opciones.Bitrate,
                             ParameterSets = Google.Protobuf.ByteString.CopyFrom(parametros),
                             VisibleWidth = (uint)frameCodificado.Width,
                             VisibleHeight = (uint)frameCodificado.Height
@@ -379,15 +399,21 @@ public static class RelayTest
         }
     }
 
-    /// <summary>Lo que manda el relay de vuelta. En la Fase 5 solo interesa
-    /// responder al Ping y enterarse de que la sesion se cerro.</summary>
+    /// <summary>
+    /// Lo que manda el relay de vuelta.
+    ///
+    /// Que un SessionClose CORTE la captura es media Fase 7: el host no puede
+    /// quedarse codificando la pantalla de alguien despues de que su sesion
+    /// termine. La otra media es que el proceso muera cuando el stream se rompe,
+    /// y de eso se encarga el bucle de fuera al ver que la lectura acabo.
+    /// </summary>
     private static async Task LeerAsync(
-        AsyncDuplexStreamingCall<RemotePacket, RemotePacket> llamada, string sesionId,
-        CancellationToken cancellationToken)
+        AsyncDuplexStreamingCall<RemotePacket, RemotePacket> llamada, RelayOptions opciones,
+        CancellationTokenSource cancelacion)
     {
         try
         {
-            while (await llamada.ResponseStream.MoveNext(cancellationToken))
+            while (await llamada.ResponseStream.MoveNext(cancelacion.Token))
             {
                 var paquete = llamada.ResponseStream.Current;
 
@@ -400,18 +426,19 @@ public static class RelayTest
                         await EscribirAsync(llamada, new RemotePacket
                         {
                             ProtocolVersion = RemoteSessionProtocol.Version,
-                            SessionId = sesionId,
+                            SessionId = opciones.SesionId,
                             Pong = new Pong { SentAtUs = paquete.Ping.SentAtUs }
-                        }, cancellationToken);
+                        }, cancelacion.Token);
 
                         break;
 
                     case RemotePacket.PayloadOneofCase.Close:
-                        Console.WriteLine($"\nEl relay cerro la sesion: {paquete.Close.Reason} {paquete.Close.Detail}");
-                        break;
+                        opciones.Escribir($"El relay cerro la sesion: {paquete.Close.Reason} {paquete.Close.Detail}");
+                        await cancelacion.CancelAsync();
+                        return;
 
                     case RemotePacket.PayloadOneofCase.Error:
-                        Console.Error.WriteLine($"\nRelay: {paquete.Error.Code} {paquete.Error.Detail}");
+                        opciones.Escribir($"Relay: {paquete.Error.Code} {paquete.Error.Detail}");
                         break;
 
                     case RemotePacket.PayloadOneofCase.HelloAccepted:
@@ -420,8 +447,8 @@ public static class RelayTest
                         // microcorte sin gastar un ticket nuevo.
                         _tokenReconexion = paquete.HelloAccepted.ReconnectToken;
 
-                        Console.WriteLine(
-                            $"Sesion autenticada. Reconexion admitida hasta " +
+                        opciones.Escribir(
+                            "Sesion autenticada. Reconexion admitida hasta " +
                             $"{DateTimeOffset.FromUnixTimeMilliseconds(paquete.HelloAccepted.ReconnectUntilUs / 1000):HH:mm:ss}.");
 
                         break;
@@ -429,37 +456,66 @@ public static class RelayTest
                     case RemotePacket.PayloadOneofCase.KeyframeRequest:
                         // La Fase 13 forzara un IDR con ICodecAPI. Aqui basta con
                         // el que el codificador genera por su cuenta.
-                        Console.WriteLine("\nEl viewer pidio un keyframe.");
+                        opciones.Escribir("El viewer pidio un keyframe.");
                         break;
                 }
             }
+
+            // El stream se acabo sin Close: el servidor se cayo o la red murio.
+            // Tampoco aqui se sigue capturando.
+            await cancelacion.CancelAsync();
         }
         catch (OperationCanceledException)
         {
         }
         catch (RpcException)
         {
+            await cancelacion.CancelAsync();
         }
     }
 
-    internal static GrpcChannel Conectar(string servidor, bool permitirSinConfianza)
+    internal static GrpcChannel Conectar(RelayOptions opciones)
     {
-        var opciones = new GrpcChannelOptions();
+        var canal = new GrpcChannelOptions();
 
-        if (permitirSinConfianza)
+        if (opciones.AllowUntrusted)
         {
-            // SOLO para el checkpoint de la Fase 5, y hay que pedirlo a mano. El
-            // servidor usa un certificado autofirmado que todavia no se puede
-            // fijar desde aqui; la Fase 17 lo sustituye por el mismo pin de clave
-            // publica que ya usa el agente.
+            // Escotilla de laboratorio, y hay que pedirla a mano.
             Console.Error.WriteLine("AVISO: no se valida el certificado del servidor (--allow-untrusted).");
 
-            opciones.HttpHandler = new HttpClientHandler
+            canal.HttpHandler = new HttpClientHandler
             {
                 ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
             };
         }
+        else if (opciones.PinnedKeys.Count > 0)
+        {
+            // Los mismos pines SPKI que usa el agente, que se los pasa por el
+            // named pipe. Contra un certificado autofirmado la cadena de CA no
+            // dice nada y el pin lo dice todo.
+            var pines = opciones.PinnedKeys.ToHashSet(StringComparer.Ordinal);
 
-        return GrpcChannel.ForAddress(servidor, opciones);
+            canal.HttpHandler = new SocketsHttpHandler
+            {
+                EnableMultipleHttp2Connections = true,
+                SslOptions = new SslClientAuthenticationOptions
+                {
+                    RemoteCertificateValidationCallback = (_, certificado, _, _) => Fijado(certificado, pines)
+                }
+            };
+        }
+
+        return GrpcChannel.ForAddress(opciones.Servidor, canal);
+    }
+
+    private static bool Fijado(X509Certificate? certificado, HashSet<string> pines)
+    {
+        if (certificado is null)
+            return false;
+
+        using var cert = X509CertificateLoader.LoadCertificate(certificado.GetRawCertData());
+
+        return pines.Contains(Convert.ToBase64String(
+            SHA256.HashData(cert.PublicKey.ExportSubjectPublicKeyInfo())));
     }
 }

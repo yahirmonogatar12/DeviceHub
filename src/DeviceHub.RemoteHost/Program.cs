@@ -23,14 +23,29 @@ if (args.Contains("--encoders"))
 if (args.Contains("--capture-test"))
     return CaptureTest.Run(Indice(args, "--adapter"), Indice(args, "--output"), Indice(args, "--seconds", 30));
 
+// El modo de produccion (Fase 7). Lo unico que llega por argumento es el nombre
+// del pipe, que no abre nada por si solo: la sesion y el ticket vienen por
+// dentro, y ese pipe tiene la ACL restringida al SID de este usuario.
+if (Texto(args, "--pipe") is { } tuberia)
+{
+    return await HostSession.RunAsync(
+        tuberia, Indice(args, "--adapter"), Indice(args, "--output"),
+        Indice(args, "--fps", 60), Indice(args, "--bitrate", 6_000_000));
+}
+
 if (args.Contains("--relay-test"))
-    return await RelayTest.RunAsync(
-        Texto(args, "--server") ?? "https://192.168.1.10:5443",
-        Texto(args, "--session") ?? Guid.NewGuid().ToString("n"),
-        Texto(args, "--machine-id") ?? Environment.MachineName,
-        Indice(args, "--adapter"), Indice(args, "--output"), Indice(args, "--seconds", 60),
-        Indice(args, "--fps", 60), Indice(args, "--bitrate", 6_000_000),
-        args.Contains("--allow-untrusted"));
+    return await RelaySession.RunAsync(new RelayOptions
+    {
+        Servidor = Texto(args, "--server") ?? "https://192.168.1.10:5443",
+        SesionId = Texto(args, "--session") ?? Guid.NewGuid().ToString("n"),
+        MachineId = Texto(args, "--machine-id") ?? Environment.MachineName,
+        Adapter = Indice(args, "--adapter"),
+        Output = Indice(args, "--output"),
+        Seconds = Indice(args, "--seconds", 60),
+        Fps = Indice(args, "--fps", 60),
+        Bitrate = Indice(args, "--bitrate", 6_000_000),
+        AllowUntrusted = args.Contains("--allow-untrusted")
+    }, CancellationToken.None);
 
 if (args.Contains("--encode-test"))
     return EncodeTest.Run(
@@ -43,6 +58,9 @@ Console.Error.WriteLine("""
 
     No se ejecuta a mano: lo lanza el agente en la sesion del usuario con el
     nombre de un named pipe por el que recibe la sesion y su ticket.
+
+    Modo de produccion:
+      --pipe NOMBRE                 lo pone el agente; todo lo demas va dentro
 
     Modos de diagnostico:
       --displays                    lista GPUs y pantallas

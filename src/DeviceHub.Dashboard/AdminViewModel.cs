@@ -212,9 +212,13 @@ public sealed partial class MainViewModel
             await proceso.StandardInput.FlushAsync();
             proceso.StandardInput.Close();
 
-            CommandFeedback =
-                $"Sesion {tickets.SessionId[..8]} abierta sobre {SelectedMachine.MachineCode}. " +
-                "Falta que el host arranque en esa PC (Fase 7).";
+            // Que el agente este conectado no es un detalle: si no lo esta, el
+            // ticket es valido pero no hay nadie que arranque el host y el visor
+            // se queda en negro sin decir por que.
+            CommandFeedback = tickets.HostNotified
+                ? $"Sesion {tickets.SessionId[..8]} abierta sobre {SelectedMachine.MachineCode}."
+                : $"Sesion {tickets.SessionId[..8]} autorizada, pero el agente de " +
+                  $"{SelectedMachine.MachineCode} no esta conectado y nadie va a arrancar el host.";
         }
         catch (Exception ex)
         {

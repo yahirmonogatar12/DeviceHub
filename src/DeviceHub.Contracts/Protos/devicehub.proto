@@ -225,7 +225,29 @@ message ServerMessage {
   oneof payload {
     ConfigUpdate config = 1;
     CommandRequest command = 2;
+    RemoteHostControl remote_host = 3;
   }
+}
+
+// Fase 7. Orden del servidor al AGENTE, no protocolo de medios: por eso vive
+// aqui y no en remote.proto. El agente lanza DeviceHub.RemoteHost dentro de la
+// sesion interactiva, que es la unica donde hay un escritorio que capturar.
+message RemoteHostControl {
+  enum Action {
+    ACTION_UNSPECIFIED = 0;
+    START = 1;
+    STOP = 2;
+  }
+
+  Action action = 1;
+  string session_id = 2;
+
+  // Secreto. Viaja por este stream, que ya esta autenticado y con el
+  // certificado fijado, y de ahi al host por un named pipe con ACL restringida
+  // al SID del usuario. Nunca por linea de comandos y nunca a un log.
+  string host_ticket = 3;
+
+  int64 expires_at_us = 4;
 }
 
 message ConfigUpdate {
@@ -385,6 +407,12 @@ message IssueRemoteTicketsResponse {
   string host_ticket = 2;
   string viewer_ticket = 3;
   int64 expires_at_us = 4;
+
+  // Fase 7: si el agente de esa PC estaba conectado y recibio la orden de
+  // arrancar el host. Falso no es un error del ticket -- el ticket es valido y
+  // caduca igual -- pero el tecnico tiene que saber que nadie va a conectarse
+  // del otro lado.
+  bool host_notified = 5;
 }
 
 message RemoteSessionReply {

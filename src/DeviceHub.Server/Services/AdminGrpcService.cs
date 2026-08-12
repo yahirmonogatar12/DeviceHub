@@ -285,20 +285,40 @@ public sealed class AdminGrpcService(
             string.IsNullOrWhiteSpace(request.ViewerMachineId) ? tecnico : request.ViewerMachineId,
             tecnico);
 
+        // Fase 7: se le ordena al agente de esa PC que arranque el host en la
+        // sesion interactiva. El ticket viaja por el stream del agente, que ya
+        // esta autenticado y con el certificado fijado, y de ahi a un named pipe
+        // con ACL. Nunca por linea de comandos.
+        //
+        // Si la PC esta offline el ticket sigue siendo valido y caduca solo: el
+        // tecnico se entera por host_notified, no por un error de autorizacion
+        // que no lo es.
+        var avisado = registry.TryPush(maquina.Id, new ServerMessage
+        {
+            RemoteHost = new RemoteHostControl
+            {
+                Action = RemoteHostControl.Types.Action.Start,
+                SessionId = sessionId,
+                HostTicket = hostTicket,
+                ExpiresAtUs = host.ExpiresAt.ToUnixTimeMilliseconds() * 1000
+            }
+        });
+
         await audit.WriteAsync(BuildAudit(
             context, AuditActions.RemoteRequested, maquina, AuditEntry.Allowed,
-            $"sesion {sessionId} vence {host.ExpiresAt:O}"), ct);
+            $"sesion {sessionId} vence {host.ExpiresAt:O} host={(avisado ? "avisado" : "sin agente")}"), ct);
 
         logger.LogInformation(
-            "{Tecnico} autorizo la sesion remota {Sesion} sobre {MachineId}",
-            tecnico, sessionId, maquina.Id);
+            "{Tecnico} autorizo la sesion remota {Sesion} sobre {MachineId} (agente {Estado})",
+            tecnico, sessionId, maquina.Id, avisado ? "avisado" : "desconectado");
 
         return new IssueRemoteTicketsResponse
         {
             SessionId = sessionId,
             HostTicket = hostTicket,
             ViewerTicket = viewerTicket,
-            ExpiresAtUs = host.ExpiresAt.ToUnixTimeMilliseconds() * 1000
+            ExpiresAtUs = host.ExpiresAt.ToUnixTimeMilliseconds() * 1000,
+            HostNotified = avisado
         };
     }
 

@@ -8,6 +8,7 @@ using DeviceHub.Agent.Remote;
 using DeviceHub.Agent.Security;
 using DeviceHub.Agent.Updater;
 using DeviceHub.Contracts;
+using DeviceHub.Remote.Contracts;
 using Grpc.Core;
 using Grpc.Net.Client;
 
@@ -19,6 +20,7 @@ public sealed class Worker(
     PinnedChannelFactory channelFactory,
     CommandRunner runner,
     IRemoteAgentDetector remoteDetector,
+    InteractiveSessionLauncher hostLauncher,
     UpdateService updates,
     ILogger<Worker> logger) : BackgroundService
 {
@@ -315,6 +317,12 @@ public sealed class Worker(
                 continue;
             }
 
+            if (message.PayloadCase == ServerMessage.PayloadOneofCase.RemoteHost)
+            {
+                await HandleRemoteHostAsync(message.RemoteHost, ct);
+                continue;
+            }
+
             if (message.PayloadCase != ServerMessage.PayloadOneofCase.Config)
                 continue;
 
@@ -372,6 +380,46 @@ public sealed class Worker(
         // proceso muriera en medio, el comando se ejecutaria dos veces.
         _commands.Record(result);
         await outbound.WriteAsync(new AgentMessage { CommandResult = result }, ct);
+    }
+
+    /// <summary>
+    /// Fase 7. El servidor pide arrancar el host de control remoto en la sesion
+    /// interactiva.
+    ///
+    /// Ni el ticket ni la direccion se registran en el log: la direccion es la
+    /// del propio agente y el ticket es la credencial que da acceso a la
+    /// pantalla. Del ticket solo se sabe que llego.
+    /// </summary>
+    private async Task HandleRemoteHostAsync(RemoteHostControl control, CancellationToken ct)
+    {
+        if (control.Action == RemoteHostControl.Types.Action.Stop)
+        {
+            hostLauncher.Stop($"lo pidio el servidor (sesion {control.SessionId})");
+            return;
+        }
+
+        if (control.Action != RemoteHostControl.Types.Action.Start)
+            return;
+
+        if (string.IsNullOrWhiteSpace(control.SessionId) || string.IsNullOrWhiteSpace(control.HostTicket))
+        {
+            logger.LogWarning("Orden de arranque remoto incompleta; se ignora");
+            return;
+        }
+
+        await hostLauncher.StartAsync(new RemoteHostHandshake
+        {
+            SessionId = control.SessionId,
+            Ticket = control.HostTicket,
+            ServerAddress = _options.ServerAddress,
+            MachineId = _identity.MachineId,
+
+            // El host valida el certificado del relay con los MISMOS pines que
+            // el agente. Son dos canales gRPC distintos contra el mismo
+            // servidor: no hay razon para que uno confie menos que el otro.
+            PinnedKeys = [.. _identity.PinnedKeys],
+            AllowUntrusted = _options.RemoteAllowUntrusted
+        }, ct);
     }
 
     private Heartbeat BuildHeartbeat()
