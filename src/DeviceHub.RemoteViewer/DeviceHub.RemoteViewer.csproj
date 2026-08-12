@@ -15,6 +15,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\DeviceHub.Contracts\DeviceHub.Contracts.csproj" />
     <ProjectReference Include="..\DeviceHub.Remote.Contracts\DeviceHub.Remote.Contracts.csproj" />
   </ItemGroup>
 
