@@ -99,6 +99,12 @@ public sealed class VideoFrameCollector
     private bool _algunoCompleto;
     private int _recibidos;
 
+    // Los metadatos que TIENEN que repetirse en todos los chunks del frame. Se
+    // fijan con el primero que llega y a partir de ahi son la referencia.
+    private bool _claveEsperada;
+    private uint _configEsperada;
+    private long _tiempoEsperado;
+
     /// <summary>Frames abandonados por incompletos.</summary>
     public long Dropped { get; private set; }
 
@@ -153,6 +159,10 @@ public sealed class VideoFrameCollector
             _piezas = new VideoChunk?[chunk.ChunkCount];
             _recibidos = 0;
             _hayFrame = true;
+
+            _claveEsperada = chunk.KeyFrame;
+            _configEsperada = chunk.ConfigVersion;
+            _tiempoEsperado = chunk.CaptureTimestampUs;
         }
 
         if (chunk.ChunkCount != _piezas.Length)
@@ -160,6 +170,20 @@ public sealed class VideoFrameCollector
             Rechazar($"chunk_count {chunk.ChunkCount} no coincide con {_piezas.Length} del frame {chunk.FrameId}");
             return false;
         }
+
+        // Los trozos de un frame describen EL MISMO frame. Comprobar solo
+        // chunk_count no basta: el frame se ensamblaba igual y se quedaba con los
+        // metadatos del chunk que lo cerraba, asi que un keyframe podia entregarse
+        // como P-frame, o al reves. Lo segundo es peor -- el receptor cree tener
+        // un punto de recuperacion que no existe.
+        if (chunk.KeyFrame != _claveEsperada)
+            return Rechazar($"key_frame {chunk.KeyFrame} contra {_claveEsperada} en el frame {chunk.FrameId}");
+
+        if (chunk.ConfigVersion != _configEsperada)
+            return Rechazar($"config_version {chunk.ConfigVersion} contra {_configEsperada} en el frame {chunk.FrameId}");
+
+        if (chunk.CaptureTimestampUs != _tiempoEsperado)
+            return Rechazar($"timestamp {chunk.CaptureTimestampUs} contra {_tiempoEsperado} en el frame {chunk.FrameId}");
 
         if (_piezas[chunk.ChunkIndex] is not null)
             return false;   // repetido: ni se cuenta dos veces ni es un error
@@ -177,9 +201,13 @@ public sealed class VideoFrameCollector
 
         LastGoodFrameId = chunk.FrameId;
         _algunoCompleto = true;
-        Reiniciar();
 
-        frame = new VideoFrameChunks(chunk.FrameId, chunk.KeyFrame, chunk.ConfigVersion, trozos);
+        // De los valores esperados y no de `chunk`, que es simplemente el ultimo
+        // que llego. Con la comprobacion de arriba son los mismos, y tomarlos de
+        // aqui deja claro que no dependen del orden de llegada.
+        frame = new VideoFrameChunks(_frameEnCurso, _claveEsperada, _configEsperada, trozos);
+
+        Reiniciar();
         return true;
     }
 

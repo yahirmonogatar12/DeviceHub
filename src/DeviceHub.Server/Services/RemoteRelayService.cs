@@ -8,8 +8,15 @@ namespace DeviceHub.Server.Services;
 /// El relay. Empareja host y viewer por session_id y reenvia bytes.
 ///
 /// No descodifica, no recodifica, no captura, no renderiza y no escribe video en
-/// disco. Solo mira dos cosas: el Hello, para saber quien es cada extremo, y el
-/// SessionClose, para cerrar. Todo lo demas pasa sin abrirse.
+/// disco, y no toca el SPS/PPS.
+///
+/// Lo que SI hace con todos los paquetes es mirarles la estructura: limites de
+/// tamano, direccion permitida segun quien los manda, y agrupar los chunks de un
+/// frame para poder descartarlo entero. Eso no es abrir el contenido, pero
+/// tampoco es reenviar a ciegas, y conviene no describirlo como tal.
+///
+/// Del Hello y del SessionClose ademas lee los campos: son los que deciden a que
+/// sesion pertenece cada extremo y cuando termina.
 ///
 /// LA FASE 6 NO ESTA AQUI. `Hello.ticket` viaja y se le comprueba el tamano,
 /// pero no se valida ni se escribe en ningun log: es la credencial que da acceso

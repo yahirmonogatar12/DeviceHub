@@ -371,6 +371,66 @@ public class RemoteProtocolTests
         Assert.NotNull(montador.LastRejection);
     }
 
+    /// <summary>
+    /// Los trozos de un frame tienen que describir EL MISMO frame.
+    ///
+    /// Comprobar solo chunk_count dejaba pasar mezclas: el frame se ensamblaba y
+    /// se quedaba con los metadatos del chunk que lo cerraba. Un keyframe podia
+    /// entregarse como P-frame, o peor al reves -- el receptor creeria tener un
+    /// punto de recuperacion que no existe.
+    /// </summary>
+    [Theory]
+    [InlineData("key_frame")]
+    [InlineData("config_version")]
+    [InlineData("timestamp")]
+    public void A_chunk_that_contradicts_the_frame_metadata_is_rejected(string campo)
+    {
+        var montador = new VideoFrameAssembler();
+        var trozos = Trocear(1, Datos(200_000), clave: true, config: 7);
+
+        Assert.False(montador.TryAdd(trozos.Chunks[0], out _));
+
+        var mentiroso = trozos.Chunks[1].Clone();
+
+        switch (campo)
+        {
+            case "key_frame": mentiroso.KeyFrame = false; break;
+            case "config_version": mentiroso.ConfigVersion = 8; break;
+            case "timestamp": mentiroso.CaptureTimestampUs += 1; break;
+        }
+
+        Assert.False(montador.TryAdd(mentiroso, out var nada));
+        Assert.Null(nada);
+        Assert.Equal(1L, montador.Rejected);
+
+        // Y el frame no se completa aunque lleguen los demas: le falta ese trozo.
+        for (var i = 2; i < trozos.Chunks.Count; i++)
+            Assert.False(montador.TryAdd(trozos.Chunks[i], out _));
+    }
+
+    [Fact]
+    public void The_assembled_frame_keeps_the_metadata_of_the_first_chunk_not_the_last()
+    {
+        // Llegada desordenada: el que cierra el frame es el indice 0. Los
+        // metadatos tienen que salir igual.
+        var montador = new VideoFrameAssembler();
+        var trozos = Trocear(9, Datos(200_000), clave: true, config: 4);
+
+        AssembledFrame? frame = null;
+
+        foreach (var trozo in trozos.Chunks.Reverse())
+        {
+            if (montador.TryAdd(trozo, out var salida))
+                frame = salida;
+        }
+
+        Assert.NotNull(frame);
+        Assert.Equal(9ul, frame.FrameId);
+        Assert.True(frame.KeyFrame);
+        Assert.Equal(4u, frame.ConfigVersion);
+        Assert.Equal(1_000, frame.CaptureTimestampUs);
+    }
+
     [Fact]
     public void A_chunk_that_changes_the_count_mid_frame_is_rejected()
     {

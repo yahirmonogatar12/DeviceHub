@@ -78,8 +78,16 @@ enum RemoteRole {
   REMOTE_ROLE_VIEWER = 2;
 }
 
-// Primer mensaje de cada canal. El relay solo inspecciona esto y SessionClose;
-// todo lo demas lo reenvia sin mirarlo.
+// Primer mensaje de cada canal.
+//
+// El relay inspecciona la ESTRUCTURA de todo lo que pasa -- limites de tamano,
+// direccion permitida segun el papel del emisor, config_version vigente, y
+// agrupar los chunks de un frame para poder descartarlo entero -- pero no abre
+// el contenido: no descodifica el video, no lo recodifica, no lo guarda y no
+// toca el SPS/PPS.
+//
+// De este mensaje y de SessionClose si lee los campos, porque son los que
+// deciden a que sesion pertenece cada extremo y cuando termina.
 message Hello {
   RemoteRole role = 1;
   string machine_id = 2;
