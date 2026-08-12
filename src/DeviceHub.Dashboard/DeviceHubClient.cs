@@ -83,6 +83,10 @@ public sealed class DeviceHubClient : IDisposable
         _client = new AdminService.AdminServiceClient(_channel);
     }
 
+    /// <summary>La misma direccion del servidor que usa el dashboard. El relay
+    /// vive en ese puerto: no hay que configurar nada aparte.</summary>
+    public string ServerAddress => $"https://{_settings.ServerHost}:{_settings.ServerPort}";
+
     public string Username { get; private set; } = string.Empty;
     public string Role { get; private set; } = string.Empty;
     public bool IsAdministrator => Role == "administrator";
@@ -117,6 +121,23 @@ public sealed class DeviceHubClient : IDisposable
 
     public Task<MachineDetail> ResolveConflictAsync(ResolveConflictRequest request, CancellationToken ct)
         => _client.ResolveIdentityConflictAsync(request, _auth, cancellationToken: ct).ResponseAsync;
+
+    /// <summary>
+    /// Fase 6. Autoriza una sesion del motor propio y trae sus dos tickets.
+    ///
+    /// Reutiliza el JWT que ya tiene este cliente: por eso esto vive en el
+    /// dashboard y no en un ejecutable aparte, que tendria que volver a pedir la
+    /// contrasena y necesitaria una consola para hacerlo.
+    /// </summary>
+    public Task<IssueRemoteTicketsResponse> IssueRemoteTicketsAsync(
+        string machineId, CancellationToken ct)
+        => _client.IssueRemoteTicketsAsync(
+            new IssueRemoteTicketsRequest
+            {
+                TargetMachineId = machineId,
+                ViewerMachineId = Environment.MachineName
+            },
+            _auth, cancellationToken: ct).ResponseAsync;
 
     public Task<AuditList> ListAuditAsync(string machineId, CancellationToken ct)
         => _client.ListAuditAsync(new AuditQuery { MachineId = machineId, Limit = 30 }, _auth, cancellationToken: ct).ResponseAsync;

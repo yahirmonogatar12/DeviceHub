@@ -163,6 +163,57 @@ public sealed partial class MainViewModel
     /// Nada de esto nombra a RustDesk: si la Fase 18 cambia de motor, este
     /// metodo no se toca.
     /// </summary>
+    /// <summary>
+    /// Fase 6: abre una sesion con el motor PROPIO de DeviceHub.
+    ///
+    /// Aparte del boton de siempre a proposito. Ese va por IRemoteProvider y hoy
+    /// lanza RustDesk; elegir motor es la Fase 8 y no se toca aqui.
+    ///
+    /// El ticket va del canal TLS a la tuberia de stdin del visor y de ahi a su
+    /// memoria: no toca disco, ni consola, ni argumentos. Vive 45 s, asi que el
+    /// visor se lanza inmediatamente.
+    /// </summary>
+    [RelayCommand]
+    private async Task DeviceHubRemoteAsync()
+    {
+        if (SelectedMachine is null)
+            return;
+
+        try
+        {
+            CommandFeedback = "Autorizando sesion...";
+
+            var tickets = await _client.IssueRemoteTicketsAsync(
+                SelectedMachine.MachineId, CancellationToken.None);
+
+            var visor = ResolverCliente("DeviceHub.RemoteViewer.exe")
+                ?? throw new FileNotFoundException(
+                    "No se encontro DeviceHub.RemoteViewer.exe junto al dashboard.");
+
+            var proceso = System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(visor,
+                    $"--relay-test --server {_client.ServerAddress} " +
+                    $"--session {tickets.SessionId} --machine-id {Environment.MachineName} --allow-untrusted")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardInput = true
+                })
+                ?? throw new InvalidOperationException("No se pudo lanzar el visor.");
+
+            await proceso.StandardInput.WriteLineAsync(tickets.ViewerTicket);
+            await proceso.StandardInput.FlushAsync();
+            proceso.StandardInput.Close();
+
+            CommandFeedback =
+                $"Sesion {tickets.SessionId[..8]} abierta sobre {SelectedMachine.MachineCode}. " +
+                "Falta que el host arranque en esa PC (Fase 7).";
+        }
+        catch (Exception ex)
+        {
+            CommandFeedback = Describe(ex);
+        }
+    }
+
     [RelayCommand]
     private async Task RemoteControlAsync()
     {
