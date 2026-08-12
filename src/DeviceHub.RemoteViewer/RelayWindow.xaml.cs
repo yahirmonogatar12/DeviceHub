@@ -221,16 +221,21 @@ public partial class RelayWindow : Window
                         _rttUs = NowUs() - paquete.Pong.SentAtUs;
                         break;
 
+                    // El motivo se AÑADE al informe, no lo sustituye. Reemplazarlo
+                    // borraba las cifras justo cuando terminaba la sesion, que es
+                    // cuando hacen falta: en el checkpoint de la Fase 5 el host
+                    // cerro limpiamente y con el se llevo por delante los unicos
+                    // contadores del viewer que habia.
                     case RemotePacket.PayloadOneofCase.Close:
-                        Mostrar($"El relay cerro la sesion: {paquete.Close.Reason} {paquete.Close.Detail}");
-                        return;
+                        _cierre = $"El relay cerro la sesion: {paquete.Close.Reason} {paquete.Close.Detail}";
+                        break;
 
                     case RemotePacket.PayloadOneofCase.Error:
-                        Mostrar($"Relay: {paquete.Error.Code} {paquete.Error.Detail}");
-                        return;
+                        _cierre = $"Relay: {paquete.Error.Code} {paquete.Error.Detail}";
+                        break;
                 }
 
-                if (reloj.Elapsed >= siguienteAviso)
+                void Informar()
                 {
                     proceso.Refresh();
 
@@ -246,9 +251,24 @@ public partial class RelayWindow : Window
                         $"incompletos {montador.Dropped}   invalidos {montador.Rejected}   tardios {montador.Stale}   " +
                         $"IDR {idr}   cambios de config {cambiosConfig}   " +
                         $"RAM {proceso.PrivateMemorySize64 / 1024 / 1024} MB (inicio {ramInicio / 1024 / 1024})   " +
-                        $"{reloj.Elapsed:hh\\:mm\\:ss}");
+                        $"{reloj.Elapsed:hh\\:mm\\:ss}" +
+                        (_cierre is null ? string.Empty : $"\n{_cierre}"));
+                }
 
+                if (reloj.Elapsed >= siguienteAviso)
+                {
+                    Informar();
                     siguienteAviso += TimeSpan.FromMilliseconds(500);
+                }
+
+                // La sesion termino. Se informa ANTES de salir, con las cifras y
+                // el motivo juntos: en el checkpoint de la Fase 5 el cierre llego
+                // limpio y se llevo por delante los unicos contadores que habia
+                // del viewer.
+                if (_cierre is not null)
+                {
+                    Informar();
+                    break;
                 }
             }
         }
@@ -263,6 +283,9 @@ public partial class RelayWindow : Window
     }
 
     private long _rttUs = -1;
+
+    /// <summary>Motivo del cierre, si ya llego. Se muestra DEBAJO de las cifras.</summary>
+    private string? _cierre;
 
     /// <summary>
     /// Ping cada segundo. El RTT se calcula aqui, con NUESTRO reloj de ida y
