@@ -28,6 +28,63 @@ public static class H264AnnexB
         return -1;
     }
 
+    /// <summary>
+    /// Extrae SPS y PPS de una unidad de acceso, con sus prefijos.
+    ///
+    /// Los codificadores de Media Foundation los ponen dentro del propio flujo,
+    /// delante de cada IDR. En el cable NO viajan ahi: van una vez en VideoConfig
+    /// y el viewer los conserva, porque reenviarlos con cada keyframe es ancho de
+    /// banda que no aporta nada a un receptor que ya los tiene.
+    ///
+    /// Devuelve un array vacio si la unidad no los lleva.
+    /// </summary>
+    public static byte[] ParameterSets(ReadOnlySpan<byte> unidad)
+    {
+        var trozos = new List<byte[]>();
+
+        var p = Next(unidad, 0);
+
+        while (p >= 0)
+        {
+            var siguiente = Next(unidad, p + 3);
+            var nal = p + 3;
+
+            if (nal >= unidad.Length)
+                break;
+
+            var tipo = unidad[nal] & 0x1F;
+
+            if (tipo is 7 or 8)
+            {
+                var codigo = p > 0 && unidad[p - 1] == 0 ? p - 1 : p;
+                var hasta = siguiente < 0 ? unidad.Length : siguiente;
+
+                trozos.Add(unidad[codigo..hasta].ToArray());
+            }
+
+            p = siguiente;
+        }
+
+        if (trozos.Count == 0)
+            return [];
+
+        var total = 0;
+
+        foreach (var trozo in trozos)
+            total += trozo.Length;
+
+        var salida = new byte[total];
+        var offset = 0;
+
+        foreach (var trozo in trozos)
+        {
+            trozo.CopyTo(salida, offset);
+            offset += trozo.Length;
+        }
+
+        return salida;
+    }
+
     public static List<AccessUnit> Split(ReadOnlySpan<byte> flujo)
     {
         var unidades = new List<AccessUnit>();

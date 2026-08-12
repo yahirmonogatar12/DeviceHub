@@ -10,6 +10,6 @@
         <TextBlock Foreground="#B6C2DC" FontFamily="Segoe UI" FontSize="13"
                    HorizontalAlignment="Center" VerticalAlignment="Center"
                    TextAlignment="Center" LineHeight="22"
-                   Text="DeviceHub Remote Viewer&#x0a;&#x0a;Sin sesion. Este visor lo abre el dashboard al pulsar CONTROLAR PC.&#x0a;&#x0a;Diagnostico:  DeviceHub.RemoteViewer --play archivo.h264 [--fps 60] [--loop]" />
+                   Text="DeviceHub Remote Viewer&#x0a;&#x0a;Sin sesion. Este visor lo abre el dashboard al pulsar CONTROLAR PC.&#x0a;&#x0a;Diagnostico:&#x0a;  --play archivo.h264 [--fps 60] [--loop]&#x0a;  --relay-test --server https://192.168.1.10:5443 --session ID" />
     </Grid>
 </Window>

@@ -37,4 +37,20 @@ public static class RemoteSessionProtocol
     /// elige cuanta RAM reserva el receptor.
     /// </summary>
     public const int MaxChunksPerFrame = MaxFrameBytes / MaxChunkBytes;
+
+    /// <summary>
+    /// El ticket es de 256 bits en hexadecimal o base64; 256 caracteres sobra.
+    ///
+    /// Se comprueba aunque TODAVIA NO SE VALIDE el contenido -- eso llega en la
+    /// Fase 6. Sin limite, el primer mensaje de una conexion sin autenticar
+    /// permitiria mandar megabytes al servidor antes de que nadie mire quien es.
+    /// </summary>
+    public const int MaxTicketChars = 256;
+
+    /// <summary>Un identificador de sesion es un GUID o similar.</summary>
+    public const int MaxSessionIdChars = 128;
+
+    /// <summary>Texto de cierre y de error. Va a la auditoria, no al cable en
+    /// bucle.</summary>
+    public const int MaxDetailChars = 512;
 }

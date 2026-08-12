@@ -158,6 +158,7 @@ builder.Services.AddSingleton<RateLimiter>();
 builder.Services.AddSingleton<IRemoteProvider, RustDeskProvider>();
 builder.Services.AddSingleton<UserRepository>();
 builder.Services.AddSingleton<ConnectionRegistry>();
+builder.Services.AddSingleton<RemoteSessionRegistry>();
 builder.Services.AddSingleton<MachineBroadcaster>();
 builder.Services.AddSingleton(jwtKeyProvider);
 builder.Services.AddSingleton(new ServerPins([PublicKeyPin.Compute(certificate)]));
@@ -202,6 +203,11 @@ app.UseAuthorization();
 
 app.MapGrpcService<AgentGrpcService>();
 app.MapGrpcService<AdminGrpcService>();
+
+// Relay del motor propio. Mismo puerto y mismo certificado que el resto: lo que
+// cambia es que RemoteHost y RemoteViewer abren su PROPIA conexion, asi que un
+// keyframe atascado no retrasa el heartbeat de ningun agente.
+app.MapGrpcService<RemoteRelayGrpcService>();
 
 app.Logger.LogInformation("DeviceHub Server escuchando en https://0.0.0.0:{Port} (HTTP/2)", options.Port);
 

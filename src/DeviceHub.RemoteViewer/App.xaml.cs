@@ -18,6 +18,16 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        if (e.Args.Contains("--relay-test"))
+        {
+            new RelayWindow(
+                Texto(e.Args, "--server") ?? "https://192.168.1.10:5443",
+                Texto(e.Args, "--session") ?? string.Empty,
+                e.Args.Contains("--allow-untrusted")).Show();
+
+            return;
+        }
+
         var ruta = Texto(e.Args, "--play");
 
         if (ruta is null)

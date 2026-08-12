@@ -1,0 +1,21 @@
+<Window x:Class="DeviceHub.RemoteViewer.RelayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:render="clr-namespace:DeviceHub.RemoteViewer.Render"
+        Title="DeviceHub - Sesion remota" Height="700" Width="1180"
+        Background="#0B1F55" WindowStartupLocation="CenterScreen">
+
+    <DockPanel>
+
+        <!-- Al lado del video, nunca encima: un HwndHost dibuja fuera del arbol
+             visual de WPF y cualquier XAML superpuesto quedaria tapado. -->
+        <Border DockPanel.Dock="Bottom" Background="#08163D" Padding="12,7">
+            <TextBlock x:Name="Estado" FontFamily="Consolas" FontSize="12"
+                       Foreground="#B6C2DC" TextWrapping="Wrap"
+                       Text="Conectando..." />
+        </Border>
+
+        <render:VideoSurface x:Name="Video" />
+
+    </DockPanel>
+</Window>

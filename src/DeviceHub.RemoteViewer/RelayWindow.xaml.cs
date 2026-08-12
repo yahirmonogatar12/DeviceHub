@@ -1,0 +1,314 @@
+using System.Diagnostics;
+using System.Net.Http;
+using System.Windows;
+using DeviceHub.Remote.Contracts;
+using DeviceHub.RemoteViewer.Decode;
+using DeviceHub.RemoteViewer.Render;
+using Grpc.Core;
+using Grpc.Net.Client;
+using Vortice.Direct3D11;
+using Vortice.MediaFoundation;
+
+namespace DeviceHub.RemoteViewer;
+
+/// <summary>
+/// Fase 5: la mitad receptora, ahora por el relay en vez de desde un archivo.
+///
+///   ViewerChannel -> reensamblado -> decodificador H.264 -> D3D11 -> swapchain
+///
+/// El decodificador y el presentador son EXACTAMENTE los de la Fase 3. Lo unico
+/// que cambia es de donde salen los bytes, y eso es a proposito: si el video se
+/// ve mal, el sospechoso es el transporte y no el visor.
+///
+/// Sin entrada todavia. El unico trafico de vuelta es Ping, para medir el RTT.
+/// </summary>
+public partial class RelayWindow : Window
+{
+    private readonly string _servidor;
+    private readonly string _sesion;
+    private readonly bool _permitirSinConfianza;
+
+    private readonly CancellationTokenSource _cancelacion = new();
+
+    public RelayWindow(string servidor, string sesion, bool permitirSinConfianza)
+    {
+        InitializeComponent();
+
+        _servidor = servidor;
+        _sesion = sesion;
+        _permitirSinConfianza = permitirSinConfianza;
+
+        Title = $"DeviceHub - sesion {sesion}";
+
+        Loaded += (_, _) => new Thread(Ejecutar)
+        {
+            IsBackground = true,
+            Name = "devicehub-relay-viewer"
+        }.Start();
+
+        Closed += (_, _) =>
+        {
+            _cancelacion.Cancel();
+            _cancelacion.Dispose();
+        };
+    }
+
+    private void Ejecutar()
+    {
+        try
+        {
+            MediaFactory.MFStartup(true).CheckError();
+            RecibirAsync().GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Mostrar($"{ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            MediaFactory.MFShutdown();
+        }
+    }
+
+    private async Task RecibirAsync()
+    {
+        var hwnd = Video.WaitForWindow(TimeSpan.FromSeconds(5));
+
+        if (hwnd == IntPtr.Zero)
+        {
+            Mostrar("La superficie de video no llego a crearse.");
+            return;
+        }
+
+        var opciones = new GrpcChannelOptions();
+
+        if (_permitirSinConfianza)
+        {
+            // Solo para el checkpoint de la Fase 5, y hay que pedirlo a mano. La
+            // Fase 17 lo sustituye por el pin de clave publica del agente.
+            opciones.HttpHandler = new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+            };
+        }
+
+        using var canal = GrpcChannel.ForAddress(_servidor, opciones);
+        var cliente = new RemoteRelayService.RemoteRelayServiceClient(canal);
+
+        using var llamada = cliente.ViewerChannel(cancellationToken: _cancelacion.Token);
+
+        await llamada.RequestStream.WriteAsync(new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = _sesion,
+            Hello = new Hello
+            {
+                Role = RemoteRole.Viewer,
+                MachineId = Environment.MachineName,
+                Ticket = string.Empty,   // la validacion es la Fase 6
+                Capabilities = new RemoteCapabilities
+                {
+                    MaxProtocolVersion = RemoteSessionProtocol.Version,
+                    Codecs = { VideoCodec.H264 },
+                    SupportsCursor = false,
+                    SupportsInput = false
+                }
+            }
+        }, _cancelacion.Token);
+
+        var latidos = LatirAsync(llamada.RequestStream, _cancelacion.Token);
+
+        using var device = VideoPresenter.CreateDevice();
+
+        H264Decoder? decoder = null;
+        VideoPresenter? presentador = null;
+        VideoConfig? config = null;
+
+        var montador = new VideoFrameAssembler();
+        var proceso = Process.GetCurrentProcess();
+        var ramInicio = proceso.PrivateMemorySize64;
+
+        var decodificaciones = new List<long>();
+        long chunks = 0, reconstruidos = 0, decodificados = 0, pintados = 0;
+        long cambiosConfig = 0, idr = 0;
+
+        var reloj = Stopwatch.StartNew();
+        var siguienteAviso = TimeSpan.Zero;
+
+        try
+        {
+            while (await llamada.ResponseStream.MoveNext(_cancelacion.Token))
+            {
+                var paquete = llamada.ResponseStream.Current;
+
+                switch (paquete.PayloadCase)
+                {
+                    case RemotePacket.PayloadOneofCase.VideoConfig:
+                        // El relay REPITE la configuracion vigente cada vez que
+                        // se recupera de una perdida, para que un viewer que se
+                        // la hubiera perdido pueda descodificar el IDR que viene
+                        // detras. Repetida no es nueva: rehacer el decodificador
+                        // aqui costaba 45 ms, tiraba el presentador y llenaba la
+                        // cola del relay, que provocaba otro descarte y otra
+                        // repeticion. Un bucle que se alimentaba solo.
+                        if (config is not null && paquete.VideoConfig.ConfigVersion == config.ConfigVersion)
+                            break;
+
+                        cambiosConfig++;
+                        config = paquete.VideoConfig;
+
+                        // Version nueva SI es flujo nuevo: el decodificador viejo
+                        // lleva el SPS anterior dentro.
+                        presentador?.Dispose();
+                        presentador = null;
+                        decoder?.Dispose();
+
+                        decoder = new H264Decoder(device, (int)config.Width, (int)config.Height);
+
+                        if (config.ParameterSets.Length > 0)
+                        {
+                            var parametros = config.ParameterSets.ToByteArray();
+
+                            foreach (var frame in decoder.Decode(parametros, 0, parametros.Length, 0))
+                                frame.Dispose();
+                        }
+
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.VideoChunk:
+                        chunks++;
+
+                        if (decoder is null)
+                            break;   // llego video antes que su configuracion
+
+                        if (paquete.VideoChunk.ConfigVersion != config?.ConfigVersion)
+                            break;
+
+                        if (!montador.TryAdd(paquete.VideoChunk, out var completo))
+                            break;
+
+                        reconstruidos++;
+
+                        if (completo!.KeyFrame)
+                            idr++;
+
+                        var antes = Stopwatch.GetTimestamp();
+                        var salidas = decoder.Decode(completo.Payload, 0, completo.Payload.Length, completo.CaptureTimestampUs);
+                        decodificaciones.Add(Micros(Stopwatch.GetTimestamp() - antes));
+
+                        foreach (var imagen in salidas)
+                        {
+                            using (imagen)
+                            {
+                                decodificados++;
+
+                                presentador ??= new VideoPresenter(
+                                    device, hwnd, decoder.Width, decoder.Height,
+                                    decoder.Aperture.X, decoder.Aperture.Y,
+                                    decoder.Aperture.Width, decoder.Aperture.Height);
+
+                                presentador.Present(imagen.Texture, imagen.Subresource);
+                                pintados++;
+                            }
+                        }
+
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.Pong:
+                        _rttUs = NowUs() - paquete.Pong.SentAtUs;
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.Close:
+                        Mostrar($"El relay cerro la sesion: {paquete.Close.Reason} {paquete.Close.Detail}");
+                        return;
+
+                    case RemotePacket.PayloadOneofCase.Error:
+                        Mostrar($"Relay: {paquete.Error.Code} {paquete.Error.Detail}");
+                        return;
+                }
+
+                if (reloj.Elapsed >= siguienteAviso)
+                {
+                    proceso.Refresh();
+
+                    var ordenadas = decodificaciones.Order().ToList();
+                    var segundos = Math.Max(reloj.Elapsed.TotalSeconds, 0.001);
+
+                    Mostrar(
+                        $"sesion {_sesion}   {(config is null ? "sin config" : $"{config.Width}x{config.Height} v{config.ConfigVersion}")}   " +
+                        $"RTT {(_rttUs < 0 ? "-" : $"{_rttUs / 1000.0:0.0} ms")}\n" +
+                        $"chunks {chunks}   frames {reconstruidos}   decodificados {decodificados}   pintados {pintados}   " +
+                        $"render {pintados / segundos:0.00} FPS   " +
+                        $"decode p50 {Percentil(ordenadas, 0.50):0.00} ms   p95 {Percentil(ordenadas, 0.95):0.00} ms\n" +
+                        $"incompletos {montador.Dropped}   invalidos {montador.Rejected}   tardios {montador.Stale}   " +
+                        $"IDR {idr}   cambios de config {cambiosConfig}   " +
+                        $"RAM {proceso.PrivateMemorySize64 / 1024 / 1024} MB (inicio {ramInicio / 1024 / 1024})   " +
+                        $"{reloj.Elapsed:hh\\:mm\\:ss}");
+
+                    siguienteAviso += TimeSpan.FromMilliseconds(500);
+                }
+            }
+        }
+        finally
+        {
+            presentador?.Dispose();
+            decoder?.Dispose();
+
+            await _cancelacion.CancelAsync();
+            try { await latidos; } catch (Exception) { /* cerrando */ }
+        }
+    }
+
+    private long _rttUs = -1;
+
+    /// <summary>
+    /// Ping cada segundo. El RTT se calcula aqui, con NUESTRO reloj de ida y
+    /// vuelta: restar marcas de tiempo de dos PCs distintas da un numero
+    /// inventado, porque sus relojes monotonicos no son comparables.
+    /// </summary>
+    private async Task LatirAsync(IClientStreamWriter<RemotePacket> salida, CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(1000, cancellationToken);
+
+                await salida.WriteAsync(new RemotePacket
+                {
+                    ProtocolVersion = RemoteSessionProtocol.Version,
+                    SessionId = _sesion,
+                    Ping = new Ping { SentAtUs = NowUs() }
+                }, cancellationToken);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (RpcException)
+        {
+        }
+    }
+
+    private static long NowUs() => Stopwatch.GetTimestamp() * 1_000_000L / Stopwatch.Frequency;
+
+    private static long Micros(long ticks) => ticks * 1_000_000L / Stopwatch.Frequency;
+
+    private static double Percentil(List<long> ordenadas, double p)
+    {
+        if (ordenadas.Count == 0)
+            return 0;
+
+        var indice = Math.Clamp((int)Math.Ceiling(p * ordenadas.Count) - 1, 0, ordenadas.Count - 1);
+        return ordenadas[indice] / 1000.0;
+    }
+
+    private void Mostrar(string texto)
+    {
+        if (!Dispatcher.HasShutdownStarted)
+            Dispatcher.BeginInvoke(() => Estado.Text = texto);
+    }
+}

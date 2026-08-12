@@ -16,7 +16,22 @@ namespace DeviceHub.Remote.Contracts;
 /// hasta que no pasa nada util.
 /// </summary>
 public sealed record VideoFrameChunks(
-    ulong FrameId, bool KeyFrame, uint ConfigVersion, IReadOnlyList<VideoChunk> Chunks);
+    ulong FrameId, bool KeyFrame, uint ConfigVersion, IReadOnlyList<VideoChunk> Chunks)
+{
+    /// <summary>Bytes de video, sin contar las cabeceras del sobre.</summary>
+    public int PayloadBytes
+    {
+        get
+        {
+            var total = 0;
+
+            foreach (var trozo in Chunks)
+                total += trozo.Data.Length;
+
+            return total;
+        }
+    }
+}
 
 /// <summary>Un frame reensamblado, listo para el decodificador.</summary>
 public sealed record AssembledFrame(
@@ -66,19 +81,19 @@ public static class VideoFraming
 }
 
 /// <summary>
-/// Reensambla frames a partir de chunks.
+/// Agrupa chunks sueltos en frames completos, SIN concatenar los bytes.
+///
+/// Es lo que necesita el relay: para reenviar no hace falta juntar el payload,
+/// y juntarlo seria copiar cada frame una vez de mas en el servidor. Lo que si
+/// hace falta es saber cuando el frame esta entero, porque a partir de ahi el
+/// frame es la unidad que se encola y la unidad que se descarta.
 ///
 /// Los limites se comprueban ANTES de reservar nada. Un `chunk_count` inventado
-/// es, si no, una peticion de memoria arbitraria: el emisor elegiria cuanta RAM
-/// reserva el receptor.
-///
-/// Un frame al que le falta un trozo NO se entrega a medias. Se abandona entero
-/// y el llamante pide un keyframe: media imagen descodificada no es una imagen
-/// con defectos, es ruido que ademas contamina las siguientes.
+/// es, si no, una peticion de memoria a eleccion del emisor.
 /// </summary>
-public sealed class VideoFrameAssembler
+public sealed class VideoFrameCollector
 {
-    private byte[]?[] _piezas = [];
+    private VideoChunk?[] _piezas = [];
     private ulong _frameEnCurso;
     private bool _hayFrame;
     private bool _algunoCompleto;
@@ -96,7 +111,7 @@ public sealed class VideoFrameAssembler
     /// <summary>Motivo del ultimo rechazo. Para diagnostico, no para el cable.</summary>
     public string? LastRejection { get; private set; }
 
-    /// <summary>Ultimo frame que se reensamblo entero. Es lo que se manda en
+    /// <summary>Ultimo frame que se completo. Es lo que se manda en
     /// KeyframeRequest para decir cuanto se perdio.</summary>
     public ulong LastGoodFrameId { get; private set; }
 
@@ -104,7 +119,7 @@ public sealed class VideoFrameAssembler
     /// Devuelve true cuando este chunk completa un frame. Los chunks pueden
     /// llegar en cualquier orden dentro de su frame.
     /// </summary>
-    public bool TryAdd(VideoChunk chunk, out AssembledFrame? frame)
+    public bool TryAdd(VideoChunk chunk, out VideoFrameChunks? frame)
     {
         frame = null;
 
@@ -135,7 +150,7 @@ public sealed class VideoFrameAssembler
                 Dropped++;   // al anterior le faltaban trozos y ya no van a llegar
 
             _frameEnCurso = chunk.FrameId;
-            _piezas = new byte[]?[chunk.ChunkCount];
+            _piezas = new VideoChunk?[chunk.ChunkCount];
             _recibidos = 0;
             _hayFrame = true;
         }
@@ -149,40 +164,22 @@ public sealed class VideoFrameAssembler
         if (_piezas[chunk.ChunkIndex] is not null)
             return false;   // repetido: ni se cuenta dos veces ni es un error
 
-        _piezas[chunk.ChunkIndex] = chunk.Data.ToByteArray();
+        _piezas[chunk.ChunkIndex] = chunk;
         _recibidos++;
 
         if (_recibidos != _piezas.Length)
             return false;
 
-        var total = 0;
+        var trozos = new List<VideoChunk>(_piezas.Length);
 
         foreach (var pieza in _piezas)
-            total += pieza!.Length;
-
-        if (total > RemoteSessionProtocol.MaxFrameBytes)
-        {
-            Rechazar($"frame {chunk.FrameId} reensamblado a {total} bytes");
-            Reiniciar();
-            return false;
-        }
-
-        var completo = new byte[total];
-        var offset = 0;
-
-        foreach (var pieza in _piezas)
-        {
-            pieza!.CopyTo(completo, offset);
-            offset += pieza.Length;
-        }
+            trozos.Add(pieza!);
 
         LastGoodFrameId = chunk.FrameId;
         _algunoCompleto = true;
         Reiniciar();
 
-        frame = new AssembledFrame(
-            chunk.FrameId, chunk.KeyFrame, chunk.ConfigVersion, chunk.CaptureTimestampUs, completo);
-
+        frame = new VideoFrameChunks(chunk.FrameId, chunk.KeyFrame, chunk.ConfigVersion, trozos);
         return true;
     }
 
@@ -217,5 +214,59 @@ public sealed class VideoFrameAssembler
         _piezas = [];
         _hayFrame = false;
         _recibidos = 0;
+    }
+}
+
+/// <summary>
+/// Reensambla frames a partir de chunks. Lo usa el VIEWER, que si necesita los
+/// bytes seguidos para dárselos al decodificador.
+///
+/// Un frame al que le falta un trozo NO se entrega a medias. Se abandona entero
+/// y el llamante pide un keyframe: media imagen descodificada no es una imagen
+/// con defectos, es ruido que ademas contamina las siguientes.
+/// </summary>
+public sealed class VideoFrameAssembler
+{
+    private readonly VideoFrameCollector _agrupador = new();
+
+    public long Dropped => _agrupador.Dropped;
+    public long Rejected => _agrupador.Rejected + _rechazosPropios;
+    public long Stale => _agrupador.Stale;
+    public string? LastRejection => _ultimoPropio ?? _agrupador.LastRejection;
+    public ulong LastGoodFrameId => _agrupador.LastGoodFrameId;
+
+    private long _rechazosPropios;
+    private string? _ultimoPropio;
+
+    public bool TryAdd(VideoChunk chunk, out AssembledFrame? frame)
+    {
+        frame = null;
+
+        if (!_agrupador.TryAdd(chunk, out var grupo))
+            return false;
+
+        var total = grupo!.PayloadBytes;
+
+        if (total > RemoteSessionProtocol.MaxFrameBytes)
+        {
+            _rechazosPropios++;
+            _ultimoPropio = $"frame {grupo.FrameId} reensamblado a {total} bytes";
+            return false;
+        }
+
+        var completo = new byte[total];
+        var offset = 0;
+
+        foreach (var trozo in grupo.Chunks)
+        {
+            trozo.Data.CopyTo(completo, offset);
+            offset += trozo.Data.Length;
+        }
+
+        frame = new AssembledFrame(
+            grupo.FrameId, grupo.KeyFrame, grupo.ConfigVersion,
+            grupo.Chunks[0].CaptureTimestampUs, completo);
+
+        return true;
     }
 }

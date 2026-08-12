@@ -1,5 +1,6 @@
 using DeviceHub.RemoteHost.Capture;
 using DeviceHub.RemoteHost.Encode;
+using DeviceHub.RemoteHost.Relay;
 
 // Host de control remoto: corre en la PC CONTROLADA, dentro de la sesion
 // interactiva del usuario (nunca en la sesion 0, donde no hay escritorio que
@@ -22,6 +23,14 @@ if (args.Contains("--encoders"))
 if (args.Contains("--capture-test"))
     return CaptureTest.Run(Indice(args, "--adapter"), Indice(args, "--output"), Indice(args, "--seconds", 30));
 
+if (args.Contains("--relay-test"))
+    return await RelayTest.RunAsync(
+        Texto(args, "--server") ?? "https://192.168.1.10:5443",
+        Texto(args, "--session") ?? Guid.NewGuid().ToString("n"),
+        Indice(args, "--adapter"), Indice(args, "--output"), Indice(args, "--seconds", 60),
+        Indice(args, "--fps", 60), Indice(args, "--bitrate", 6_000_000),
+        args.Contains("--allow-untrusted"));
+
 if (args.Contains("--encode-test"))
     return EncodeTest.Run(
         Indice(args, "--adapter"), Indice(args, "--output"), Indice(args, "--seconds", 30),
@@ -39,6 +48,7 @@ Console.Error.WriteLine("""
       --encoders                    lista codificadores H.264 y que aceptan
       --capture-test                mide la captura de pantalla   (Fase 1)
       --encode-test                 mide la cadena completa       (Fase 2)
+      --relay-test                  manda video al relay          (Fase 5)
 
     Comunes:
       --adapter N   que GPU      (por defecto 0)
@@ -50,6 +60,14 @@ Console.Error.WriteLine("""
       --bitrate N      bits por segundo (por defecto 6000000)
       --scenario TXT   etiqueta del escenario que se esta generando
       --save RUTA      guarda el H.264 para abrirlo en un reproductor
+
+    Solo --relay-test:
+      --server URL       por defecto https://192.168.1.10:5443
+      --session ID       identificador de la sesion; se comparte con el viewer
+      --allow-untrusted  no valida el certificado (solo para probar)
+
+    El ticket NO se pasa por linea de comandos ni aqui ni nunca: los argumentos
+    de un proceso los lee cualquier usuario de la maquina.
 
     El adaptador hace falta en equipos con dos GPUs: Desktop Duplication exige
     que el dispositivo D3D11 este en la misma que gobierna la pantalla.
