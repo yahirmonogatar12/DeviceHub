@@ -1,0 +1,23 @@
+<Window x:Class="DeviceHub.RemoteViewer.PlayerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:render="clr-namespace:DeviceHub.RemoteViewer.Render"
+        Title="DeviceHub - Reproductor H.264" Height="700" Width="1180"
+        Background="#0B1F55" WindowStartupLocation="CenterScreen">
+
+    <DockPanel>
+
+        <!-- La barra va DEBAJO del video y nunca encima. Un HwndHost dibuja
+             fuera del arbol visual de WPF, asi que cualquier XAML superpuesto
+             quedaria tapado: es el problema de airspace, y la salida es poner
+             las estadisticas al lado. -->
+        <Border DockPanel.Dock="Bottom" Background="#08163D" Padding="12,7">
+            <TextBlock x:Name="Estado" FontFamily="Consolas" FontSize="12"
+                       Foreground="#B6C2DC" TextWrapping="Wrap"
+                       Text="Abriendo..." />
+        </Border>
+
+        <render:VideoSurface x:Name="Video" />
+
+    </DockPanel>
+</Window>

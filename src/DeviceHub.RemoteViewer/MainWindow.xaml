@@ -4,12 +4,12 @@
         Title="DeviceHub - Control remoto" Height="620" Width="1000"
         Background="#0B1F55" WindowStartupLocation="CenterScreen">
 
-    <!-- La superficie de video llega en la Fase 3: un HwndHost con swapchain
-         D3D11, no un WriteableBitmap. Por eso este Grid se queda vacio. -->
+    <!-- Esta ventana es solo el aviso de "no hay sesion". El video se pinta en
+         PlayerWindow, sobre un HwndHost con swapchain D3D11. -->
     <Grid>
         <TextBlock Foreground="#B6C2DC" FontFamily="Segoe UI" FontSize="13"
                    HorizontalAlignment="Center" VerticalAlignment="Center"
                    TextAlignment="Center" LineHeight="22"
-                   Text="DeviceHub Remote Viewer&#x0a;&#x0a;Sin sesion. Este visor lo abre el dashboard al pulsar CONTROLAR PC." />
+                   Text="DeviceHub Remote Viewer&#x0a;&#x0a;Sin sesion. Este visor lo abre el dashboard al pulsar CONTROLAR PC.&#x0a;&#x0a;Diagnostico:  DeviceHub.RemoteViewer --play archivo.h264 [--fps 60] [--loop]" />
     </Grid>
 </Window>
