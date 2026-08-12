@@ -1,0 +1,335 @@
+syntax = "proto3";
+
+// Versionado en el package desde el primer commit, igual que devicehub.v1. Un
+// motor de medios cambia mas que un protocolo de inventario, y un viewer viejo
+// interpretando un formato nuevo no falla: pinta basura.
+package devicehub.remote.v1;
+
+option csharp_namespace = "DeviceHub.Remote.Contracts";
+
+// ---------------------------------------------------------------------------
+// Servicio
+// ---------------------------------------------------------------------------
+
+// Servicio DEDICADO, no un metodo mas de AgentService.
+//
+// HTTP/2 multiplexa varios streams sobre una sola conexion TCP, asi que una
+// perdida de paquetes retrasa a todos los que la compartan. Si el video viajara
+// por la misma conexion que el heartbeat del agente, un keyframe atascado
+// retrasaria el latido y la PC apareceria caida en el dashboard.
+//
+// RemoteHost y RemoteViewer son procesos distintos del Agent y del Dashboard,
+// asi que cada uno abre su propia conexion de forma natural.
+//
+// Dentro de UNA conexion, el video (servidor->viewer) y la entrada
+// (viewer->servidor) viajan en direcciones opuestas de TCP, con espacios de
+// secuencia independientes: una perdida en el video no retrasa el raton. Por eso
+// basta un canal por extremo y no hacen falta cuatro.
+service RemoteRelayService {
+  // La PC controlada. Envia video y cursor; recibe entrada y peticiones.
+  rpc HostChannel (stream RemotePacket) returns (stream RemotePacket);
+
+  // La PC del tecnico. Envia entrada; recibe video y cursor.
+  rpc ViewerChannel (stream RemotePacket) returns (stream RemotePacket);
+}
+
+// ---------------------------------------------------------------------------
+// Sobre
+// ---------------------------------------------------------------------------
+
+// Un solo sobre en las dos direcciones.
+//
+// La alternativa -- un metodo por tipo de mensaje -- obligaria a mantener el
+// orden entre streams distintos, y el orden entre un VideoConfig y el frame que
+// lo usa no es negociable.
+message RemotePacket {
+  uint32 protocol_version = 1;
+  string session_id = 2;
+
+  // Numero de secuencia POR EMISOR. Sirve para detectar huecos; no es un
+  // identificador global ni cruza extremos.
+  uint64 sequence = 3;
+
+  // Cuando lo emitio quien lo manda, en microsegundos UTC. No es la marca de
+  // captura del frame: esa va dentro de VideoChunk y sobrevive al relay.
+  int64 timestamp_us = 4;
+
+  oneof payload {
+    Hello           hello            = 10;
+    VideoConfig     video_config     = 11;
+    VideoChunk      video_chunk      = 12;
+    CursorUpdate    cursor           = 13;
+    InputEvent      input            = 14;
+    Ping            ping             = 15;
+    Pong            pong             = 16;
+    KeyframeRequest keyframe_request = 17;
+    SessionClose    close            = 18;
+    RemoteError     error            = 19;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Establecimiento
+// ---------------------------------------------------------------------------
+
+enum RemoteRole {
+  REMOTE_ROLE_UNSPECIFIED = 0;
+  REMOTE_ROLE_HOST = 1;
+  REMOTE_ROLE_VIEWER = 2;
+}
+
+// Primer mensaje de cada canal. El relay solo inspecciona esto y SessionClose;
+// todo lo demas lo reenvia sin mirarlo.
+message Hello {
+  RemoteRole role = 1;
+  string machine_id = 2;
+
+  // Ticket de un solo uso. El campo existe desde ahora para no versionar el
+  // protocolo cuando llegue la Fase 6, pero HOY NO SE VALIDA NADA.
+  //
+  // Nunca se escribe en un log ni viaja por linea de comandos: es la credencial
+  // que da acceso a ver y controlar la pantalla. Llega por named pipe con ACL
+  // restringida al SID en el host, y por stdin en el viewer.
+  string ticket = 3;
+
+  // Lo que este extremo sabe hacer. Sirve para negociar sin romper: un viewer
+  // que no entienda un codec nuevo no lo anuncia.
+  RemoteCapabilities capabilities = 4;
+}
+
+message RemoteCapabilities {
+  uint32 max_protocol_version = 1;
+  repeated VideoCodec codecs = 2;
+  bool supports_input = 3;
+  bool supports_cursor = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Video
+// ---------------------------------------------------------------------------
+
+enum VideoCodec {
+  VIDEO_CODEC_UNSPECIFIED = 0;
+  VIDEO_CODEC_H264 = 1;
+}
+
+// Como esta configurado el flujo. Se manda al empezar, al cambiar la
+// configuracion y al reconectar.
+//
+// Los parametros van AQUI y no dentro de los frames: el receptor es nuestro
+// decodificador, que ya recibio la configuracion por este canal. El archivo que
+// guarda `--encode-test` hace lo contrario -- SPS/PPS delante del primer IDR --
+// porque tiene que abrirse en cualquier reproductor sin contexto. No es una
+// contradiccion: son dos destinos distintos.
+message VideoConfig {
+  // Sube en cada cambio. Cada VideoChunk lleva la version con la que se
+  // codifico, asi que un frame que llega despues de un cambio de resolucion se
+  // reconoce como viejo en vez de descodificarse con los parametros nuevos.
+  uint32 config_version = 1;
+
+  VideoCodec codec = 2;
+  uint32 width = 3;
+  uint32 height = 4;
+  uint32 frames_per_second = 5;
+  uint32 bitrate_bits_per_second = 6;
+
+  // SPS y PPS concatenados en Annex-B, tal y como los emite el codificador. Van
+  // juntos en un solo blob a proposito: separarlos obligaria a recomponer el
+  // orden en el receptor sin ganar nada.
+  bytes parameter_sets = 7;
+
+  // El trozo visible, cuando no coincide con width x height. H.264 codifica en
+  // macrobloques de 16, asi que 1080 de alto viaja como 1088 y las 8 filas de
+  // mas son relleno.
+  uint32 visible_x = 8;
+  uint32 visible_y = 9;
+  uint32 visible_width = 10;
+  uint32 visible_height = 11;
+}
+
+// Un trozo de un frame codificado.
+//
+// El troceado a 64 KiB mantiene cada mensaje por debajo del umbral del Large
+// Object Heap (85 000 bytes): por encima, cada chunk se reserva en un monton que
+// no se compacta, y a 30 fps eso es fragmentacion continua en un proceso que
+// tiene que durar un turno entero.
+//
+// LA UNIDAD DE DESCARTE ES EL FRAME, NUNCA EL CHUNK. `frame_id` y `chunk_count`
+// estan aqui para que el relay pueda tirar todos los chunks de un frame juntos:
+// descartar uno suelto fabrica una perdida que la red no tuvo, obliga al viewer
+// a tirar el frame entero igualmente y ademas le cuesta un keyframe.
+message VideoChunk {
+  // Monotono creciente por sesion. Identifica el frame al que pertenece el
+  // trozo y es lo que permite agruparlos para descartarlos juntos.
+  uint64 frame_id = 1;
+
+  uint32 chunk_index = 2;
+  uint32 chunk_count = 3;
+
+  bool key_frame = 4;
+
+  // Con que VideoConfig se codifico. Un frame con una version que el viewer no
+  // conoce se descarta: descodificarlo con los parametros equivocados no da
+  // error, da imagen corrupta.
+  uint32 config_version = 5;
+
+  // Cuando lo presento el escritorio, en microsegundos. Viaja con el frame y no
+  // en el sobre para que sobreviva al relay y a la fragmentacion.
+  int64 capture_timestamp_us = 6;
+
+  // Como maximo 64 KiB. Se comprueba en el receptor ANTES de reservar nada.
+  bytes data = 7;
+}
+
+// El viewer perdio sincronia. Se responde con VideoConfig Y DESPUES el IDR, no
+// solo el IDR: si el viewer perdio la configuracion, un keyframe suelto no le
+// sirve de nada.
+message KeyframeRequest {
+  KeyframeReason reason = 1;
+
+  // Ultimo frame que se reensamblo entero. Sirve para medir cuanto se perdio.
+  uint64 last_good_frame_id = 2;
+}
+
+enum KeyframeReason {
+  KEYFRAME_REASON_UNSPECIFIED = 0;
+  KEYFRAME_REASON_LOST_CHUNK = 1;
+  KEYFRAME_REASON_RECONNECT = 2;
+  KEYFRAME_REASON_CONFIG_MISMATCH = 3;
+  KEYFRAME_REASON_VIEWER_REQUEST = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Cursor
+// ---------------------------------------------------------------------------
+
+// Viaja FUERA del video, a 60-120 actualizaciones por segundo contra los 30 del
+// video. Es lo que mas hace que el control se sienta rapido, y es barato.
+message CursorUpdate {
+  // Normalizadas 0.0-1.0. Nunca pixeles: el escritorio remoto puede cambiar de
+  // resolucion a media sesion.
+  double x = 1;
+  double y = 2;
+
+  bool visible = 3;
+
+  // Solo cuando la forma cambia. El resto de actualizaciones son dos numeros.
+  CursorShape shape = 4;
+}
+
+message CursorShape {
+  uint64 shape_id = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  uint32 hotspot_x = 4;
+  uint32 hotspot_y = 5;
+  bytes bgra = 6;
+}
+
+// ---------------------------------------------------------------------------
+// Entrada
+//
+// Definida aqui para que el protocolo no tenga que versionarse en las Fases 9 a
+// 11. NADA de esto se ejecuta todavia: no hay SendInput en ninguna parte.
+// ---------------------------------------------------------------------------
+
+message InputEvent {
+  oneof event {
+    MouseMove   mouse_move   = 1;
+    MouseButton mouse_button = 2;
+    MouseWheel  mouse_wheel  = 3;
+    KeyEvent    key          = 4;
+  }
+}
+
+// Posiciones ABSOLUTAS normalizadas, no incrementos. Por eso una rafaga pendiente
+// de enviar se puede reducir a la ultima: las anteriores ya no valen nada, y
+// descartarlas baja la latencia en vez de perder informacion.
+message MouseMove {
+  double x = 1;
+  double y = 2;
+}
+
+enum MouseButtonId {
+  MOUSE_BUTTON_UNSPECIFIED = 0;
+  MOUSE_BUTTON_LEFT = 1;
+  MOUSE_BUTTON_RIGHT = 2;
+  MOUSE_BUTTON_MIDDLE = 3;
+}
+
+// NO es coalescible. Perder un `pressed` o su `released` deja el boton pegado en
+// la maquina remota.
+message MouseButton {
+  MouseButtonId button = 1;
+  bool pressed = 2;
+  double x = 3;
+  double y = 4;
+}
+
+message MouseWheel {
+  int32 delta = 1;
+  bool horizontal = 2;
+}
+
+// VK + scan code + extended, no caracteres: sin scan code, media tecla no
+// funciona en las aplicaciones que leen el teclado a bajo nivel.
+//
+// Tampoco es coalescible, y por el mismo motivo que los botones: si se cae un
+// KeyDown y se entrega su KeyUp, el tecnico se encuentra con un Ctrl invisible
+// pulsado en la PC remota.
+message KeyEvent {
+  uint32 virtual_key = 1;
+  uint32 scan_code = 2;
+  bool pressed = 3;
+  bool extended = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Control de sesion
+// ---------------------------------------------------------------------------
+
+message Ping {
+  int64 sent_at_us = 1;
+}
+
+message Pong {
+  // Copiado tal cual del Ping. El RTT lo calcula quien pregunto, con su propio
+  // reloj: los dos extremos no comparten reloj y restar tiempos de maquinas
+  // distintas da numeros inventados.
+  int64 sent_at_us = 1;
+}
+
+message SessionClose {
+  SessionCloseReason reason = 1;
+
+  // Texto para auditoria y para el tecnico. Nunca lleva tickets ni secretos.
+  string detail = 2;
+}
+
+enum SessionCloseReason {
+  SESSION_CLOSE_REASON_UNSPECIFIED = 0;
+  SESSION_CLOSE_REASON_NORMAL = 1;
+  SESSION_CLOSE_REASON_TICKET_EXPIRED = 2;
+  SESSION_CLOSE_REASON_HOST_GONE = 3;
+  SESSION_CLOSE_REASON_VIEWER_GONE = 4;
+  SESSION_CLOSE_REASON_NO_INTERACTIVE_SESSION = 5;
+  SESSION_CLOSE_REASON_PROTOCOL_ERROR = 6;
+  SESSION_CLOSE_REASON_TIMEOUT = 7;
+  SESSION_CLOSE_REASON_SERVER_SHUTDOWN = 8;
+}
+
+message RemoteError {
+  RemoteErrorCode code = 1;
+  string detail = 2;
+}
+
+enum RemoteErrorCode {
+  REMOTE_ERROR_CODE_UNSPECIFIED = 0;
+  REMOTE_ERROR_CODE_UNSUPPORTED_VERSION = 1;
+  REMOTE_ERROR_CODE_INVALID_TICKET = 2;
+  REMOTE_ERROR_CODE_SESSION_NOT_FOUND = 3;
+  REMOTE_ERROR_CODE_ROLE_ALREADY_CONNECTED = 4;
+  REMOTE_ERROR_CODE_PAYLOAD_TOO_LARGE = 5;
+  REMOTE_ERROR_CODE_CAPTURE_UNAVAILABLE = 6;
+  REMOTE_ERROR_CODE_ENCODER_UNAVAILABLE = 7;
+}
