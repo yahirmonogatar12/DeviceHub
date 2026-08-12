@@ -97,7 +97,7 @@ en cada línea.
 |---|---|
 | Imagen | El escritorio real de `.145`, no una imagen congelada ni con manchas |
 | FPS de render | Sostenido, sin caídas a cero |
-| RTT | Estable; en LAN, unos pocos ms |
+| RTT | En LAN son unos pocos ms, pero **con picos de cientos de ms bajo carga**, y eso no es la red: en el host de prueba el Pong sale por el mismo escritor que el vídeo y espera detrás de él. El relay sí adelanta el control; este cliente de diagnóstico no. Léelo como "latencia de ida y vuelta incluyendo cola del emisor", no como latencia de red |
 | Bitrate | Gobernado por el objetivo bajo carga; con el escritorio quieto puede ser mucho menor, y eso es correcto |
 | `tirados` | Idealmente 0. Si sube, `esperandoIDR` tiene que subir detrás y la imagen recuperarse en el siguiente keyframe, **no** llenarse de manchas |
 | `cola` | No crece sin parar. El máximo es 4 por diseño |
