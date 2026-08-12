@@ -65,6 +65,7 @@ message RemotePacket {
     KeyframeRequest keyframe_request = 17;
     SessionClose    close            = 18;
     RemoteError     error            = 19;
+    HelloAccepted   hello_accepted   = 20;
   }
 }
 
@@ -103,6 +104,42 @@ message Hello {
   // Lo que este extremo sabe hacer. Sirve para negociar sin romper: un viewer
   // que no entienda un codec nuevo no lo anuncia.
   RemoteCapabilities capabilities = 4;
+
+  // Credencial de RECONEXION, no de primer acceso.
+  //
+  // Campo propio y no reutilizando `ticket` a proposito: un campo que significa
+  // dos cosas segun el momento es justo la ambiguedad que obliga a versionar el
+  // protocolo mas tarde.
+  //
+  // Se manda EN LUGAR del ticket cuando se vuelve tras un microcorte. El
+  // servidor lo emitio en el HelloAccepted anterior y solo vale mientras dure la
+  // gracia. Mismas reglas que el ticket: ni linea de comandos, ni logs, ni
+  // disco.
+  string reconnect_token = 5;
+}
+
+// Respuesta del servidor a un Hello valido. Es el unico sitio por el que sale un
+// token de reconexion.
+message HelloAccepted {
+  RemoteSessionStateProto state = 1;
+
+  // Token NUEVO en cada aceptacion: el anterior deja de valer en cuanto se emite
+  // este. Uno que sirviera indefinidamente convertiria la gracia de reconexion
+  // en una credencial permanente, que es exactamente lo que no se quiere.
+  string reconnect_token = 2;
+
+  // Hasta cuando se acepta volver sin pedir un ticket nuevo, en microsegundos
+  // UTC. Pasado ese momento hace falta autorizacion del control plane otra vez.
+  int64 reconnect_until_us = 3;
+}
+
+// El mismo juego de estados que RemoteSessionState en C#. Va en el protocolo
+// para que el extremo sepa si esta esperando al otro o ya emparejado.
+enum RemoteSessionStateProto {
+  REMOTE_SESSION_STATE_UNSPECIFIED = 0;
+  REMOTE_SESSION_STATE_WAITING_FOR_HOST = 1;
+  REMOTE_SESSION_STATE_WAITING_FOR_VIEWER = 2;
+  REMOTE_SESSION_STATE_CONNECTED = 3;
 }
 
 message RemoteCapabilities {

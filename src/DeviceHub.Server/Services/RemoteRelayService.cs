@@ -18,11 +18,14 @@ namespace DeviceHub.Server.Services;
 /// Del Hello y del SessionClose ademas lee los campos: son los que deciden a que
 /// sesion pertenece cada extremo y cuando termina.
 ///
-/// LA FASE 6 NO ESTA AQUI. `Hello.ticket` viaja y se le comprueba el tamano,
-/// pero no se valida ni se escribe en ningun log: es la credencial que da acceso
-/// a ver y controlar una pantalla.
+/// AUTENTICACION (Fase 6). Ningun stream pasa del Hello sin presentar o un
+/// ticket de un solo uso o el token de reconexion que este servidor emitio. Ni
+/// el ticket ni el token se escriben jamas en un log: son la credencial que da
+/// acceso a ver y controlar una pantalla.
 /// </summary>
-public sealed class RemoteRelayGrpcService(RemoteSessionRegistry registro, ILogger<RemoteRelayGrpcService> log)
+public sealed class RemoteRelayGrpcService(
+    RemoteSessionRegistry registro, RemoteTicketRegistry tickets, RemoteLeaseRegistry leases,
+    ILogger<RemoteRelayGrpcService> log)
     : RemoteRelayService.RemoteRelayServiceBase
 {
     public override Task HostChannel(
@@ -55,8 +58,28 @@ public sealed class RemoteRelayGrpcService(RemoteSessionRegistry registro, ILogg
             return;
         }
 
-        var sesion = registro.GetOrCreate(hola.SessionId);
         using var conexion = new RelayConnection(hola.SessionId, papel);
+
+        // AUTENTICACION. O un ticket de un solo uso, o el token de reconexion que
+        // este servidor emitio antes. Nada mas entra.
+        var (autorizado, motivoAuth, token, hasta) = Autenticar(hola, papel, conexion);
+
+        if (!autorizado)
+        {
+            // Al cliente siempre el mismo codigo: distinguir "expirado" de "no
+            // existe" le dice a quien prueba tickets si va por buen camino. El
+            // detalle se queda en el log del servidor, y NUNCA el secreto.
+            await RechazarAsync(
+                salida, RemoteErrorCode.InvalidTicket, "Credencial no valida para esta sesion.", cancelacion);
+
+            log.LogWarning(
+                "Relay: {Papel} rechazado en la sesion {Sesion} por {Motivo}",
+                papel, hola.SessionId, motivoAuth);
+
+            return;
+        }
+
+        var sesion = registro.GetOrCreate(hola.SessionId);
 
         if (sesion.TryJoin(conexion) == JoinOutcome.RoleTaken)
         {
@@ -76,8 +99,21 @@ public sealed class RemoteRelayGrpcService(RemoteSessionRegistry registro, ILogg
             papel, sesion.Id, sesion.State);
 
         var bomba = conexion.PumpAsync(new StreamWriter(salida), cancelacion);
+
+        // El token de reconexion sale por AQUI y por ningun otro sitio.
+        await conexion.SendControlAsync(new RemotePacket
+        {
+            HelloAccepted = new HelloAccepted
+            {
+                State = (RemoteSessionStateProto)(int)sesion.State,
+                ReconnectToken = token,
+                ReconnectUntilUs = hasta.ToUnixTimeMilliseconds() * 1000
+            }
+        }, cancelacion);
+
         var motivo = SessionCloseReason.Normal;
         string? detalle = null;
+        var cerroOrdenado = false;
 
         try
         {
@@ -96,6 +132,7 @@ public sealed class RemoteRelayGrpcService(RemoteSessionRegistry registro, ILogg
                 {
                     motivo = paquete.Close.Reason;
                     detalle = Recortar(paquete.Close.Detail);
+                    cerroOrdenado = true;
                 }
 
                 if (papel == RemoteRole.Host)
@@ -128,6 +165,18 @@ public sealed class RemoteRelayGrpcService(RemoteSessionRegistry registro, ILogg
                 motivo = papel == RemoteRole.Host
                     ? SessionCloseReason.HostGone
                     : SessionCloseReason.ViewerGone;
+
+            // Un cierre ORDENADO mata el lease; una caida lo deja en gracia.
+            // Mantenerlo tras un SessionClose dejaria una sesion terminada
+            // reabrible durante 30 s sin autorizacion nueva.
+            //
+            // Se mira `cerroOrdenado` y no `motivo`, porque justo arriba Normal
+            // se convierte en HostGone/ViewerGone y la comparacion no volveria a
+            // ser cierta nunca.
+            if (cerroOrdenado || motivo == SessionCloseReason.ProtocolError)
+                leases.Revoke(sesion.Id, papel);
+            else
+                leases.Detach(sesion.Id, papel, conexion);
 
             var otro = sesion.Leave(conexion, motivo);
 
@@ -171,6 +220,50 @@ public sealed class RemoteRelayGrpcService(RemoteSessionRegistry registro, ILogg
                 conexion.Video.FramesDropped, conexion.Video.DiscardedWaitingIdr,
                 conexion.Video.HighWater, conexion.ControlHighWater, sesion.BytesForwarded);
         }
+    }
+
+    // -- Autenticacion ------------------------------------------------------
+
+    /// <summary>
+    /// Dos caminos, y solo dos: un ticket de arranque de un solo uso, o el token
+    /// de reconexion que este mismo servidor emitio.
+    ///
+    /// `session_id` + `machine_id` NO bastan por si solos: los dos son
+    /// adivinables, y aceptarlos convertiria la reconexion en una puerta sin
+    /// llave.
+    /// </summary>
+    private (bool Ok, string Motivo, string Token, DateTimeOffset Hasta) Autenticar(
+        RemotePacket paquete, RemoteRole papel, RelayConnection conexion)
+    {
+        var hola = paquete.Hello;
+
+        if (!string.IsNullOrEmpty(hola.ReconnectToken))
+        {
+            var veredicto = leases.TryReconnect(hola.ReconnectToken, papel, paquete.SessionId, out var lease);
+
+            if (veredicto != LeaseRejection.Accepted)
+                return (false, veredicto.ToString(), string.Empty, default);
+
+            // Se ROTA: el token que acaba de usarse deja de valer aqui mismo.
+            var (nuevo, renovado) = leases.Establish(
+                lease!.SessionId, papel, lease.MachineId, lease.UserId, conexion);
+
+            return (true, "reconexion", nuevo, renovado.ReconnectUntil);
+        }
+
+        var rechazo = tickets.TryConsume(
+            hola.Ticket, papel, paquete.SessionId, hola.MachineId, out var ticket);
+
+        if (rechazo != TicketRejection.Accepted)
+            return (false, rechazo.ToString(), string.Empty, default);
+
+        // El ticket queda consumido para siempre. A partir de aqui la
+        // reconexion la sostiene el lease: convertir el ticket de arranque en
+        // algo reutilizable seria deshacer que sea de un solo uso.
+        var (emitido, primero) = leases.Establish(
+            ticket!.SessionId, papel, ticket.TargetMachineId, ticket.UserId, conexion);
+
+        return (true, "ticket", emitido, primero.ReconnectUntil);
     }
 
     // -- Validacion ---------------------------------------------------------
