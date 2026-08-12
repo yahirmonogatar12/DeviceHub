@@ -97,85 +97,79 @@ public static class RelayTest
         }
     }
 
+    /// <summary>Lo que el hilo de captura le pasa al de red: bytes ya
+    /// codificados. Ni texturas, ni muestras, ni nada de GPU.</summary>
+    private sealed record Enviable(VideoConfig? Config, VideoFrameChunks? Grupo);
+
+    private sealed class Contadores
+    {
+        public long Capturados, Codificados, Claves, Enviados, Trozos, Bytes;
+        public long DescartesEncoder, DescartesCaptura;
+        public uint ConfigVersion;
+        public Exception? Fallo;
+    }
+
+    /// <summary>
+    /// EmitirAsync no captura. Solo lee de la cola y escribe en el cable.
+    ///
+    /// POR QUE ESTA PARTIDO EN DOS HILOS. La primera version hacia `await` de las
+    /// escrituras de red DENTRO del bucle de captura. Cada `await` devuelve el
+    /// control y la continuacion reanuda en un hilo cualquiera del pool, asi que
+    /// `AcquireNextFrame` acababa llamandose desde hilos que iban cambiando.
+    /// Desktop Duplication no lo aguanta: la prueba corria unos 12 s y despues se
+    /// quedaba bloqueada dentro de la captura, con el proceso vivo, sin CPU y sin
+    /// un solo error. En `--encode-test` no pasaba porque ese bucle es sincrono
+    /// de principio a fin.
+    ///
+    /// Es la misma familia del cuelgue del FramePipeline de la Fase 2, que quedo
+    /// sin explicar: DXGI, D3D11 y el MFT quieren UN hilo, y hay que darselo.
+    /// </summary>
     private static async Task<int> EmitirAsync(
         AsyncDuplexStreamingCall<RemotePacket, RemotePacket> llamada,
         string sesionId, int adapterIndex, int outputIndex, int seconds, int fps, int bitrate,
         CancellationToken cancellationToken)
     {
-        using var captura = new DxgiDesktopCapture(adapterIndex, outputIndex);
-        using var codificador = new H264Encoder(
-            captura.Device, captura.Width, captura.Height, fps, bitrate,
-            captura.AdapterLuid, captura.AdapterVendorId);
+        // Acotada y CON ESPERA, no con descarte: tirar un frame ya codificado
+        // rompe la cadena H.264 en el emisor, que es justo lo que el relay se
+        // esfuerza en no hacer. Si la red no da abasto, la captura se para un
+        // momento y DXGI simplemente entrega la pantalla mas reciente despues.
+        var cola = System.Threading.Channels.Channel.CreateBounded<Enviable>(
+            new System.Threading.Channels.BoundedChannelOptions(8)
+            {
+                FullMode = System.Threading.Channels.BoundedChannelFullMode.Wait,
+                SingleReader = true,
+                SingleWriter = true
+            });
 
-        Console.WriteLine($"Sesion:        {sesionId}");
-        Console.WriteLine($"Adapter:       {captura.Adapter}");
-        Console.WriteLine($"MFT:           {codificador.Capabilities.Name}");
-        Console.WriteLine($"Hardware:      {(codificador.Capabilities.Hardware ? "TRUE" : "FALSE")}");
-        Console.WriteLine($"Resolution:    {captura.Width}x{captura.Height}");
-        Console.WriteLine();
+        var cuenta = new Contadores();
 
-        long capturados = 0, codificados = 0, enviados = 0, trozos = 0, claves = 0, bytes = 0;
-        uint configVersion = 0;
+        var hilo = new Thread(() => Capturar(
+            cola.Writer, cuenta, sesionId, adapterIndex, outputIndex, seconds, fps, bitrate, cancellationToken))
+        {
+            IsBackground = true,
+            Name = "devicehub-captura"
+        };
+
+        hilo.Start();
 
         var reloj = Stopwatch.StartNew();
         var siguienteAviso = TimeSpan.FromSeconds(2);
-        var duracion = TimeSpan.FromSeconds(seconds);
 
-        while (reloj.Elapsed < duracion && !cancellationToken.IsCancellationRequested)
+        await foreach (var pieza in cola.Reader.ReadAllAsync(cancellationToken))
         {
-            using var frame = await captura.CaptureAsync(cancellationToken);
-
-            if (frame is null || !frame.DesktopChanged)
-                continue;
-
-            capturados++;
-
-            foreach (var salida in codificador.Encode(frame, cancellationToken))
+            if (pieza.Config is not null)
             {
-                codificados++;
-
-                if (salida.IsKeyFrame)
-                    claves++;
-
-                // El SPS/PPS sale dentro del primer IDR. Se saca UNA vez, se
-                // manda en VideoConfig y a partir de ahi el viewer lo conserva:
-                // reenviarlo con cada keyframe es ancho de banda que no aporta
-                // nada a quien ya lo tiene.
-                if (configVersion == 0 && salida.IsKeyFrame)
+                await EscribirAsync(llamada, new RemotePacket
                 {
-                    var parametros = H264AnnexB.ParameterSets(salida.Payload);
+                    ProtocolVersion = RemoteSessionProtocol.Version,
+                    SessionId = sesionId,
+                    VideoConfig = pieza.Config
+                }, cancellationToken);
+            }
 
-                    if (parametros.Length == 0)
-                        continue;   // todavia no; el siguiente IDR los traera
-
-                    configVersion = 1;
-
-                    await EscribirAsync(llamada, new RemotePacket
-                    {
-                        ProtocolVersion = RemoteSessionProtocol.Version,
-                        SessionId = sesionId,
-                        VideoConfig = new VideoConfig
-                        {
-                            ConfigVersion = configVersion,
-                            Codec = VideoCodec.H264,
-                            Width = (uint)salida.Width,
-                            Height = (uint)salida.Height,
-                            FramesPerSecond = (uint)fps,
-                            BitrateBitsPerSecond = (uint)bitrate,
-                            ParameterSets = Google.Protobuf.ByteString.CopyFrom(parametros),
-                            VisibleWidth = (uint)salida.Width,
-                            VisibleHeight = (uint)salida.Height
-                        }
-                    }, cancellationToken);
-                }
-
-                if (configVersion == 0)
-                    continue;   // sin configuracion no hay nada descodificable que mandar
-
-                var grupo = VideoFraming.Split(
-                    salida.Sequence, salida.IsKeyFrame, configVersion, salida.TimestampUs, salida.Payload);
-
-                foreach (var trozo in grupo.Chunks)
+            if (pieza.Grupo is not null)
+            {
+                foreach (var trozo in pieza.Grupo.Chunks)
                 {
                     await EscribirAsync(llamada, new RemotePacket
                     {
@@ -184,38 +178,155 @@ public static class RelayTest
                         VideoChunk = trozo
                     }, cancellationToken);
 
-                    trozos++;
+                    cuenta.Trozos++;
                 }
 
-                enviados++;
-                bytes += grupo.PayloadBytes;
+                cuenta.Enviados++;
+                cuenta.Bytes += pieza.Grupo.PayloadBytes;
             }
 
             if (reloj.Elapsed >= siguienteAviso)
             {
                 Console.WriteLine(
-                    $"{reloj.Elapsed:mm\\:ss}  capturados {capturados}  codificados {codificados}  " +
-                    $"frames enviados {enviados}  chunks {trozos}  " +
-                    $"{bytes * 8 / reloj.Elapsed.TotalSeconds / 1_000_000:0.00} Mbps  " +
-                    $"keyframes {claves}  config {configVersion}");
+                    $"{reloj.Elapsed:mm\\:ss}  capturados {cuenta.Capturados}  codificados {cuenta.Codificados}  " +
+                    $"frames enviados {cuenta.Enviados}  chunks {cuenta.Trozos}  " +
+                    $"{cuenta.Bytes * 8 / reloj.Elapsed.TotalSeconds / 1_000_000:0.00} Mbps  " +
+                    $"keyframes {cuenta.Claves}  config {cuenta.ConfigVersion}  cola {cola.Reader.Count}");
 
+                Console.Out.Flush();
                 siguienteAviso += TimeSpan.FromSeconds(2);
             }
         }
 
+        hilo.Join(TimeSpan.FromSeconds(3));
+
+        if (cuenta.Fallo is not null)
+            throw cuenta.Fallo;
+
         var segundos = Math.Max(reloj.Elapsed.TotalSeconds, 0.001);
 
         Console.WriteLine();
-        Console.WriteLine($"Captured:      {capturados}");
-        Console.WriteLine($"Encoded:       {codificados}");
-        Console.WriteLine($"Frames sent:   {enviados}");
-        Console.WriteLine($"Chunks sent:   {trozos}");
-        Console.WriteLine($"Mbps:          {bytes * 8 / segundos / 1_000_000:0.00}");
-        Console.WriteLine($"Keyframes:     {claves}");
-        Console.WriteLine($"Config:        v{configVersion}");
-        Console.WriteLine($"Encode drops:  {codificador.Dropped}  (captura {captura.Dropped})");
+        Console.WriteLine($"Captured:      {cuenta.Capturados}");
+        Console.WriteLine($"Encoded:       {cuenta.Codificados}");
+        Console.WriteLine($"Frames sent:   {cuenta.Enviados}");
+        Console.WriteLine($"Chunks sent:   {cuenta.Trozos}");
+        Console.WriteLine($"Mbps:          {cuenta.Bytes * 8 / segundos / 1_000_000:0.00}");
+        Console.WriteLine($"Keyframes:     {cuenta.Claves}");
+        Console.WriteLine($"Config:        v{cuenta.ConfigVersion}");
+        Console.WriteLine($"Encode drops:  {cuenta.DescartesEncoder}  (captura {cuenta.DescartesCaptura})");
+        Console.Out.Flush();
 
-        return enviados > 0 ? 0 : 5;
+        return cuenta.Enviados > 0 ? 0 : 5;
+    }
+
+    /// <summary>
+    /// Captura y codifica, y NADA MAS. Un solo hilo de principio a fin: DXGI, el
+    /// dispositivo D3D11 y el MFT se quedan aqui dentro y no ven otro.
+    ///
+    /// Lo unico que sale por la cola son bytes en memoria administrada, asi que
+    /// el hilo de red no toca la GPU ni de lejos.
+    /// </summary>
+    private static void Capturar(
+        System.Threading.Channels.ChannelWriter<Enviable> salida, Contadores cuenta,
+        string sesionId, int adapterIndex, int outputIndex, int seconds, int fps, int bitrate,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var captura = new DxgiDesktopCapture(adapterIndex, outputIndex);
+            using var codificador = new H264Encoder(
+                captura.Device, captura.Width, captura.Height, fps, bitrate,
+                captura.AdapterLuid, captura.AdapterVendorId);
+
+            Console.WriteLine($"Sesion:        {sesionId}");
+            Console.WriteLine($"Adapter:       {captura.Adapter}");
+            Console.WriteLine($"MFT:           {codificador.Capabilities.Name}");
+            Console.WriteLine($"Hardware:      {(codificador.Capabilities.Hardware ? "TRUE" : "FALSE")}");
+            Console.WriteLine($"Resolution:    {captura.Width}x{captura.Height}");
+            Console.WriteLine();
+            Console.Out.Flush();
+
+            var reloj = Stopwatch.StartNew();
+            var duracion = TimeSpan.FromSeconds(seconds);
+
+            while (reloj.Elapsed < duracion && !cancellationToken.IsCancellationRequested)
+            {
+                IReadOnlyList<EncodedFrame> producidos;
+
+                // El frame DXGI se suelta ANTES de esperar por nada. Encolar
+                // puede bloquear si la red va por detras, y quedarse la
+                // superficie duplicada mientras tanto es lo que no se hace.
+                using (var frame = captura.CaptureAsync(cancellationToken).GetAwaiter().GetResult())
+                {
+                    if (frame is null || !frame.DesktopChanged)
+                        continue;
+
+                    cuenta.Capturados++;
+                    producidos = codificador.Encode(frame, cancellationToken);
+                }
+
+                foreach (var frameCodificado in producidos)
+                {
+                    cuenta.Codificados++;
+
+                    if (frameCodificado.IsKeyFrame)
+                        cuenta.Claves++;
+
+                    VideoConfig? config = null;
+
+                    // El SPS/PPS sale dentro del primer IDR. Se saca UNA vez, se
+                    // manda en VideoConfig y a partir de ahi el viewer lo
+                    // conserva: reenviarlo con cada keyframe es ancho de banda
+                    // que no aporta nada a quien ya lo tiene.
+                    if (cuenta.ConfigVersion == 0 && frameCodificado.IsKeyFrame)
+                    {
+                        var parametros = H264AnnexB.ParameterSets(frameCodificado.Payload);
+
+                        if (parametros.Length == 0)
+                            continue;   // todavia no; el siguiente IDR los traera
+
+                        cuenta.ConfigVersion = 1;
+
+                        config = new VideoConfig
+                        {
+                            ConfigVersion = cuenta.ConfigVersion,
+                            Codec = VideoCodec.H264,
+                            Width = (uint)frameCodificado.Width,
+                            Height = (uint)frameCodificado.Height,
+                            FramesPerSecond = (uint)fps,
+                            BitrateBitsPerSecond = (uint)bitrate,
+                            ParameterSets = Google.Protobuf.ByteString.CopyFrom(parametros),
+                            VisibleWidth = (uint)frameCodificado.Width,
+                            VisibleHeight = (uint)frameCodificado.Height
+                        };
+                    }
+
+                    if (cuenta.ConfigVersion == 0)
+                        continue;   // sin configuracion no hay nada descodificable
+
+                    var grupo = VideoFraming.Split(
+                        frameCodificado.Sequence, frameCodificado.IsKeyFrame, cuenta.ConfigVersion,
+                        frameCodificado.TimestampUs, frameCodificado.Payload);
+
+                    salida.WriteAsync(new Enviable(config, grupo), cancellationToken)
+                        .AsTask().GetAwaiter().GetResult();
+                }
+            }
+
+            cuenta.DescartesEncoder = codificador.Dropped;
+            cuenta.DescartesCaptura = captura.Dropped;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            cuenta.Fallo = ex;
+        }
+        finally
+        {
+            salida.Complete();
+        }
     }
 
     /// <summary>
