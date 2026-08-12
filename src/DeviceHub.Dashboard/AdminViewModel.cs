@@ -186,9 +186,17 @@ public sealed partial class MainViewModel
             var tickets = await _client.IssueRemoteTicketsAsync(
                 SelectedMachine.MachineId, CancellationToken.None);
 
-            var visor = ResolverCliente("DeviceHub.RemoteViewer.exe")
-                ?? throw new FileNotFoundException(
-                    "No se encontro DeviceHub.RemoteViewer.exe junto al dashboard.");
+            // JUNTO AL DASHBOARD, y no con ResolverCliente: ese busca en las
+            // claves de desinstalacion de RustDesk, porque es lo que hace falta
+            // para un programa de terceros. El visor es nuestro, se publica en
+            // la misma carpeta que el dashboard y no se registra en ningun
+            // sitio, asi que se busca donde de verdad esta.
+            var visor = Path.Combine(AppContext.BaseDirectory, "DeviceHub.RemoteViewer.exe");
+
+            if (!File.Exists(visor))
+                throw new FileNotFoundException(
+                    $"No esta DeviceHub.RemoteViewer.exe en {AppContext.BaseDirectory}\n\n" +
+                    "Se instala junto al dashboard: reinstala ese componente y vuelve a intentarlo.");
 
             var proceso = System.Diagnostics.Process.Start(
                 new System.Diagnostics.ProcessStartInfo(visor,
