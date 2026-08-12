@@ -1,5 +1,6 @@
 using DeviceHub.Remote.Contracts;
 using DeviceHub.Server.Remote;
+using DeviceHub.Server.Services;
 using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
@@ -366,5 +367,60 @@ public class RemoteLeaseTests
         Assert.Equal(
             TicketRejection.AlreadyConsumed,
             tickets.TryConsume(secreto, RemoteRole.Viewer, Sesion, Maquina, out _));
+    }
+}
+
+/// <summary>
+/// Un Hello es de arranque O de reconexion, nunca las dos cosas. Aceptar ambas
+/// obligaria a decidir cual gana, y esa decision es el hueco por el que se cuela
+/// un ticket caducado detras de un token valido.
+/// </summary>
+public class HelloValidationTests
+{
+    private static RemotePacket Hola(string ticket, string token) => new()
+    {
+        ProtocolVersion = RemoteSessionProtocol.Version,
+        SessionId = "s-1",
+        Hello = new Hello { Role = RemoteRole.Viewer, MachineId = "PC", Ticket = ticket, ReconnectToken = token }
+    };
+
+    [Fact]
+    public void A_bootstrap_hello_carries_only_a_ticket()
+        => Assert.Null(RemoteRelayGrpcService.RevisarHola(Hola("abc", string.Empty), RemoteRole.Viewer));
+
+    [Fact]
+    public void A_reconnect_hello_carries_only_a_token()
+        => Assert.Null(RemoteRelayGrpcService.RevisarHola(Hola(string.Empty, "xyz"), RemoteRole.Viewer));
+
+    [Fact]
+    public void Both_at_once_is_a_protocol_error()
+    {
+        var queja = RemoteRelayGrpcService.RevisarHola(Hola("abc", "xyz"), RemoteRole.Viewer);
+
+        Assert.NotNull(queja);
+        Assert.Equal(RemoteErrorCode.InvalidTicket, queja.Value.Code);
+    }
+
+    [Fact]
+    public void Neither_is_refused_too()
+    {
+        var queja = RemoteRelayGrpcService.RevisarHola(Hola(string.Empty, string.Empty), RemoteRole.Viewer);
+
+        Assert.NotNull(queja);
+        Assert.Equal(RemoteErrorCode.InvalidTicket, queja.Value.Code);
+    }
+
+    [Fact]
+    public void An_oversized_credential_is_refused_before_anything_else()
+    {
+        var largo = new string('a', RemoteSessionProtocol.MaxTicketChars + 1);
+
+        Assert.Equal(
+            RemoteErrorCode.PayloadTooLarge,
+            RemoteRelayGrpcService.RevisarHola(Hola(largo, string.Empty), RemoteRole.Viewer)!.Value.Code);
+
+        Assert.Equal(
+            RemoteErrorCode.PayloadTooLarge,
+            RemoteRelayGrpcService.RevisarHola(Hola(string.Empty, largo), RemoteRole.Viewer)!.Value.Code);
     }
 }

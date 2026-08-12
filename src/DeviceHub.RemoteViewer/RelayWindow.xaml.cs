@@ -53,12 +53,46 @@ public partial class RelayWindow : Window
         };
     }
 
+    /// <summary>Token de reconexion vigente. SOLO en RAM: ni disco, ni log, ni
+    /// argumento. Se rota en cada HelloAccepted.</summary>
+    private string? _token;
+
+    /// <summary>El ticket de arranque. Se usa UNA vez y se borra: a partir de
+    /// ahi quien sostiene la sesion es el token.</summary>
+    private string? _ticket;
+
     private void Ejecutar()
     {
         try
         {
+            _ticket = BootstrapTicket.Read();
+
+            if (_ticket is null)
+            {
+                Mostrar("Falta el ticket. Se pasa por stdin, nunca por linea de comandos.");
+                return;
+            }
+
             MediaFactory.MFStartup(true).CheckError();
-            RecibirAsync().GetAwaiter().GetResult();
+
+            // Bucle de reconexion. Mientras haya token vigente se vuelve a la
+            // MISMA sesion sin gastar un ticket nuevo; cuando el servidor lo
+            // rechaza -- porque paso la gracia -- se termina.
+            while (!_cancelacion.IsCancellationRequested)
+            {
+                try
+                {
+                    RecibirAsync().GetAwaiter().GetResult();
+                }
+                catch (RpcException ex) when (_token is not null && !_cancelacion.IsCancellationRequested)
+                {
+                    Mostrar($"Conexion perdida ({ex.StatusCode}). Reconectando con el token...");
+                    Thread.Sleep(500);
+                    continue;
+                }
+
+                break;
+            }
         }
         catch (OperationCanceledException)
         {
@@ -108,7 +142,11 @@ public partial class RelayWindow : Window
             {
                 Role = RemoteRole.Viewer,
                 MachineId = Environment.MachineName,
-                Ticket = string.Empty,   // la validacion es la Fase 6
+
+                // Exclusivos: arranque con ticket, reconexion con token. Mandar
+                // los dos es un error de protocolo y el relay lo rechaza.
+                Ticket = _token is null ? _ticket : string.Empty,
+                ReconnectToken = _token ?? string.Empty,
                 Capabilities = new RemoteCapabilities
                 {
                     MaxProtocolVersion = RemoteSessionProtocol.Version,
@@ -217,6 +255,21 @@ public partial class RelayWindow : Window
 
                         break;
 
+                    case RemotePacket.PayloadOneofCase.HelloAccepted:
+                        // Token NUEVO: el anterior acaba de dejar de valer en el
+                        // servidor, asi que la referencia local vieja se pisa.
+                        _token = paquete.HelloAccepted.ReconnectToken;
+
+                        // Y el ticket de arranque se suelta. Ya esta consumido y
+                        // no vuelve; conservarlo solo alarga la vida de una
+                        // credencial que ya no sirve.
+                        _ticket = null;
+
+                        _reconectarHasta = DateTimeOffset.FromUnixTimeMilliseconds(
+                            paquete.HelloAccepted.ReconnectUntilUs / 1000);
+
+                        break;
+
                     case RemotePacket.PayloadOneofCase.Pong:
                         _rttUs = NowUs() - paquete.Pong.SentAtUs;
                         break;
@@ -228,10 +281,12 @@ public partial class RelayWindow : Window
                     // contadores del viewer que habia.
                     case RemotePacket.PayloadOneofCase.Close:
                         _cierre = $"El relay cerro la sesion: {paquete.Close.Reason} {paquete.Close.Detail}";
+                        _token = null;   // cierre ordenado: no hay a donde volver
                         break;
 
                     case RemotePacket.PayloadOneofCase.Error:
                         _cierre = $"Relay: {paquete.Error.Code} {paquete.Error.Detail}";
+                        _token = null;
                         break;
                 }
 
@@ -283,6 +338,7 @@ public partial class RelayWindow : Window
     }
 
     private long _rttUs = -1;
+    private DateTimeOffset _reconectarHasta;
 
     /// <summary>Motivo del cierre, si ya llego. Se muestra DEBAJO de las cifras.</summary>
     private string? _cierre;

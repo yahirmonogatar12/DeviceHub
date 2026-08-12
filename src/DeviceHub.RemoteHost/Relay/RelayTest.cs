@@ -24,6 +24,24 @@ public static class RelayTest
         string servidor, string sesionId, int adapterIndex, int outputIndex,
         int seconds, int fps, int bitrate, bool permitirSinConfianza)
     {
+        // El ticket llega por stdin, nunca por argumento. Se usa una vez y se
+        // suelta: a partir del HelloAccepted quien sostiene la sesion es el
+        // token de reconexion, que vive solo en memoria.
+        var ticket = BootstrapTicket.Read();
+
+        if (ticket is null)
+        {
+            Console.Error.WriteLine("""
+                Falta el ticket. Se pasa por stdin, nunca por linea de comandos:
+
+                  $t | .\DeviceHub.RemoteHost.exe --relay-test --server ... --session ...
+
+                Los argumentos de un proceso los lee cualquier usuario de la maquina.
+                """);
+
+            return 6;
+        }
+
         MediaFactory.MFStartup(true).CheckError();
 
         try
@@ -42,10 +60,7 @@ public static class RelayTest
                     Role = RemoteRole.Host,
                     MachineId = Environment.MachineName,
 
-                    // Vacio a proposito: la validacion es la Fase 6, y aqui no
-                    // hay ningun sitio de donde sacarlo que no sea la linea de
-                    // comandos, que es justo lo que no se hace.
-                    Ticket = string.Empty,
+                    Ticket = ticket,
                     Capabilities = new RemoteCapabilities
                     {
                         MaxProtocolVersion = RemoteSessionProtocol.Version,
@@ -329,6 +344,10 @@ public static class RelayTest
         }
     }
 
+    /// <summary>Token de reconexion vigente. Solo en RAM: ni disco, ni log, ni
+    /// argumento.</summary>
+    private static string? _tokenReconexion;
+
     /// <summary>
     /// El mismo escritor para todo. gRPC no admite dos escrituras a la vez en el
     /// stream de peticion, y aqui escriben dos sitios: el bucle de video y la
@@ -385,6 +404,18 @@ public static class RelayTest
 
                     case RemotePacket.PayloadOneofCase.Error:
                         Console.Error.WriteLine($"\nRelay: {paquete.Error.Code} {paquete.Error.Detail}");
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.HelloAccepted:
+                        // El token se guarda SOLO en memoria y no se imprime. Es
+                        // lo que permitiria volver a la misma sesion tras un
+                        // microcorte sin gastar un ticket nuevo.
+                        _tokenReconexion = paquete.HelloAccepted.ReconnectToken;
+
+                        Console.WriteLine(
+                            $"Sesion autenticada. Reconexion admitida hasta " +
+                            $"{DateTimeOffset.FromUnixTimeMilliseconds(paquete.HelloAccepted.ReconnectUntilUs / 1000):HH:mm:ss}.");
+
                         break;
 
                     case RemotePacket.PayloadOneofCase.KeyframeRequest:

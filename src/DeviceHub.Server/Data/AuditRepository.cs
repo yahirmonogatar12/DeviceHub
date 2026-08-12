@@ -13,6 +13,7 @@ public static class AuditActions
     public const string ServiceRestart = "SERVICE_RESTART";
     public const string MachineReboot = "MACHINE_REBOOT";
     public const string MachineShutdown = "MACHINE_SHUTDOWN";
+    public const string RemoteRequested = "REMOTE_SESSION_REQUESTED";
     public const string RemoteStart = "REMOTE_SESSION_STARTED";
     public const string RemoteEnd = "REMOTE_SESSION_ENDED";
     public const string MachineMoved = "MACHINE_MOVED";

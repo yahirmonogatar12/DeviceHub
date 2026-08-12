@@ -33,6 +33,7 @@ public sealed class AdminGrpcService(
     UserRepository users,
     MachineBroadcaster broadcaster,
     ConnectionRegistry registry,
+    RemoteTicketRegistry remoteTickets,
     ServerPins pins,
     JwtKeyProvider jwtKey,
     IOptions<ServerOptions> options,
@@ -241,6 +242,63 @@ public sealed class AdminGrpcService(
             Code = code, // unica vez que existe en claro
             ExpiresAt = Timestamp.FromDateTime(expiresAt),
             MaxUses = maxUses
+        };
+    }
+
+    /// <summary>
+    /// Fase 6: autoriza una sesion de control remoto y emite sus dos tickets.
+    ///
+    /// Esto NO lanza nada ni decide que motor se usa -- eso es StartRemoteSession
+    /// y la Fase 8. Aqui solo se responde a "quien puede abrir esta sesion".
+    ///
+    /// La identidad del tecnico se toma del principal autenticado y nunca del
+    /// mensaje: si viniera en el request, cualquiera con permiso para llamar
+    /// podria emitir un ticket a nombre de otro y el ticket dejaria de decir
+    /// quien pidio la sesion.
+    ///
+    /// Los dos secretos salen en claro UNA vez. El servidor guarda solo su
+    /// SHA-256, y la auditoria guarda metadata: quien, que maquina y cuando.
+    /// Nunca el secreto ni su hash -- un hash de un secreto de 256 bits no se
+    /// invierte, pero tampoco hace falta en una tabla que consulta gente.
+    /// </summary>
+    [Authorize(Roles = "administrator,technician")]
+    public override async Task<IssueRemoteTicketsResponse> IssueRemoteTickets(
+        IssueRemoteTicketsRequest request, ServerCallContext context)
+    {
+        var ct = context.CancellationToken;
+        var tecnico = context.GetHttpContext().User.Identity?.Name ?? "desconocido";
+
+        if (string.IsNullOrWhiteSpace(request.TargetMachineId))
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Falta target_machine_id"));
+
+        var maquina = await machines.GetAsync(request.TargetMachineId, ct)
+            ?? throw new RpcException(new Status(StatusCode.NotFound, "Maquina desconocida"));
+
+        var sessionId = Guid.NewGuid().ToString("n");
+
+        // El del host se ata a la PC controlada; el del viewer, a la del tecnico
+        // Y a su usuario. Asi ninguno de los dos sirve en el lugar del otro.
+        var (hostTicket, host) = remoteTickets.Issue(sessionId, DeviceHub.Remote.Contracts.RemoteRole.Host, maquina.Id);
+
+        var (viewerTicket, _) = remoteTickets.Issue(
+            sessionId, DeviceHub.Remote.Contracts.RemoteRole.Viewer,
+            string.IsNullOrWhiteSpace(request.ViewerMachineId) ? tecnico : request.ViewerMachineId,
+            tecnico);
+
+        await audit.WriteAsync(BuildAudit(
+            context, AuditActions.RemoteRequested, maquina, AuditEntry.Allowed,
+            $"sesion {sessionId} vence {host.ExpiresAt:O}"), ct);
+
+        logger.LogInformation(
+            "{Tecnico} autorizo la sesion remota {Sesion} sobre {MachineId}",
+            tecnico, sessionId, maquina.Id);
+
+        return new IssueRemoteTicketsResponse
+        {
+            SessionId = sessionId,
+            HostTicket = hostTicket,
+            ViewerTicket = viewerTicket,
+            ExpiresAtUs = host.ExpiresAt.ToUnixTimeMilliseconds() * 1000
         };
     }
 

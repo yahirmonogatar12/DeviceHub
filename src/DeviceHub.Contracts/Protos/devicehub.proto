@@ -254,6 +254,10 @@ service AdminService {
   rpc StartTerminalSession (MachineRef) returns (TerminalSessionReply);
   rpc RunTerminalCommand (TerminalCommandRequest) returns (TerminalCommandReply);
   rpc EndTerminalSession (RemoteSessionRef) returns (TerminalSessionReply);
+  // Fase 6. Deliberadamente APARTE de StartRemoteSession: ese decide COMO se
+  // lanza cada motor, y eso es la Fase 8. Este solo autoriza, que es lo unico
+  // que la Fase 6 tiene que resolver.
+  rpc IssueRemoteTickets (IssueRemoteTicketsRequest) returns (IssueRemoteTicketsResponse);
   rpc StartRemoteSession (MachineRef) returns (RemoteSessionReply);
   rpc EndRemoteSession (RemoteSessionRef) returns (RemoteSessionReply);
   rpc SendCommand (SendCommandRequest) returns (CommandEntry);
@@ -366,6 +370,23 @@ message RemoteSessionRef {
 
 // Lo que el dashboard necesita para lanzar el cliente local. Nada aqui nombra a
 // RustDesk: `launch_target` es lo que el provider decida que hay que ejecutar.
+// La identidad del tecnico NO viaja aqui: sale del principal autenticado. Si
+// viniera en el mensaje, cualquiera con permiso para llamar podria emitir un
+// ticket a nombre de otro, y el ticket dejaria de decir quien pidio la sesion.
+message IssueRemoteTicketsRequest {
+  string target_machine_id = 1;   // la PC que se va a controlar
+  string viewer_machine_id = 2;   // la PC del tecnico, si ya se conoce
+}
+
+// Los dos secretos salen UNA sola vez y en claro. El servidor solo se queda con
+// su SHA-256; no hay forma de recuperarlos despues, ni la tiene que haber.
+message IssueRemoteTicketsResponse {
+  string session_id = 1;
+  string host_ticket = 2;
+  string viewer_ticket = 3;
+  int64 expires_at_us = 4;
+}
+
 message RemoteSessionReply {
   string session_id = 1;
   string provider = 2;

@@ -268,9 +268,9 @@ public sealed class RemoteRelayGrpcService(
 
     // -- Validacion ---------------------------------------------------------
 
-    private readonly record struct Queja(RemoteErrorCode Code, string Detalle);
+    public readonly record struct Queja(RemoteErrorCode Code, string Detalle);
 
-    private static Queja? RevisarHola(RemotePacket paquete, RemoteRole papel)
+    public static Queja? RevisarHola(RemotePacket paquete, RemoteRole papel)
     {
         if (paquete.PayloadCase != RemotePacket.PayloadOneofCase.Hello)
             return new Queja(RemoteErrorCode.Unspecified, "El primer paquete tiene que ser Hello.");
@@ -291,11 +291,31 @@ public sealed class RemoteRelayGrpcService(
                 RemoteErrorCode.Unspecified,
                 $"Hello dice {paquete.Hello.Role} en el canal de {papel}.");
 
-        // El contenido NO se valida todavia -- eso es la Fase 6 -- pero el
-        // tamano si: es el primer mensaje de una conexion sin autenticar, y sin
-        // tope permitiria mandar megabytes antes de que nadie mire quien es.
-        if (paquete.Hello.Ticket.Length > RemoteSessionProtocol.MaxTicketChars)
-            return new Queja(RemoteErrorCode.PayloadTooLarge, "Ticket demasiado largo.");
+        // El tamano se comprueba antes que nada: es el primer mensaje de una
+        // conexion sin autenticar, y sin tope permitiria mandar megabytes antes
+        // de que nadie mire quien es.
+        if (paquete.Hello.Ticket.Length > RemoteSessionProtocol.MaxTicketChars ||
+            paquete.Hello.ReconnectToken.Length > RemoteSessionProtocol.MaxTicketChars)
+            return new Queja(RemoteErrorCode.PayloadTooLarge, "Credencial demasiado larga.");
+
+        // EXCLUSIVIDAD MUTUA. Un Hello es de arranque o de reconexion, nunca las
+        // dos cosas:
+        //
+        //   arranque    ticket != vacio   reconnect_token == vacio
+        //   reconexion  ticket == vacio   reconnect_token != vacio
+        //
+        // Aceptar los dos obligaria a decidir cual gana, y esa decision es
+        // exactamente el hueco por el que se cuela un ticket caducado detras de
+        // un token valido, o al reves. Sin ninguno, no hay nada que validar.
+        var conTicket = !string.IsNullOrEmpty(paquete.Hello.Ticket);
+        var conToken = !string.IsNullOrEmpty(paquete.Hello.ReconnectToken);
+
+        if (conTicket == conToken)
+            return new Queja(
+                RemoteErrorCode.InvalidTicket,
+                conTicket
+                    ? "Hello con ticket y reconnect_token a la vez."
+                    : "Hello sin credencial.");
 
         return null;
     }
