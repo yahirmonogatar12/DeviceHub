@@ -76,7 +76,22 @@ if (-not $SkipPublish) {
         $destino = Join-Path $root "artifacts\$nombre"
 
         if (Test-Path $destino) {
-            Remove-Item "$destino\*" -Recurse -Force
+            try {
+                Remove-Item "$destino\*" -Recurse -Force -ErrorAction Stop
+            }
+            catch {
+                # El error de Windows nombra el archivo pero no dice que hacer, y
+                # casi siempre es una de estas apps abierta desde artifacts.
+                throw @"
+No se pudo vaciar $destino porque algo lo tiene abierto.
+
+  $($_.Exception.Message)
+
+Cierra lo que este corriendo desde ahi y reintenta:
+
+  Get-Process DeviceHub.Agent, DeviceHub.Dashboard, DeviceHub.RemoteHost, DeviceHub.RemoteViewer -ErrorAction SilentlyContinue | Stop-Process -Force
+"@
+            }
         }
 
         foreach ($proyecto in $proyectos[$nombre]) {
