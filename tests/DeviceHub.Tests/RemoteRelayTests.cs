@@ -340,6 +340,78 @@ public class RemoteRelayTests
         Assert.True(cola.ConfigPending);
     }
 
+    // -- Reconciliacion -----------------------------------------------------
+
+    [Fact]
+    public async Task The_snapshot_reconciles_the_chain_in_one_read()
+    {
+        // Los tres numeros de la cadena, leidos A LA VEZ. Compararlos de
+        // lecturas distintas fue lo que hizo parecer que el viewer recibia mas
+        // frames de los que mandaba el host.
+        var registro = new RemoteSessionRegistry();
+        var sesion = registro.GetOrCreate("planta-01");
+
+        using var host = new RelayConnection("planta-01", RemoteRole.Host);
+        using var viewer = Viewer("planta-01");
+
+        sesion.TryJoin(host);
+        sesion.TryJoin(viewer);
+
+        await sesion.FromHostAsync(new RemotePacket { VideoConfig = Config() }, default);
+
+        // Un IDR y dos P-frames, chunk a chunk como llegarian del host.
+        foreach (var grupo in new[] { Frame(1, true), Frame(2, false), Frame(3, false) })
+        {
+            foreach (var trozo in grupo.Chunks)
+                await sesion.FromHostAsync(new RemotePacket { VideoChunk = trozo }, default);
+        }
+
+        var foto = sesion.Snapshot();
+
+        Assert.Equal("planta-01", foto.SessionId);
+        Assert.Equal(RemoteSessionState.Connected, foto.State);
+        Assert.True(foto.HostConnected);
+        Assert.True(foto.ViewerConnected);
+        Assert.Equal(1u, foto.ConfigVersion);
+
+        Assert.Equal(3, foto.FramesReceived);
+        Assert.Equal(3, foto.FramesForwarded);
+
+        // La cadena baja de forma monotona y cada escalon tiene su contador.
+        Assert.True(foto.FramesReceived >= foto.FramesForwarded);
+        Assert.Equal(
+            foto.FramesReceived - foto.FramesForwarded,
+            foto.FramesDropped + foto.DiscardedWaitingIdr + foto.StaleConfig + foto.DiscardedNoConfig);
+
+        // Y la linea lleva el session_id delante, que es lo que permite cruzarla
+        // con lo que imprimen el host y el viewer.
+        Assert.Contains("planta-01", foto.ToString());
+        Assert.Contains("recibidos=3", foto.ToString());
+    }
+
+    [Fact]
+    public async Task The_snapshot_explains_every_frame_that_did_not_get_through()
+    {
+        var sesion = new RemoteSessionRegistry().GetOrCreate("planta-02");
+
+        using var host = new RelayConnection("planta-02", RemoteRole.Host);
+        using var viewer = Viewer("planta-02");
+
+        sesion.TryJoin(host);
+        sesion.TryJoin(viewer);
+
+        // Sin VideoConfig: nada es descodificable, y tiene que quedar dicho POR
+        // QUE no paso, no solo que no paso.
+        foreach (var trozo in Frame(1, true).Chunks)
+            await sesion.FromHostAsync(new RemotePacket { VideoChunk = trozo }, default);
+
+        var foto = sesion.Snapshot();
+
+        Assert.Equal(1, foto.FramesReceived);
+        Assert.Equal(0, foto.FramesForwarded);
+        Assert.Equal(1, foto.DiscardedNoConfig);
+    }
+
     // -- Bomba de envio -----------------------------------------------------
 
     private sealed class Escritor : IRemotePacketWriter

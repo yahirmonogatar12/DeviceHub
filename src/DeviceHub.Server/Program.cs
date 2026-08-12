@@ -180,6 +180,7 @@ builder.Services
 builder.Services.AddAuthorization();
 
 builder.Services.AddHostedService<MetricsRetentionService>();
+builder.Services.AddHostedService<RemoteSessionReporter>();
 
 var app = builder.Build();
 

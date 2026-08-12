@@ -3,6 +3,23 @@ using DeviceHub.Remote.Contracts;
 
 namespace DeviceHub.Server.Remote;
 
+/// <summary>Foto de los contadores de una sesion, leidos todos a la vez.</summary>
+public sealed record RemoteSessionSnapshot(
+    string SessionId, RemoteSessionState State, bool HostConnected, bool ViewerConnected,
+    long FramesReceived, long FramesForwarded, long BytesForwarded, long ControlForwarded,
+    long FramesDropped, long DiscardedWaitingIdr, long StaleConfig, long DiscardedNoConfig,
+    int QueueHighWater, int QueueDepth, int ControlHighWater, uint ConfigVersion)
+{
+    /// <summary>Una linea, pensada para reconciliar contra el host y el viewer
+    /// durante la prueba de planta.</summary>
+    public override string ToString()
+        => $"sesion {SessionId} {State} host={(HostConnected ? "si" : "no")} viewer={(ViewerConnected ? "si" : "no")} " +
+           $"config=v{ConfigVersion} recibidos={FramesReceived} reenviados={FramesForwarded} " +
+           $"tirados={FramesDropped} esperandoIDR={DiscardedWaitingIdr} configVieja={StaleConfig} " +
+           $"sinConfig={DiscardedNoConfig} cola={QueueDepth}/{QueueHighWater} control={ControlHighWater} " +
+           $"bytes={BytesForwarded} controlReenviado={ControlForwarded}";
+}
+
 public enum JoinOutcome
 {
     Joined,
@@ -134,6 +151,39 @@ public sealed class RemoteSession(string id)
         get { lock (_puerta) return Host is null && Viewer is null; }
     }
 
+    /// <summary>
+    /// Los contadores del relay en un instante, todos juntos y con el session_id
+    /// delante.
+    ///
+    /// Van juntos a proposito. Comparar el "frames enviados" del host con el
+    /// "frames recibidos" del viewer no demuestra nada si cada numero se leyo en
+    /// un momento distinto -- que es exactamente el error que se cometio al
+    /// reportar la prueba en localhost: dos relojes independientes, cada uno
+    /// contando desde el arranque de su proceso, y una diferencia de 16 frames
+    /// que solo era el desfase entre dos impresiones.
+    ///
+    /// Con esto, la cadena se reconcilia en una sola linea:
+    ///
+    ///   host enviados >= recibidos >= reenviados >= reconstruidos por el viewer
+    ///
+    /// y cada escalon que baja tiene su contador que lo explica.
+    /// </summary>
+    public RemoteSessionSnapshot Snapshot()
+    {
+        lock (_puerta)
+        {
+            var cola = Viewer?.Video;
+
+            return new RemoteSessionSnapshot(
+                Id, State, Host is not null, Viewer is not null,
+                FramesReceived, FramesForwarded, BytesForwarded, ControlForwarded,
+                cola?.FramesDropped ?? 0, cola?.DiscardedWaitingIdr ?? 0,
+                cola?.StaleConfig ?? 0, cola?.DiscardedNoConfig ?? 0,
+                cola?.HighWater ?? 0, cola?.Depth ?? 0,
+                Viewer?.ControlHighWater ?? 0, Config?.ConfigVersion ?? 0);
+        }
+    }
+
     /// <summary>Lo que manda la PC controlada: video y cursor.</summary>
     public async ValueTask FromHostAsync(RemotePacket paquete, CancellationToken cancellationToken)
     {
@@ -199,6 +249,9 @@ public sealed class RemoteSessionRegistry
 
     public RemoteSession? Find(string sessionId)
         => _sesiones.TryGetValue(sessionId, out var sesion) ? sesion : null;
+
+    public IReadOnlyList<RemoteSessionSnapshot> Snapshot()
+        => [.. _sesiones.Values.Select(s => s.Snapshot())];
 
     /// <summary>Quita la sesion si ya no queda nadie. Sin esto, cada sesion del
     /// dia deja una entrada muerta en el diccionario.</summary>
