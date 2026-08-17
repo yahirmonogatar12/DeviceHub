@@ -81,13 +81,11 @@ public partial class RelayWindow : Window
             _cancelacion.Dispose();
         };
 
-        // La ventana hija del video es un control "static", que devuelve
-        // HTTRANSPARENT: los mensajes del raton atraviesan hasta WPF y llegan
-        // aqui como eventos normales. Por eso no hace falta enganchar el WndProc.
-        Video.MouseMove += VideoMouseMove;
-        Video.MouseDown += VideoMouseButton;
-        Video.MouseUp += VideoMouseButton;
-        Video.MouseWheel += VideoMouseWheel;
+        // Del WndProc de la ventana hija, no de los eventos de WPF: el video se
+        // dibuja en una ventana Win32 encima del arbol visual, y los mensajes del
+        // raton van a ella. Con los eventos de WPF el video se veia y no se podia
+        // controlar nada.
+        Video.Raton += RatonRemoto;
 
         // A nivel de ventana, no del video: el teclado va a donde este el foco, y
         // el control "static" no lo toma.
@@ -511,33 +509,41 @@ public partial class RelayWindow : Window
     /// cambio apuntarian a otro sitio. Ademas la ventana del visor casi nunca
     /// mide lo mismo que la pantalla que muestra.
     /// </summary>
-    private bool Posicion(MouseEventArgs e, out double x, out double y)
+    /// <summary>
+    /// Traduce los mensajes crudos de Win32. Es feo comparado con los eventos de
+    /// WPF y es lo unico que funciona: sobre un HwndHost, WPF no ve el raton.
+    /// </summary>
+    private void RatonRemoto(double x, double y, int mensaje, IntPtr wParam)
     {
-        var punto = e.GetPosition(Video);
-
-        x = Video.ActualWidth > 0 ? punto.X / Video.ActualWidth : -1;
-        y = Video.ActualHeight > 0 ? punto.Y / Video.ActualHeight : -1;
-
-        return x is >= 0 and <= 1 && y is >= 0 and <= 1;
-    }
-
-    private void VideoMouseMove(object sender, MouseEventArgs e)
-    {
-        if (Posicion(e, out var x, out var y))
-            Enviar(new InputEvent { MouseMove = new MouseMove { X = x, Y = y } });
-    }
-
-    private void VideoMouseButton(object sender, MouseButtonEventArgs e)
-    {
-        if (!Posicion(e, out var x, out var y))
+        if (x is < 0 or > 1 || y is < 0 or > 1)
             return;
 
-        var boton = e.ChangedButton switch
+        if (mensaje == VideoSurface.WmMouseWheel)
         {
-            System.Windows.Input.MouseButton.Left => MouseButtonId.MouseButtonLeft,
-            System.Windows.Input.MouseButton.Right => MouseButtonId.MouseButtonRight,
-            System.Windows.Input.MouseButton.Middle => MouseButtonId.MouseButtonMiddle,
-            _ => MouseButtonId.MouseButtonUnspecified
+            // El delta va en la palabra alta del wParam, con signo.
+            Enviar(new InputEvent
+            {
+                MouseWheel = new MouseWheel { Delta = (short)((wParam.ToInt64() >> 16) & 0xFFFF) }
+            });
+
+            return;
+        }
+
+        if (mensaje == WmMouseMove)
+        {
+            Enviar(new InputEvent { MouseMove = new MouseMove { X = x, Y = y } });
+            return;
+        }
+
+        var (boton, pulsado) = mensaje switch
+        {
+            0x0201 => (MouseButtonId.MouseButtonLeft, true),
+            0x0202 => (MouseButtonId.MouseButtonLeft, false),
+            0x0204 => (MouseButtonId.MouseButtonRight, true),
+            0x0205 => (MouseButtonId.MouseButtonRight, false),
+            0x0207 => (MouseButtonId.MouseButtonMiddle, true),
+            0x0208 => (MouseButtonId.MouseButtonMiddle, false),
+            _ => (MouseButtonId.MouseButtonUnspecified, false)
         };
 
         if (boton == MouseButtonId.MouseButtonUnspecified)
@@ -546,22 +552,19 @@ public partial class RelayWindow : Window
         // El foco vuelve a la ventana WPF en cada clic: sin el, las teclas se las
         // queda otra ventana y el tecnico escribe en su propia PC sin darse
         // cuenta -- que es bastante peor que no escribir en ningun sitio.
-        Focus();
+        if (pulsado)
+            Dispatcher.BeginInvoke(Focus);
 
         Enviar(new InputEvent
         {
             MouseButton = new Contracts.MouseButton
             {
-                Button = boton,
-                Pressed = e.ButtonState == MouseButtonState.Pressed,
-                X = x,
-                Y = y
+                Button = boton, Pressed = pulsado, X = x, Y = y
             }
         });
     }
 
-    private void VideoMouseWheel(object sender, MouseWheelEventArgs e)
-        => Enviar(new InputEvent { MouseWheel = new MouseWheel { Delta = e.Delta } });
+    private const int WmMouseMove = 0x0200;
 
     /// <summary>
     /// VK + scan code + extendida, nunca caracteres: sin scan code, media tecla

@@ -45,6 +45,76 @@ public sealed class VideoSurface : HwndHost
         return new HandleRef(this, _hwnd);
     }
 
+    /// <summary>
+    /// Raton sobre el video: (x, y) normalizados 0..1, el mensaje de Win32 y su
+    /// wParam.
+    ///
+    /// POR QUE NO SE USAN LOS EVENTOS DE WPF. Esta es una ventana Win32 de
+    /// verdad, encima del arbol visual. Los mensajes del raton van a ELLA, no a
+    /// WPF, asi que MouseMove y MouseDown del elemento no se disparan nunca --
+    /// el video se veia perfecto y no se podia controlar nada. Se cogen aqui,
+    /// donde llegan.
+    /// </summary>
+    public event Action<double, double, int, IntPtr>? Raton;
+
+    /// <summary>
+    /// La clase "static" contesta HTTRANSPARENT al WM_NCHITTEST, y con eso
+    /// Windows enruta los mensajes del raton a la ventana de debajo en vez de a
+    /// esta. Se responde HTCLIENT para quedarselos.
+    /// </summary>
+    protected override IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == WmNcHitTest)
+        {
+            handled = true;
+            return HtClient;
+        }
+
+        if (msg is >= WmMouseFirst and <= WmMouseLast && Raton is not null && GetClientRect(hwnd, out var caja))
+        {
+            var ancho = Math.Max(caja.Right - caja.Left, 1);
+            var alto = Math.Max(caja.Bottom - caja.Top, 1);
+
+            // La rueda trae coordenadas de PANTALLA, no de cliente. Es la unica
+            // del grupo que lo hace, y mezclarlas manda el puntero a otro sitio.
+            var bruto = (int)(lParam.ToInt64() & 0xFFFFFFFF);
+            var x = (short)(bruto & 0xFFFF);
+            var y = (short)((bruto >> 16) & 0xFFFF);
+
+            if (msg == WmMouseWheel)
+            {
+                var punto = new POINT { X = x, Y = y };
+                ScreenToClient(hwnd, ref punto);
+                x = (short)punto.X;
+                y = (short)punto.Y;
+            }
+
+            Raton((double)x / ancho, (double)y / alto, msg, wParam);
+        }
+
+        return base.WndProc(hwnd, msg, wParam, lParam, ref handled);
+    }
+
+    private const int WmNcHitTest = 0x0084;
+    private const int HtClient = 1;
+    private const int WmMouseFirst = 0x0200;
+    private const int WmMouseLast = 0x020E;
+    public const int WmMouseWheel = 0x020A;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int X, Y; }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetClientRect(IntPtr hwnd, out RECT rect);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ScreenToClient(IntPtr hwnd, ref POINT point);
+
     protected override void DestroyWindowCore(HandleRef hwnd)
     {
         _listo.Reset();
