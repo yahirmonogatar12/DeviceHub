@@ -5,6 +5,7 @@ using System.Security.Cryptography.X509Certificates;
 using DeviceHub.Remote.Contracts;
 using DeviceHub.RemoteHost.Capture;
 using DeviceHub.RemoteHost.Encode;
+using DeviceHub.RemoteHost.Files;
 using DeviceHub.RemoteHost.Input;
 using Grpc.Core;
 using Grpc.Net.Client;
@@ -145,10 +146,9 @@ public static class RelaySession
         }
     }
 
-    /// <summary>Lo que el hilo de captura le pasa al de red: bytes ya
-    /// codificados. Ni texturas, ni muestras, ni nada de GPU.</summary>
     /// <summary>
-    /// Lo que el hilo de captura le pasa al de red. `Otro` es cualquier paquete
+    /// Lo que el hilo de captura le pasa al de red: bytes ya codificados, ni
+    /// texturas ni nada de GPU. `Otro` es cualquier paquete
     /// ya montado -- portapapeles, lista de pantallas -- para no ir anadiendo un
     /// campo por cada mensaje nuevo del protocolo.
     /// </summary>
@@ -513,6 +513,9 @@ public static class RelaySession
     /// </summary>
     private static InputInjector? _entrada;
 
+    /// <summary>Subidas en curso. Una por sesion, y la sesion es el proceso.</summary>
+    private static readonly Files.FileService _archivos = new();
+
     private static DisplayList ListaDePantallas(IReadOnlyList<Pantalla> pantallas, int actual)
     {
         var lista = new DisplayList { Current = actual };
@@ -583,6 +586,20 @@ public static class RelaySession
     {
         try
         {
+            // Un paquete suelto, con la escritura ya serializada por Pluma.
+            //
+            // BLOQUEA a proposito. Los trozos de un archivo tienen que salir en
+            // orden, y el semaforo garantiza exclusion pero no turno: si el
+            // emisor no espera a que el suyo salga, dos trozos consecutivos
+            // pueden cruzarse y el archivo llega corrupto sin que nadie lo note.
+            //
+            // ponytail: mientras un trozo espera hueco de flujo, este hilo deja
+            // de leer. Es contrapresion, no un cuelgue -- las dos direcciones de
+            // HTTP/2 son independientes. Si algun dia estorba, la salida es una
+            // cola propia para archivos, no quitar la espera.
+            void Suelto(RemotePacket salida)
+                => EscribirAsync(llamada, salida, cancelacion.Token).GetAwaiter().GetResult();
+
             while (await llamada.ResponseStream.MoveNext(cancelacion.Token))
             {
                 var paquete = llamada.ResponseStream.Current;
@@ -658,6 +675,47 @@ public static class RelaySession
                             HostAction.Types.Kind.HostActionReboot => HostActions.Reiniciar(),
 
                             _ => $"Accion desconocida: {paquete.HostAction.Kind}"
+                        });
+
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.FileListRequest:
+                        Suelto(new RemotePacket
+                        {
+                            ProtocolVersion = RemoteSessionProtocol.Version,
+                            SessionId = opciones.SesionId,
+                            FileList = FileService.Listar(paquete.FileListRequest.Path)
+                        });
+
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.FileDownload:
+                        // En un hilo aparte: leer medio giga aqui dejaria la
+                        // sesion sin atender pings, entrada ni portapapeles
+                        // mientras dure la descarga.
+                        var peticion = paquete.FileDownload;
+
+                        _ = Task.Run(() => FileService.Leer(
+                            peticion.Path, peticion.Offset,
+                            trozo => Suelto(new RemotePacket
+                            {
+                                ProtocolVersion = RemoteSessionProtocol.Version,
+                                SessionId = opciones.SesionId,
+                                FileChunk = trozo
+                            }),
+                            cancelacion.Token), cancelacion.Token);
+
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.FileChunk:
+                        // Una subida. Se escribe aqui mismo: es E/S con bufer y
+                        // el acuse tiene que salir pegado al trozo, porque es lo
+                        // que gobierna el ritmo del que sube.
+                        Suelto(new RemotePacket
+                        {
+                            ProtocolVersion = RemoteSessionProtocol.Version,
+                            SessionId = opciones.SesionId,
+                            FileAck = _archivos.Escribir(paquete.FileChunk)
                         });
 
                         break;

@@ -372,6 +372,18 @@ public partial class RelayWindow : Window
                         RecibirPantallas(paquete.Displays);
                         break;
 
+                    case RemotePacket.PayloadOneofCase.FileList:
+                        RecibirLista(paquete.FileList);
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.FileChunk:
+                        RecibirTrozo(paquete.FileChunk);
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.FileAck:
+                        RecibirAcuse(paquete.FileAck);
+                        break;
+
                     // El motivo se AÑADE al informe, no lo sustituye. Reemplazarlo
                     // borraba las cifras justo cuando terminaba la sesion, que es
                     // cuando hacen falta: en el checkpoint de la Fase 5 el host
@@ -611,6 +623,264 @@ public partial class RelayWindow : Window
         if (respuesta == MessageBoxResult.OK)
             Enviar(new HostAction { Kind = HostAction.Types.Kind.HostActionReboot });
     }
+
+    // ---------------------------------------------------------------- archivos
+
+    /// <summary>Una fila del panel. `Etiqueta` es lo que se ve.</summary>
+    private sealed record Entrada(string Nombre, bool Carpeta, ulong Tamano)
+    {
+        public string Etiqueta => Carpeta ? $"[{Nombre}]" : $"{Nombre}   {Legible(Tamano)}";
+
+        private static string Legible(ulong bytes) => bytes switch
+        {
+            < 1024 => $"{bytes} B",
+            < 1024 * 1024 => $"{bytes / 1024.0:0.0} KB",
+            < 1024UL * 1024 * 1024 => $"{bytes / 1024.0 / 1024:0.0} MB",
+            _ => $"{bytes / 1024.0 / 1024 / 1024:0.00} GB"
+        };
+    }
+
+    private string _rutaRemota = string.Empty;
+
+    /// <summary>
+    /// Descarga en curso. El archivo se escribe con extension .parcial y solo se
+    /// renombra al recibir el ultimo trozo: un archivo a medias con su nombre
+    /// definitivo es peor que no tenerlo, porque parece completo.
+    /// </summary>
+    private FileStream? _bajando;
+    private string _destinoFinal = string.Empty;
+
+    /// <summary>Subida en curso. La gobiernan los acuses del host: cada FileAck
+    /// dice por que byte va y el siguiente trozo sale de ahi.</summary>
+    private FileStream? _subiendo;
+    private string _destinoRemoto = string.Empty;
+    private ulong _tamanoSubida;
+
+    private void AlternarArchivos(object sender, RoutedEventArgs e)
+    {
+        var visible = PanelArchivos.Visibility != Visibility.Visible;
+        PanelArchivos.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+
+        if (visible && Archivos.Items.Count == 0)
+            PedirLista(string.Empty);
+    }
+
+    private void PedirLista(string ruta)
+        => Encolar(new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = _sesion,
+            FileListRequest = new FileListRequest { Path = ruta }
+        });
+
+    private void RutaEscrita(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter)
+            return;
+
+        e.Handled = true;
+        PedirLista(RutaRemota.Text.Trim());
+    }
+
+    private void SubirCarpeta(object sender, RoutedEventArgs e)
+    {
+        // Sin carpeta superior se vuelve a las unidades, no a un error.
+        var padre = string.IsNullOrEmpty(_rutaRemota)
+            ? string.Empty
+            : Path.GetDirectoryName(_rutaRemota.TrimEnd(Path.DirectorySeparatorChar)) ?? string.Empty;
+
+        PedirLista(padre);
+    }
+
+    private void AbrirEntrada(object sender, MouseButtonEventArgs e)
+    {
+        if (Archivos.SelectedItem is Entrada { Carpeta: true } carpeta)
+            PedirLista(Combinar(carpeta.Nombre));
+    }
+
+    /// <summary>Las unidades llegan como "C:\", que ya es una ruta completa.</summary>
+    private string Combinar(string nombre)
+        => string.IsNullOrEmpty(_rutaRemota) ? nombre : Path.Combine(_rutaRemota, nombre);
+
+    private void RecibirLista(FileList lista)
+        => Dispatcher.BeginInvoke(() =>
+        {
+            if (lista.Error.Length > 0)
+            {
+                EstadoArchivos.Text = lista.Error;
+                return;
+            }
+
+            _rutaRemota = lista.Path;
+            RutaRemota.Text = lista.Path;
+
+            Archivos.ItemsSource = lista.Entries
+                .Select(x => new Entrada(x.Name, x.Directory, x.Size))
+                .ToList();
+
+            EstadoArchivos.Text = $"{lista.Entries.Count} elementos";
+        });
+
+    // ------------------------------------------------------------- descarga
+
+    private void Descargar(object sender, RoutedEventArgs e)
+    {
+        if (Archivos.SelectedItem is not Entrada { Carpeta: false } archivo)
+        {
+            EstadoArchivos.Text = "Elige un archivo.";
+            return;
+        }
+
+        var carpeta = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "DeviceHub");
+
+        Directory.CreateDirectory(carpeta);
+
+        _destinoFinal = Path.Combine(carpeta, archivo.Nombre);
+        var parcial = _destinoFinal + ".parcial";
+
+        // REANUDAR: lo que ya haya en el .parcial es el punto de partida. Nadie
+        // lleva un registro aparte -- el propio archivo es el estado.
+        var desde = File.Exists(parcial) ? (ulong)new FileInfo(parcial).Length : 0;
+
+        _bajando?.Dispose();
+        _bajando = new FileStream(parcial, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
+        _bajando.Seek((long)desde, SeekOrigin.Begin);
+
+        Progreso.Value = 0;
+        EstadoArchivos.Text = desde > 0
+            ? $"Reanudando {archivo.Nombre} desde {desde / 1024} KB..."
+            : $"Descargando {archivo.Nombre}...";
+
+        Encolar(new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = _sesion,
+            FileDownload = new FileDownloadRequest { Path = Combinar(archivo.Nombre), Offset = desde }
+        });
+    }
+
+    private void RecibirTrozo(FileChunk trozo)
+        => Dispatcher.BeginInvoke(() =>
+        {
+            if (_bajando is null)
+                return;
+
+            if (trozo.Error.Length > 0)
+            {
+                // El .parcial NO se borra: es lo que permite reintentar sin
+                // volver a bajar lo que ya llego.
+                _bajando.Dispose();
+                _bajando = null;
+                EstadoArchivos.Text = $"Fallo: {trozo.Error}";
+                return;
+            }
+
+            if (trozo.Data.Length > 0)
+            {
+                _bajando.Seek((long)trozo.Offset, SeekOrigin.Begin);
+                trozo.Data.WriteTo(_bajando);
+            }
+
+            if (trozo.Total > 0)
+                Progreso.Value = (trozo.Offset + (ulong)trozo.Data.Length) * 100.0 / trozo.Total;
+
+            if (!trozo.Last)
+                return;
+
+            _bajando.Dispose();
+            _bajando = null;
+
+            var parcial = _destinoFinal + ".parcial";
+
+            File.Move(parcial, _destinoFinal, overwrite: true);
+
+            Progreso.Value = 100;
+            EstadoArchivos.Text = $"Guardado en {_destinoFinal}";
+        });
+
+    // ---------------------------------------------------------------- subida
+
+    private void Subir(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrEmpty(_rutaRemota))
+        {
+            EstadoArchivos.Text = "Entra primero en una carpeta de la PC remota.";
+            return;
+        }
+
+        var dialogo = new Microsoft.Win32.OpenFileDialog { Title = "Subir a la PC remota" };
+
+        if (dialogo.ShowDialog(this) != true)
+            return;
+
+        _subiendo?.Dispose();
+        _subiendo = new FileStream(dialogo.FileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        _tamanoSubida = (ulong)_subiendo.Length;
+        _destinoRemoto = Path.Combine(_rutaRemota, Path.GetFileName(dialogo.FileName));
+
+        Progreso.Value = 0;
+        EstadoArchivos.Text = $"Subiendo {Path.GetFileName(dialogo.FileName)}...";
+
+        // EL SONDEO. Un trozo vacio no escribe nada: solo pregunta cuanto hay ya
+        // en el destino. El host contesta con un FileAck y de ahi sale el offset
+        // por el que seguir, que es como se reanuda sin adivinar.
+        Encolar(new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = _sesion,
+            FileChunk = new FileChunk { Path = _destinoRemoto, Total = _tamanoSubida }
+        });
+    }
+
+    private void RecibirAcuse(FileAck acuse)
+        => Dispatcher.BeginInvoke(() =>
+        {
+            if (_subiendo is null)
+                return;
+
+            if (acuse.Error.Length > 0)
+            {
+                _subiendo.Dispose();
+                _subiendo = null;
+                EstadoArchivos.Text = $"Fallo: {acuse.Error}";
+                return;
+            }
+
+            if (acuse.Received >= _tamanoSubida)
+            {
+                _subiendo.Dispose();
+                _subiendo = null;
+                Progreso.Value = 100;
+                EstadoArchivos.Text = $"Subido a {_destinoRemoto}";
+                return;
+            }
+
+            // El host manda un acuse por trozo, asi que esto es la vuelta del
+            // bucle: se envia el siguiente y se espera al siguiente acuse. El
+            // ritmo lo marca el receptor, no el emisor -- por eso no hace falta
+            // control de flujo propio.
+            var bufer = new byte[60 * 1024];
+
+            _subiendo.Seek((long)acuse.Received, SeekOrigin.Begin);
+            var leidos = _subiendo.Read(bufer, 0, bufer.Length);
+
+            Progreso.Value = acuse.Received * 100.0 / Math.Max(_tamanoSubida, 1);
+
+            Encolar(new RemotePacket
+            {
+                ProtocolVersion = RemoteSessionProtocol.Version,
+                SessionId = _sesion,
+                FileChunk = new FileChunk
+                {
+                    Path = _destinoRemoto,
+                    Offset = acuse.Received,
+                    Total = _tamanoSubida,
+                    Data = Google.Protobuf.ByteString.CopyFrom(bufer, 0, leidos),
+                    Last = acuse.Received + (ulong)leidos >= _tamanoSubida
+                }
+            });
+        });
 
     // --------------------------------------------------------------- pantallas
 

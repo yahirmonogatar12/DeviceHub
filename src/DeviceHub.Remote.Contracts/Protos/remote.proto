@@ -70,7 +70,88 @@ message RemotePacket {
     ClipboardText   clipboard        = 22;
     DisplayList     displays         = 23;
     SelectDisplay   select_display   = 24;
+
+    FileListRequest     file_list_request = 25;
+    FileList            file_list         = 26;
+    FileDownloadRequest file_download     = 27;
+    FileChunk           file_chunk        = 28;
+    FileAck             file_ack          = 29;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Fase 24 -- transferencia de archivos, sin tope de tamano
+// ---------------------------------------------------------------------------
+//
+// Va por el RELAY y no por la tuberia de comandos. La tuberia guarda el
+// resultado de cada comando en una columna de MySQL, y por eso tenia un tope de
+// 4 MB: bajar 500 MB serian cientos de filas y otras tantas rondas de sondeo.
+// Aqui el stream ya esta abierto y los bytes no tocan la base de datos.
+//
+// REANUDAR es lo que convierte esto en un subsistema y no en un troceado: quien
+// RECIBE es el que dice por que byte va, porque es el unico que sabe lo que
+// llego de verdad a su disco.
+
+message FileListRequest {
+  // Vacio = las unidades. Es la unica forma de empezar sin saber nada de la
+  // maquina de enfrente.
+  string path = 1;
+}
+
+message FileList {
+  string path = 1;
+  repeated FileEntry entries = 2;
+
+  // Relleno = no se pudo listar. No se manda un RemoteError porque no es la
+  // sesion la que falla, solo esta carpeta.
+  string error = 3;
+}
+
+message FileEntry {
+  string name = 1;
+  bool   directory = 2;
+  uint64 size = 3;
+  int64  modified_us = 4;
+}
+
+// Del viewer al host. offset > 0 es REANUDAR: el viewer ya tiene esos bytes.
+message FileDownloadRequest {
+  string path = 1;
+  uint64 offset = 2;
+}
+
+// En los DOS sentidos: del host al viewer es una descarga, del viewer al host
+// una subida.
+message FileChunk {
+  string path = 1;
+
+  // Byte del archivo donde empieza `data`. No es un contador de trozos: si se
+  // reanuda, el primero no empieza en cero.
+  uint64 offset = 2;
+
+  // Tamano total del archivo. 0 = todavia no se sabe.
+  uint64 total = 3;
+
+  // <= 64 KiB, el mismo tope que el video y por el mismo motivo: por debajo del
+  // umbral del Large Object Heap.
+  bytes data = 4;
+
+  bool last = 5;
+
+  // Relleno = la transferencia murio aqui. El receptor conserva lo que tenga:
+  // para eso existe la reanudacion.
+  string error = 6;
+}
+
+// Del que RECIBE al que manda: cuantos bytes hay confirmados en disco.
+//
+// Es la pieza de la reanudacion. Una subida empieza con un FileChunk vacio -- un
+// sondeo -- y el host contesta con lo que ya tenga, que es el offset por donde
+// seguir. Sin ese ida y vuelta, quien sube tendria que adivinarlo.
+message FileAck {
+  string path = 1;
+  uint64 received = 2;
+  string error = 3;
 }
 
 // Fase 22. Las pantallas de la PC controlada. Del host al viewer, al empezar y

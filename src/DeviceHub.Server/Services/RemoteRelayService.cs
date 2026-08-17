@@ -341,11 +341,14 @@ public sealed class RemoteRelayGrpcService(
             RemotePacket.PayloadOneofCase.VideoConfig or
             RemotePacket.PayloadOneofCase.VideoChunk or
             RemotePacket.PayloadOneofCase.Cursor or
-            RemotePacket.PayloadOneofCase.Displays => papel == RemoteRole.Host,
+            RemotePacket.PayloadOneofCase.Displays or
+            RemotePacket.PayloadOneofCase.FileList => papel == RemoteRole.Host,
 
             RemotePacket.PayloadOneofCase.Input or
             RemotePacket.PayloadOneofCase.HostAction or
             RemotePacket.PayloadOneofCase.SelectDisplay or
+            RemotePacket.PayloadOneofCase.FileListRequest or
+            RemotePacket.PayloadOneofCase.FileDownload or
             RemotePacket.PayloadOneofCase.KeyframeRequest => papel == RemoteRole.Viewer,
 
             RemotePacket.PayloadOneofCase.Ping or
@@ -355,7 +358,12 @@ public sealed class RemoteRelayGrpcService(
 
             // El portapapeles va en los dos sentidos: se copia aqui y se pega
             // alla, y al reves.
-            RemotePacket.PayloadOneofCase.Clipboard => true,
+            //
+            // Los trozos de archivo tambien: host -> viewer es una descarga y
+            // viewer -> host una subida. El acuse siempre va del que recibe.
+            RemotePacket.PayloadOneofCase.Clipboard or
+            RemotePacket.PayloadOneofCase.FileChunk or
+            RemotePacket.PayloadOneofCase.FileAck => true,
 
             // Un segundo Hello, o un oneof vacio.
             _ => false
@@ -380,6 +388,19 @@ public sealed class RemoteRelayGrpcService(
 
             if (trozo.ChunkIndex >= trozo.ChunkCount)
                 return new Queja(RemoteErrorCode.Unspecified, "chunk_index fuera de rango.");
+        }
+
+        // Un trozo de archivo no puede pasar del tope de chunk. No hay limite de
+        // TAMANO DE ARCHIVO -- para eso esta la fase -- pero si de mensaje: el
+        // troceado es cosa del emisor, y uno que mande 40 MB de golpe esta
+        // pidiendole al receptor que reserve 40 MB porque si.
+        if (paquete.PayloadCase == RemotePacket.PayloadOneofCase.FileChunk
+            && paquete.FileChunk.Data.Length > RemoteSessionProtocol.MaxChunkBytes)
+        {
+            return new Queja(
+                RemoteErrorCode.PayloadTooLarge,
+                $"Trozo de archivo de {paquete.FileChunk.Data.Length} bytes; " +
+                $"el maximo son {RemoteSessionProtocol.MaxChunkBytes}.");
         }
 
         // El portapapeles se sincroniza SOLO, sin que nadie lo pida. Sin tope,

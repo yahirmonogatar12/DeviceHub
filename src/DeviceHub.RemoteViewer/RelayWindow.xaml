@@ -38,6 +38,7 @@
                 </ComboBox>
                 <ComboBox x:Name="Monitores" Width="190" SelectionChanged="CambiarPantalla"
                           DisplayMemberPath="Etiqueta" />
+                <Button x:Name="BotonArchivos" Content="Archivos" Click="AlternarArchivos" />
                 <Button x:Name="BotonDatos" Content="Datos" Click="AlternarDatos" />
 
                 <Menu Background="Transparent" VerticalAlignment="Center" Margin="0,0,12,0">
@@ -62,6 +63,34 @@
             <TextBlock x:Name="Estado" FontFamily="Consolas" FontSize="12"
                        Foreground="#B6C2DC" TextWrapping="Wrap"
                        Text="Conectando..." />
+        </Border>
+
+        <!-- Al lado del video, nunca encima, por el mismo airspace de siempre. -->
+        <Border x:Name="PanelArchivos" DockPanel.Dock="Right" Width="360"
+                Background="#08163D" Padding="10" Visibility="Collapsed">
+            <DockPanel>
+                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                    <Button DockPanel.Dock="Left" Content="&#x2191;" Width="30" Margin="0,0,6,0"
+                            Click="SubirCarpeta" ToolTip="Carpeta superior" />
+                    <TextBox x:Name="RutaRemota" FontFamily="Consolas" FontSize="12"
+                             Background="#061029" Foreground="#E8EEFB" BorderThickness="0"
+                             Padding="6,4" KeyDown="RutaEscrita" />
+                </DockPanel>
+
+                <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                    <ProgressBar x:Name="Progreso" Height="6" Margin="0,0,0,6" />
+                    <TextBlock x:Name="EstadoArchivos" FontFamily="Consolas" FontSize="11"
+                               Foreground="#8FA6CE" TextWrapping="Wrap" Text="" />
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button Content="Descargar" Click="Descargar" />
+                        <Button Content="Subir..." Click="Subir" />
+                    </StackPanel>
+                </StackPanel>
+
+                <ListBox x:Name="Archivos" Background="#061029" Foreground="#C8D6EE"
+                         BorderThickness="0" FontFamily="Consolas" FontSize="12"
+                         DisplayMemberPath="Etiqueta" MouseDoubleClick="AbrirEntrada" />
+            </DockPanel>
         </Border>
 
         <ScrollViewer x:Name="Lienzo" Background="#0B1F55" SizeChanged="Ajustar"
