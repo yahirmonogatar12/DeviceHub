@@ -5,6 +5,7 @@ using System.Security.Cryptography.X509Certificates;
 using DeviceHub.Remote.Contracts;
 using DeviceHub.RemoteHost.Capture;
 using DeviceHub.RemoteHost.Encode;
+using DeviceHub.RemoteHost.Input;
 using Grpc.Core;
 using Grpc.Net.Client;
 using Vortice.MediaFoundation;
@@ -99,7 +100,7 @@ public static class RelaySession
                         MaxProtocolVersion = RemoteSessionProtocol.Version,
                         Codecs = { VideoCodec.H264 },
                         SupportsCursor = false,
-                        SupportsInput = false
+                        SupportsInput = true
                     }
                 }
             }, CancellationToken.None);
@@ -280,6 +281,15 @@ public static class RelaySession
         try
         {
             using var captura = new DxgiDesktopCapture(opciones.Adapter, opciones.Output);
+
+            // El inyector necesita el tamano y la esquina de ESTA pantalla, que
+            // solo se conocen despues de abrir la captura. Se publica aqui para
+            // que el hilo de red pueda aplicar la entrada en cuanto llegue.
+            //
+            // SendInput no toca la GPU, asi que puede correr en el hilo de red
+            // sin la disciplina de un solo hilo que exigen DXGI y el MFT.
+            _entrada = new InputInjector(
+                captura.Width, captura.Height, captura.DesktopLeft, captura.DesktopTop);
             using var codificador = new H264Encoder(
                 captura.Device, captura.Width, captura.Height, opciones.Fps, opciones.Bitrate,
                 captura.AdapterLuid, captura.AdapterVendorId);
@@ -377,6 +387,13 @@ public static class RelaySession
     private static string? _tokenReconexion;
 
     /// <summary>
+    /// Entrada remota. Estatico como el resto del estado de esta clase: por
+    /// diseno hay UNA sesion por proceso, y el agente lanza un RemoteHost nuevo
+    /// para cada una.
+    /// </summary>
+    private static InputInjector? _entrada;
+
+    /// <summary>
     /// El mismo escritor para todo. gRPC no admite dos escrituras a la vez en el
     /// stream de peticion, y aqui escriben dos sitios: el bucle de video y la
     /// respuesta al Ping.
@@ -451,6 +468,13 @@ public static class RelaySession
                             "Sesion autenticada. Reconexion admitida hasta " +
                             $"{DateTimeOffset.FromUnixTimeMilliseconds(paquete.HelloAccepted.ReconnectUntilUs / 1000):HH:mm:ss}.");
 
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.Input:
+                        // Silencioso a proposito: cada movimiento del raton
+                        // pasaria por aqui, y un log por evento convierte el
+                        // visor de eventos en el cuello de botella de la sesion.
+                        _entrada?.Apply(paquete.Input);
                         break;
 
                     case RemotePacket.PayloadOneofCase.KeyframeRequest:

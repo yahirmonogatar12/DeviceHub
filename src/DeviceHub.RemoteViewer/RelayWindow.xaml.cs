@@ -1,6 +1,10 @@
 using System.Diagnostics;
 using System.Net.Http;
+using System.Threading.Channels;
 using System.Windows;
+using System.Windows.Input;
+using System.Windows.Interop;
+using Contracts = DeviceHub.Remote.Contracts;
 using DeviceHub.Remote.Contracts;
 using DeviceHub.RemoteViewer.Decode;
 using DeviceHub.RemoteViewer.Render;
@@ -20,7 +24,8 @@ namespace DeviceHub.RemoteViewer;
 /// que cambia es de donde salen los bytes, y eso es a proposito: si el video se
 /// ve mal, el sospechoso es el transporte y no el visor.
 ///
-/// Sin entrada todavia. El unico trafico de vuelta es Ping, para medir el RTT.
+/// Fases 9 y 10: de vuelta viajan Ping y la ENTRADA del tecnico -- raton y
+/// teclado -- con coordenadas normalizadas 0..1, nunca en pixeles.
 /// </summary>
 public partial class RelayWindow : Window
 {
@@ -56,6 +61,19 @@ public partial class RelayWindow : Window
             _cancelacion.Cancel();
             _cancelacion.Dispose();
         };
+
+        // La ventana hija del video es un control "static", que devuelve
+        // HTTRANSPARENT: los mensajes del raton atraviesan hasta WPF y llegan
+        // aqui como eventos normales. Por eso no hace falta enganchar el WndProc.
+        Video.MouseMove += VideoMouseMove;
+        Video.MouseDown += VideoMouseButton;
+        Video.MouseUp += VideoMouseButton;
+        Video.MouseWheel += VideoMouseWheel;
+
+        // A nivel de ventana, no del video: el teclado va a donde este el foco, y
+        // el control "static" no lo toma.
+        PreviewKeyDown += (_, e) => Tecla(e, pulsada: true);
+        PreviewKeyUp += (_, e) => Tecla(e, pulsada: false);
     }
 
     /// <summary>Token de reconexion vigente. SOLO en RAM: ni disco, ni log, ni
@@ -157,7 +175,7 @@ public partial class RelayWindow : Window
                     MaxProtocolVersion = RemoteSessionProtocol.Version,
                     Codecs = { VideoCodec.H264 },
                     SupportsCursor = false,
-                    SupportsInput = false
+                    SupportsInput = true
                 }
             }
         }, _cancelacion.Token);
@@ -353,20 +371,36 @@ public partial class RelayWindow : Window
     /// vuelta: restar marcas de tiempo de dos PCs distintas da un numero
     /// inventado, porque sus relojes monotonicos no son comparables.
     /// </summary>
+    /// <summary>
+    /// UNICO escritor del stream. gRPC no admite dos escrituras a la vez, y aqui
+    /// escriben dos sitios: el latido y la entrada del tecnico, que llega desde
+    /// el hilo de la interfaz.
+    /// </summary>
     private async Task LatirAsync(IClientStreamWriter<RemotePacket> salida, CancellationToken cancellationToken)
     {
         try
         {
+            var latido = Task.Delay(1000, cancellationToken);
+
             while (!cancellationToken.IsCancellationRequested)
             {
-                await Task.Delay(1000, cancellationToken);
+                var evento = _salida.Reader.WaitToReadAsync(cancellationToken).AsTask();
 
-                await salida.WriteAsync(new RemotePacket
+                if (await Task.WhenAny(latido, evento) == latido)
                 {
-                    ProtocolVersion = RemoteSessionProtocol.Version,
-                    SessionId = _sesion,
-                    Ping = new Ping { SentAtUs = NowUs() }
-                }, cancellationToken);
+                    await salida.WriteAsync(new RemotePacket
+                    {
+                        ProtocolVersion = RemoteSessionProtocol.Version,
+                        SessionId = _sesion,
+                        Ping = new Ping { SentAtUs = NowUs() }
+                    }, cancellationToken);
+
+                    latido = Task.Delay(1000, cancellationToken);
+                    continue;
+                }
+
+                while (_salida.Reader.TryRead(out var paquete))
+                    await salida.WriteAsync(paquete, cancellationToken);
             }
         }
         catch (OperationCanceledException)
@@ -376,6 +410,146 @@ public partial class RelayWindow : Window
         {
         }
     }
+
+    // ---------------------------------------------------------- entrada remota
+
+    /// <summary>
+    /// Lo que el tecnico hace aqui, camino de la PC remota.
+    ///
+    /// Acotada y sin descarte: perder un KeyUp deja la tecla pegada al otro lado
+    /// y el tecnico se encuentra un Ctrl invisible pulsado. Si se llenara -- 512
+    /// eventos pendientes es una red que ya no funciona -- se cuenta y se ve en
+    /// la barra de estado, en vez de fingir que no paso nada.
+    ///
+    /// ponytail: los movimientos del raton se mandan todos, sin fundirlos. A 60
+    /// por segundo son unos pocos kB/s; si algun dia estorban, se coalescen aqui
+    /// quedandose con el ultimo, que es correcto porque son posiciones
+    /// absolutas, no incrementos.
+    /// </summary>
+    private readonly Channel<RemotePacket> _salida =
+        Channel.CreateBounded<RemotePacket>(new BoundedChannelOptions(512)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = true
+        });
+
+    private long _entradaPerdida;
+
+    private void Enviar(InputEvent evento)
+    {
+        var enviado = _salida.Writer.TryWrite(new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = _sesion,
+            Input = evento
+        });
+
+        if (!enviado)
+            _entradaPerdida++;
+    }
+
+    /// <summary>
+    /// De pixeles de la ventana a 0..1 sobre la pantalla remota.
+    ///
+    /// Normalizado y no en pixeles a proposito: el escritorio remoto puede
+    /// cambiar de resolucion a media sesion, y unos pixeles calculados antes del
+    /// cambio apuntarian a otro sitio. Ademas la ventana del visor casi nunca
+    /// mide lo mismo que la pantalla que muestra.
+    /// </summary>
+    private bool Posicion(MouseEventArgs e, out double x, out double y)
+    {
+        var punto = e.GetPosition(Video);
+
+        x = Video.ActualWidth > 0 ? punto.X / Video.ActualWidth : -1;
+        y = Video.ActualHeight > 0 ? punto.Y / Video.ActualHeight : -1;
+
+        return x is >= 0 and <= 1 && y is >= 0 and <= 1;
+    }
+
+    private void VideoMouseMove(object sender, MouseEventArgs e)
+    {
+        if (Posicion(e, out var x, out var y))
+            Enviar(new InputEvent { MouseMove = new MouseMove { X = x, Y = y } });
+    }
+
+    private void VideoMouseButton(object sender, MouseButtonEventArgs e)
+    {
+        if (!Posicion(e, out var x, out var y))
+            return;
+
+        var boton = e.ChangedButton switch
+        {
+            System.Windows.Input.MouseButton.Left => MouseButtonId.MouseButtonLeft,
+            System.Windows.Input.MouseButton.Right => MouseButtonId.MouseButtonRight,
+            System.Windows.Input.MouseButton.Middle => MouseButtonId.MouseButtonMiddle,
+            _ => MouseButtonId.MouseButtonUnspecified
+        };
+
+        if (boton == MouseButtonId.MouseButtonUnspecified)
+            return;
+
+        // El foco vuelve a la ventana WPF en cada clic: sin el, las teclas se las
+        // queda otra ventana y el tecnico escribe en su propia PC sin darse
+        // cuenta -- que es bastante peor que no escribir en ningun sitio.
+        Focus();
+
+        Enviar(new InputEvent
+        {
+            MouseButton = new Contracts.MouseButton
+            {
+                Button = boton,
+                Pressed = e.ButtonState == MouseButtonState.Pressed,
+                X = x,
+                Y = y
+            }
+        });
+    }
+
+    private void VideoMouseWheel(object sender, MouseWheelEventArgs e)
+        => Enviar(new InputEvent { MouseWheel = new MouseWheel { Delta = e.Delta } });
+
+    /// <summary>
+    /// VK + scan code + extendida, nunca caracteres: sin scan code, media tecla
+    /// no funciona en las aplicaciones que leen el teclado a bajo nivel.
+    ///
+    /// Preview* y no los eventos normales porque el Tab, las flechas y el Alt los
+    /// consume WPF para navegar entre controles antes de que lleguen.
+    /// </summary>
+    private void Tecla(KeyEventArgs e, bool pulsada)
+    {
+        // SystemKey es lo que trae la tecla real cuando Alt esta pulsado.
+        var tecla = e.Key == Key.System ? e.SystemKey : e.Key;
+        var vk = KeyInterop.VirtualKeyFromKey(tecla);
+
+        if (vk == 0)
+            return;
+
+        Enviar(new InputEvent
+        {
+            Key = new KeyEvent
+            {
+                VirtualKey = (uint)vk,
+                ScanCode = 0,                 // lo resuelve el host con MapVirtualKey
+                Pressed = pulsada,
+                Extended = Extendida(tecla)
+            }
+        });
+
+        // Sin esto, Tab y las flechas mueven el foco DENTRO del visor en vez de
+        // viajar a la PC remota.
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// Teclas que comparten scan code con el teclado numerico. Sin la marca de
+    /// extendida, Windows resuelve la ambiguedad al reves de lo que se pulso: la
+    /// flecha arriba se convierte en un 8.
+    /// </summary>
+    private static bool Extendida(Key tecla) => tecla is
+        Key.Insert or Key.Delete or Key.Home or Key.End or Key.PageUp or Key.PageDown or
+        Key.Left or Key.Right or Key.Up or Key.Down or
+        Key.NumLock or Key.PrintScreen or Key.Divide or
+        Key.RightAlt or Key.RightCtrl or Key.LWin or Key.RWin or Key.Apps;
 
     private static long NowUs() => Stopwatch.GetTimestamp() * 1_000_000L / Stopwatch.Frequency;
 

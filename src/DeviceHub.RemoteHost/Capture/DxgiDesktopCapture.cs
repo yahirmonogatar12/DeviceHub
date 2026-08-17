@@ -97,6 +97,17 @@ public sealed class DxgiDesktopCapture : IScreenCapture
     public int Width { get; private set; }
     public int Height { get; private set; }
 
+    /// <summary>
+    /// Esquina de esta pantalla en el escritorio VIRTUAL, que no empieza en 0,0
+    /// cuando hay varios monitores -- el de la izquierda tiene Left negativo.
+    ///
+    /// La entrada remota lo necesita: SendInput absoluto se expresa sobre el
+    /// escritorio virtual entero, y sin esta traslacion el raton aparece en el
+    /// monitor equivocado en cuanto hay mas de uno.
+    /// </summary>
+    public int DesktopLeft { get; private set; }
+    public int DesktopTop { get; private set; }
+
     public long Timeouts { get; private set; }
     public long AccessLostRecoveries { get; private set; }
     public long ResolutionChanges { get; private set; }
@@ -276,6 +287,8 @@ public sealed class DxgiDesktopCapture : IScreenCapture
             Output = description.DeviceName;
             Width = description.DesktopCoordinates.Right - description.DesktopCoordinates.Left;
             Height = description.DesktopCoordinates.Bottom - description.DesktopCoordinates.Top;
+            DesktopLeft = description.DesktopCoordinates.Left;
+            DesktopTop = description.DesktopCoordinates.Top;
 
             _output = output.QueryInterface<IDXGIOutput1>();
         }
