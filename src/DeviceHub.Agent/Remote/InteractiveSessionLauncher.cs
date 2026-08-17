@@ -263,57 +263,44 @@ public sealed class InteractiveSessionLauncher(ILogger<InteractiveSessionLaunche
         if (sesion == 0xFFFFFFFF)
             throw new InvalidOperationException("No hay sesion de consola activa en esta PC");
 
-        // SYSTEM EN LA SESION INTERACTIVA, no el usuario logueado (Fase 19).
+        // EL TOKEN DEL USUARIO LOGUEADO.
         //
-        // Con el token del usuario, el host solo puede capturar winsta0\Default:
-        // en cuanto la PC se bloquea, Windows cambia el escritorio activo a
-        // winsta0\Winlogon y ahi ese proceso no ve nada ni puede escribir. Para
-        // seguir el escritorio activo hace falta SYSTEM.
+        // La Fase 19 lo cambio por SYSTEM en la sesion interactiva para poder
+        // seguir el escritorio activo y capturar winsta0\Winlogon -- la pantalla
+        // de bloqueo, el login y los dialogos de UAC.
         //
-        // Se parte del token de ESTE proceso -- el agente ya es SYSTEM -- y solo
-        // se le cambia la sesion, que es lo que SeTcbPrivilege permite y SYSTEM
-        // tiene. Es mas barato y mas fiable que buscar el token de winlogon.exe.
+        // REVERTIDO, y medido: con el host como SYSTEM el visor deja de poder
+        // descodificar. Todas las sesiones anteriores a ese cambio se ven; todas
+        // las posteriores mueren con "ningun decodificador H.264 acepto la
+        // configuracion". Bisecado por el usuario instalando el agente 1.3.0.
         //
-        // El precio esta anotado en el plan y lo acepto el usuario: quien entre
-        // en una sesion ve y escribe en el login de esa PC antes de que nadie
-        // inicie sesion.
-        if (!OpenProcessToken(GetCurrentProcess(), TokenDuplicate | TokenQuery, out var propio))
-            throw new InvalidOperationException($"OpenProcessToken fallo: {Marshal.GetLastWin32Error()}");
-
-        using (propio)
+        // La causa concreta esta sin identificar. La sospecha razonable es que un
+        // proceso SYSTEM no obtiene el mismo codificador de Media Foundation y
+        // cae a uno cuyo flujo el decodificador del visor rechaza -- pero eso hay
+        // que MEDIRLO, no suponerlo, y para medirlo hace falta que --encode-test
+        // corra bajo SYSTEM en una PC de planta.
+        //
+        // Hasta entonces: control remoto que funciona sin pantalla de bloqueo,
+        // antes que pantalla de bloqueo sin control remoto.
+        if (!WTSQueryUserToken(sesion, out var bruto))
         {
-            if (!DuplicateTokenEx(propio, MaximumAllowed, IntPtr.Zero,
+            throw new InvalidOperationException(
+                $"Nadie logueado en la sesion {sesion} (WTSQueryUserToken: {Marshal.GetLastWin32Error()})");
+        }
+
+        using (bruto)
+        {
+            // El token que devuelve WTS es de suplantacion. CreateProcessAsUser
+            // exige uno PRIMARIO, y duplicarlo es la unica forma de conseguirlo.
+            if (!DuplicateTokenEx(bruto, MaximumAllowed, IntPtr.Zero,
                     SecurityImpersonation, TokenPrimary, out var primario))
             {
                 throw new InvalidOperationException(
                     $"DuplicateTokenEx fallo: {Marshal.GetLastWin32Error()}");
             }
 
-            var destino = Marshal.AllocHGlobal(sizeof(uint));
-
-            try
-            {
-                Marshal.WriteInt32(destino, (int)sesion);
-
-                if (!SetTokenInformation(primario, TokenSessionId, destino, sizeof(uint)))
-                {
-                    primario.Dispose();
-
-                    throw new InvalidOperationException(
-                        $"No se pudo mover el token a la sesion {sesion} " +
-                        $"(SetTokenInformation: {Marshal.GetLastWin32Error()}). Hace falta SeTcbPrivilege.");
-                }
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(destino);
-            }
-
-            logger.LogInformation("Host preparado como SYSTEM en la sesion {Sesion}", sesion);
-
-            // El pipe queda solo para SYSTEM: el host ya no corre como el
-            // usuario, asi que darle acceso a su SID seria abrirlo de mas.
-            return (primario, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null));
+            using var identidad = new WindowsIdentity(primario.DangerousGetHandle());
+            return (primario, identidad.User);
         }
     }
 
@@ -421,21 +408,9 @@ public sealed class InteractiveSessionLauncher(ILogger<InteractiveSessionLaunche
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CloseHandle(IntPtr handle);
 
-    private const uint TokenDuplicate = 0x0002;
-    private const uint TokenQuery = 0x0008;
-    private const int TokenSessionId = 12;
-
-    [DllImport("kernel32.dll")]
-    private static extern IntPtr GetCurrentProcess();
-
-    [DllImport("advapi32.dll", SetLastError = true)]
+    [DllImport("wtsapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool OpenProcessToken(IntPtr process, uint desiredAccess, out SafeTokenHandle token);
-
-    [DllImport("advapi32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetTokenInformation(
-        SafeTokenHandle token, int tokenInformationClass, IntPtr information, int length);
+    private static extern bool WTSQueryUserToken(uint sessionId, out SafeTokenHandle token);
 
     [DllImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
