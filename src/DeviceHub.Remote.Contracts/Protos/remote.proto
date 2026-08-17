@@ -66,7 +66,26 @@ message RemotePacket {
     SessionClose    close            = 18;
     RemoteError     error            = 19;
     HelloAccepted   hello_accepted   = 20;
+    HostAction      host_action      = 21;
   }
+}
+
+// Fase 19. Ordenes que NO son entrada: no viajan por SendInput porque Windows no
+// deja generarlas asi, o porque no son un movimiento ni una tecla.
+//
+// Del viewer al host, como InputEvent. Un host que mandara esto estaria
+// intentando reiniciar la PC del tecnico.
+message HostAction {
+  enum Kind {
+    HOST_ACTION_UNSPECIFIED = 0;
+
+    // Ctrl+Alt+Del. SendInput NO puede generarlo: la secuencia de atencion
+    // segura esta reservada, y por eso existe SendSAS -- que exige SYSTEM y la
+    // directiva SoftwareSASGeneration.
+    HOST_ACTION_CTRL_ALT_DEL = 1;
+  }
+
+  Kind kind = 1;
 }
 
 // ---------------------------------------------------------------------------

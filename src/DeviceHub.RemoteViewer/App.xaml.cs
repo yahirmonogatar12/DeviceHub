@@ -24,7 +24,10 @@ public partial class App : Application
                 Texto(e.Args, "--server") ?? "https://192.168.1.10:5443",
                 Texto(e.Args, "--session") ?? string.Empty,
                 Texto(e.Args, "--machine-id") ?? Environment.MachineName,
-                e.Args.Contains("--allow-untrusted")).Show();
+                e.Args.Contains("--allow-untrusted"),
+                // El pin no es secreto: es el hash de una clave publica. Por eso
+                // puede viajar por argumento y el ticket no.
+                Texto(e.Args, "--pin") ?? string.Empty).Show();
 
             return;
         }

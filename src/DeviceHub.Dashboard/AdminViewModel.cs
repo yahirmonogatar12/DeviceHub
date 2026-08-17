@@ -201,7 +201,13 @@ public sealed partial class MainViewModel
             var proceso = System.Diagnostics.Process.Start(
                 new System.Diagnostics.ProcessStartInfo(visor,
                     $"--relay-test --server {_client.ServerAddress} " +
-                    $"--session {tickets.SessionId} --machine-id {Environment.MachineName} --allow-untrusted")
+                    $"--session {tickets.SessionId} --machine-id {Environment.MachineName} " +
+                    // El mismo pin con el que este dashboard ya habla con el
+                    // servidor. Sin pin configurado se cae a --allow-untrusted y
+                    // el visor lo avisa en pantalla.
+                    (string.IsNullOrWhiteSpace(_client.ServerPin)
+                        ? "--allow-untrusted"
+                        : $"--pin {_client.ServerPin}"))
                 {
                     UseShellExecute = false,
                     RedirectStandardInput = true

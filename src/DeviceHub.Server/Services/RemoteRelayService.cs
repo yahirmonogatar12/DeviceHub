@@ -341,6 +341,7 @@ public sealed class RemoteRelayGrpcService(
             RemotePacket.PayloadOneofCase.Cursor => papel == RemoteRole.Host,
 
             RemotePacket.PayloadOneofCase.Input or
+            RemotePacket.PayloadOneofCase.HostAction or
             RemotePacket.PayloadOneofCase.KeyframeRequest => papel == RemoteRole.Viewer,
 
             RemotePacket.PayloadOneofCase.Ping or

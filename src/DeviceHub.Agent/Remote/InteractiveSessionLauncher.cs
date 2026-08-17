@@ -263,25 +263,57 @@ public sealed class InteractiveSessionLauncher(ILogger<InteractiveSessionLaunche
         if (sesion == 0xFFFFFFFF)
             throw new InvalidOperationException("No hay sesion de consola activa en esta PC");
 
-        if (!WTSQueryUserToken(sesion, out var bruto))
-        {
-            throw new InvalidOperationException(
-                $"Nadie logueado en la sesion {sesion} (WTSQueryUserToken: {Marshal.GetLastWin32Error()})");
-        }
+        // SYSTEM EN LA SESION INTERACTIVA, no el usuario logueado (Fase 19).
+        //
+        // Con el token del usuario, el host solo puede capturar winsta0\Default:
+        // en cuanto la PC se bloquea, Windows cambia el escritorio activo a
+        // winsta0\Winlogon y ahi ese proceso no ve nada ni puede escribir. Para
+        // seguir el escritorio activo hace falta SYSTEM.
+        //
+        // Se parte del token de ESTE proceso -- el agente ya es SYSTEM -- y solo
+        // se le cambia la sesion, que es lo que SeTcbPrivilege permite y SYSTEM
+        // tiene. Es mas barato y mas fiable que buscar el token de winlogon.exe.
+        //
+        // El precio esta anotado en el plan y lo acepto el usuario: quien entre
+        // en una sesion ve y escribe en el login de esa PC antes de que nadie
+        // inicie sesion.
+        if (!OpenProcessToken(GetCurrentProcess(), TokenDuplicate | TokenQuery, out var propio))
+            throw new InvalidOperationException($"OpenProcessToken fallo: {Marshal.GetLastWin32Error()}");
 
-        using (bruto)
+        using (propio)
         {
-            // El token que devuelve WTS es de suplantacion. CreateProcessAsUser
-            // exige uno PRIMARIO, y duplicarlo es la unica forma de conseguirlo.
-            if (!DuplicateTokenEx(bruto, MaximumAllowed, IntPtr.Zero,
+            if (!DuplicateTokenEx(propio, MaximumAllowed, IntPtr.Zero,
                     SecurityImpersonation, TokenPrimary, out var primario))
             {
                 throw new InvalidOperationException(
                     $"DuplicateTokenEx fallo: {Marshal.GetLastWin32Error()}");
             }
 
-            using var identidad = new WindowsIdentity(primario.DangerousGetHandle());
-            return (primario, identidad.User);
+            var destino = Marshal.AllocHGlobal(sizeof(uint));
+
+            try
+            {
+                Marshal.WriteInt32(destino, (int)sesion);
+
+                if (!SetTokenInformation(primario, TokenSessionId, destino, sizeof(uint)))
+                {
+                    primario.Dispose();
+
+                    throw new InvalidOperationException(
+                        $"No se pudo mover el token a la sesion {sesion} " +
+                        $"(SetTokenInformation: {Marshal.GetLastWin32Error()}). Hace falta SeTcbPrivilege.");
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(destino);
+            }
+
+            logger.LogInformation("Host preparado como SYSTEM en la sesion {Sesion}", sesion);
+
+            // El pipe queda solo para SYSTEM: el host ya no corre como el
+            // usuario, asi que darle acceso a su SID seria abrirlo de mas.
+            return (primario, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null));
         }
     }
 
@@ -389,9 +421,21 @@ public sealed class InteractiveSessionLauncher(ILogger<InteractiveSessionLaunche
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CloseHandle(IntPtr handle);
 
-    [DllImport("wtsapi32.dll", SetLastError = true)]
+    private const uint TokenDuplicate = 0x0002;
+    private const uint TokenQuery = 0x0008;
+    private const int TokenSessionId = 12;
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+
+    [DllImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool WTSQueryUserToken(uint sessionId, out SafeTokenHandle token);
+    private static extern bool OpenProcessToken(IntPtr process, uint desiredAccess, out SafeTokenHandle token);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetTokenInformation(
+        SafeTokenHandle token, int tokenInformationClass, IntPtr information, int length);
 
     [DllImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

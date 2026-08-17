@@ -87,6 +87,11 @@ public sealed class DeviceHubClient : IDisposable
     /// vive en ese puerto: no hay que configurar nada aparte.</summary>
     public string ServerAddress => $"https://{_settings.ServerHost}:{_settings.ServerPort}";
 
+    /// <summary>El pin con el que ESTE dashboard valida al servidor. Se le pasa
+    /// al visor para que valide igual: no es secreto, es el hash de una clave
+    /// publica.</summary>
+    public string ServerPin => _settings.ServerPin;
+
     public string Username { get; private set; } = string.Empty;
     public string Role { get; private set; } = string.Empty;
     public bool IsAdministrator => Role == "administrator";

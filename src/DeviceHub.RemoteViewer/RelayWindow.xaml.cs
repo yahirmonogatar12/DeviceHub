@@ -37,9 +37,27 @@ public partial class RelayWindow : Window
     private readonly string _machineId;
     private readonly bool _permitirSinConfianza;
 
+    /// <summary>Pin SPKI del servidor. No es secreto -- es el hash de una clave
+    /// publica -- asi que puede llegar por argumento, al contrario que el
+    /// ticket.</summary>
+    private readonly string _pin;
+
     private readonly CancellationTokenSource _cancelacion = new();
 
-    public RelayWindow(string servidor, string sesion, string machineId, bool permitirSinConfianza)
+    /// <summary>SHA-256 de la SubjectPublicKeyInfo, igual que
+    /// DeviceHub.Contracts.PublicKeyPin. Son cuatro lineas y evita que el visor
+    /// arrastre todo el ensamblado de contratos del agente.</summary>
+    private static string PinSpki(System.Security.Cryptography.X509Certificates.X509Certificate certificado)
+    {
+        using var cert = System.Security.Cryptography.X509Certificates.X509CertificateLoader
+            .LoadCertificate(certificado.GetRawCertData());
+
+        return Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(
+            cert.PublicKey.ExportSubjectPublicKeyInfo()));
+    }
+
+    public RelayWindow(
+        string servidor, string sesion, string machineId, bool permitirSinConfianza, string pin = "")
     {
         InitializeComponent();
 
@@ -47,6 +65,7 @@ public partial class RelayWindow : Window
         _sesion = sesion;
         _machineId = machineId;
         _permitirSinConfianza = permitirSinConfianza;
+        _pin = pin;
 
         Title = $"DeviceHub - sesion {sesion}";
 
@@ -142,10 +161,29 @@ public partial class RelayWindow : Window
 
         var opciones = new GrpcChannelOptions();
 
-        if (_permitirSinConfianza)
+        if (!string.IsNullOrWhiteSpace(_pin))
         {
-            // Solo para el checkpoint de la Fase 5, y hay que pedirlo a mano. La
-            // Fase 17 lo sustituye por el pin de clave publica del agente.
+            // El MISMO pin SPKI con el que el dashboard habla con el servidor. Se
+            // adelanto desde la Fase 17 porque la 19 da acceso a la pantalla de
+            // login: conceder eso sobre un canal que no valida al servidor seria
+            // descuidado.
+            opciones.HttpHandler = new SocketsHttpHandler
+            {
+                SslOptions = new System.Net.Security.SslClientAuthenticationOptions
+                {
+                    RemoteCertificateValidationCallback = (_, certificado, _, _) =>
+                        certificado is not null
+                        && PinSpki(certificado) == _pin
+                }
+            };
+        }
+        else if (_permitirSinConfianza)
+        {
+            // Escotilla de laboratorio. Sin pin configurado en el dashboard no
+            // hay con que validar, y se avisa en la barra de estado en vez de
+            // fingir que la sesion es segura.
+            Mostrar("AVISO: no se valida el certificado del servidor. Configura ServerPin en el dashboard.");
+
             opciones.HttpHandler = new HttpClientHandler
             {
                 ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
@@ -436,15 +474,24 @@ public partial class RelayWindow : Window
     private long _entradaPerdida;
 
     private void Enviar(InputEvent evento)
-    {
-        var enviado = _salida.Writer.TryWrite(new RemotePacket
+        => Encolar(new RemotePacket
         {
             ProtocolVersion = RemoteSessionProtocol.Version,
             SessionId = _sesion,
             Input = evento
         });
 
-        if (!enviado)
+    private void Enviar(HostAction accion)
+        => Encolar(new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = _sesion,
+            HostAction = accion
+        });
+
+    private void Encolar(RemotePacket paquete)
+    {
+        if (!_salida.Writer.TryWrite(paquete))
             _entradaPerdida++;
     }
 
@@ -519,6 +566,20 @@ public partial class RelayWindow : Window
     {
         // SystemKey es lo que trae la tecla real cuando Alt esta pulsado.
         var tecla = e.Key == Key.System ? e.SystemKey : e.Key;
+
+        // Ctrl+Alt+Fin, igual que en Escritorio remoto de Windows. No se puede
+        // reenviar el Ctrl+Alt+Supr de verdad -- lo intercepta Windows aqui y
+        // nunca llega a la aplicacion -- asi que se usa un sustituto y el host lo
+        // convierte en la secuencia real con SendSAS.
+        if (pulsada && tecla == Key.End
+            && Keyboard.Modifiers.HasFlag(ModifierKeys.Control)
+            && Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
+        {
+            Enviar(new HostAction { Kind = HostAction.Types.Kind.HostActionCtrlAltDel });
+            e.Handled = true;
+            return;
+        }
+
         var vk = KeyInterop.VirtualKeyFromKey(tecla);
 
         if (vk == 0)

@@ -280,30 +280,88 @@ public static class RelaySession
     {
         try
         {
-            using var captura = new DxgiDesktopCapture(opciones.Adapter, opciones.Output);
+            // Fase 19. La estacion primero, los escritorios despues: los
+            // escritorios cuelgan de una estacion, y un proceso lanzado desde un
+            // servicio puede arrancar en una que no es la interactiva.
+            InputDesktop.UsarEstacionInteractiva();
 
-            // El inyector necesita el tamano y la esquina de ESTA pantalla, que
-            // solo se conocen despues de abrir la captura. Se publica aqui para
-            // que el hilo de red pueda aplicar la entrada en cuanto llegue.
-            //
-            // SendInput no toca la GPU, asi que puede correr en el hilo de red
-            // sin la disciplina de un solo hilo que exigen DXGI y el MFT.
-            _entrada = new InputInjector(
-                captura.Width, captura.Height, captura.DesktopLeft, captura.DesktopTop);
-            using var codificador = new H264Encoder(
-                captura.Device, captura.Width, captura.Height, opciones.Fps, opciones.Bitrate,
-                captura.AdapterLuid, captura.AdapterVendorId);
-
-            opciones.Escribir(
-                $"Sesion {opciones.SesionId}  Adapter {captura.Adapter}  MFT {codificador.Capabilities.Name}  " +
-                $"Hardware {(codificador.Capabilities.Hardware ? "TRUE" : "FALSE")}  " +
-                $"Resolution {captura.Width}x{captura.Height}");
+            using var escritorio = new InputDesktop();
+            escritorio.SeguirActivo();
 
             var reloj = Stopwatch.StartNew();
             var duracion = opciones.Seconds > 0 ? TimeSpan.FromSeconds(opciones.Seconds) : TimeSpan.MaxValue;
 
             while (reloj.Elapsed < duracion && !cancellationToken.IsCancellationRequested)
+                Escritorio(salida, cuenta, opciones, escritorio, reloj, duracion, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            cuenta.Fallo = ex;
+        }
+        finally
+        {
+            salida.Complete();
+        }
+    }
+
+    /// <summary>
+    /// Captura UN escritorio hasta que la entrada salte a otro.
+    ///
+    /// Es una funcion aparte porque al saltar hay que rehacer la cadena entera:
+    /// la duplicacion DXGI queda invalidada, y con ella el codificador, porque el
+    /// SPS/PPS que el visor tiene descodifica lo de antes. Por eso cada escritorio
+    /// estrena su propia config_version -- que es exactamente para lo que la Fase
+    /// 4 la puso en cada chunk.
+    /// </summary>
+    private static void Escritorio(
+        System.Threading.Channels.ChannelWriter<Enviable> salida, Contadores cuenta,
+        RelayOptions opciones, InputDesktop escritorio, Stopwatch reloj, TimeSpan duracion,
+        CancellationToken cancellationToken)
+    {
+        using var captura = new DxgiDesktopCapture(opciones.Adapter, opciones.Output);
+
+        // El inyector necesita el tamano y la esquina de ESTA pantalla, que
+        // solo se conocen despues de abrir la captura. Se publica aqui para
+        // que el hilo de red pueda aplicar la entrada en cuanto llegue.
+        //
+        // SendInput no toca la GPU, asi que puede correr en el hilo de red
+        // sin la disciplina de un solo hilo que exigen DXGI y el MFT.
+        _entrada = new InputInjector(
+            captura.Width, captura.Height, captura.DesktopLeft, captura.DesktopTop);
+
+        using var codificador = new H264Encoder(
+            captura.Device, captura.Width, captura.Height, opciones.Fps, opciones.Bitrate,
+            captura.AdapterLuid, captura.AdapterVendorId);
+
+        opciones.Escribir(
+            $"Escritorio {escritorio.Name}  Adapter {captura.Adapter}  MFT {codificador.Capabilities.Name}  " +
+            $"Hardware {(codificador.Capabilities.Hardware ? "TRUE" : "FALSE")}  " +
+            $"Resolution {captura.Width}x{captura.Height}");
+
+        var version = ++cuenta.ConfigVersion;
+        var configEnviada = false;
+        var siguienteRevision = reloj.Elapsed;
+
+        {
+            while (reloj.Elapsed < duracion && !cancellationToken.IsCancellationRequested)
             {
+                // Cada medio segundo, no cada frame: OpenInputDesktop es una
+                // llamada al sistema y a 60 FPS serian 60 por segundo para
+                // detectar algo que pasa dos veces al dia.
+                if (reloj.Elapsed >= siguienteRevision)
+                {
+                    siguienteRevision = reloj.Elapsed + TimeSpan.FromMilliseconds(500);
+
+                    if (escritorio.SeguirActivo())
+                    {
+                        opciones.Escribir($"La entrada salto a {escritorio.Name}; se rehace la captura");
+                        return;
+                    }
+                }
+
                 IReadOnlyList<EncodedFrame> producidos;
 
                 // El frame DXGI se suelta ANTES de esperar por nada. Encolar
@@ -331,18 +389,18 @@ public static class RelaySession
                     // manda en VideoConfig y a partir de ahi el viewer lo
                     // conserva: reenviarlo con cada keyframe es ancho de banda
                     // que no aporta nada a quien ya lo tiene.
-                    if (cuenta.ConfigVersion == 0 && frameCodificado.IsKeyFrame)
+                    if (!configEnviada && frameCodificado.IsKeyFrame)
                     {
                         var parametros = H264AnnexB.ParameterSets(frameCodificado.Payload);
 
                         if (parametros.Length == 0)
                             continue;   // todavia no; el siguiente IDR los traera
 
-                        cuenta.ConfigVersion = 1;
+                        configEnviada = true;
 
                         config = new VideoConfig
                         {
-                            ConfigVersion = cuenta.ConfigVersion,
+                            ConfigVersion = version,
                             Codec = VideoCodec.H264,
                             Width = (uint)frameCodificado.Width,
                             Height = (uint)frameCodificado.Height,
@@ -354,11 +412,11 @@ public static class RelaySession
                         };
                     }
 
-                    if (cuenta.ConfigVersion == 0)
+                    if (!configEnviada)
                         continue;   // sin configuracion no hay nada descodificable
 
                     var grupo = VideoFraming.Split(
-                        frameCodificado.Sequence, frameCodificado.IsKeyFrame, cuenta.ConfigVersion,
+                        frameCodificado.Sequence, frameCodificado.IsKeyFrame, version,
                         frameCodificado.TimestampUs, frameCodificado.Payload);
 
                     salida.WriteAsync(new Enviable(config, grupo), cancellationToken)
@@ -368,17 +426,6 @@ public static class RelaySession
 
             cuenta.DescartesEncoder = codificador.Dropped;
             cuenta.DescartesCaptura = captura.Dropped;
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception ex)
-        {
-            cuenta.Fallo = ex;
-        }
-        finally
-        {
-            salida.Complete();
         }
     }
 
@@ -475,6 +522,18 @@ public static class RelaySession
                         // pasaria por aqui, y un log por evento convierte el
                         // visor de eventos en el cuello de botella de la sesion.
                         _entrada?.Apply(paquete.Input);
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.HostAction
+                        when paquete.HostAction.Kind == HostAction.Types.Kind.HostActionCtrlAltDel:
+
+                        // Este si se registra, al contrario que el raton: no es
+                        // trafico continuo y es de las pocas cosas que el tecnico
+                        // hace y quiere ver confirmadas.
+                        opciones.Escribir(SecureAttention.Enviar(out var detalle)
+                            ? detalle
+                            : $"No se pudo enviar Ctrl+Alt+Supr: {detalle}");
+
                         break;
 
                     case RemotePacket.PayloadOneofCase.KeyframeRequest:
