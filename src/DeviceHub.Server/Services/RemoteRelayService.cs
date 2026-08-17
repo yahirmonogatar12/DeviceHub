@@ -340,10 +340,12 @@ public sealed class RemoteRelayGrpcService(
         {
             RemotePacket.PayloadOneofCase.VideoConfig or
             RemotePacket.PayloadOneofCase.VideoChunk or
-            RemotePacket.PayloadOneofCase.Cursor => papel == RemoteRole.Host,
+            RemotePacket.PayloadOneofCase.Cursor or
+            RemotePacket.PayloadOneofCase.Displays => papel == RemoteRole.Host,
 
             RemotePacket.PayloadOneofCase.Input or
             RemotePacket.PayloadOneofCase.HostAction or
+            RemotePacket.PayloadOneofCase.SelectDisplay or
             RemotePacket.PayloadOneofCase.KeyframeRequest => papel == RemoteRole.Viewer,
 
             RemotePacket.PayloadOneofCase.Ping or

@@ -68,7 +68,41 @@ message RemotePacket {
     HelloAccepted   hello_accepted   = 20;
     HostAction      host_action      = 21;
     ClipboardText   clipboard        = 22;
+    DisplayList     displays         = 23;
+    SelectDisplay   select_display   = 24;
   }
+}
+
+// Fase 22. Las pantallas de la PC controlada. Del host al viewer, al empezar y
+// cada vez que cambian.
+message DisplayList {
+  repeated DisplayInfo displays = 1;
+
+  // Lo que se esta capturando ahora. -1 = el escritorio virtual entero.
+  int32 current = 2;
+}
+
+message DisplayInfo {
+  int32  id      = 1;
+  string name    = 2;   // \\.\DISPLAY1
+  string adapter = 3;
+
+  // Esquina y tamano dentro del escritorio VIRTUAL. El monitor de la izquierda
+  // tiene x negativa, y eso no es un error: es donde Windows lo puso.
+  int32 x      = 4;
+  int32 y      = 5;
+  int32 width  = 6;
+  int32 height = 7;
+
+  bool primary = 8;
+}
+
+// Del viewer al host. Rehace la captura entera, asi que trae config nueva y un
+// IDR detras -- el SPS que el viewer tenia descodifica la pantalla anterior.
+message SelectDisplay {
+  // -1 = todas a la vez, compuestas en una sola imagen del tamano del escritorio
+  // virtual. Es lo que permite arrastrar una ventana de un monitor a otro.
+  int32 display_id = 1;
 }
 
 // Fase 21. El portapapeles de TEXTO, en los dos sentidos -- el unico payload que

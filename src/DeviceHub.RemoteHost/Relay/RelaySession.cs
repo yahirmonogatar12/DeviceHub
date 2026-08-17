@@ -147,12 +147,24 @@ public static class RelaySession
 
     /// <summary>Lo que el hilo de captura le pasa al de red: bytes ya
     /// codificados. Ni texturas, ni muestras, ni nada de GPU.</summary>
+    /// <summary>
+    /// Lo que el hilo de captura le pasa al de red. `Otro` es cualquier paquete
+    /// ya montado -- portapapeles, lista de pantallas -- para no ir anadiendo un
+    /// campo por cada mensaje nuevo del protocolo.
+    /// </summary>
     private sealed record Enviable(
-        VideoConfig? Config, VideoFrameChunks? Grupo, string? Portapapeles = null);
+        VideoConfig? Config, VideoFrameChunks? Grupo, RemotePacket? Otro = null);
 
     /// <summary>Lo que el tecnico copio en SU PC, camino del portapapeles de
     /// esta. Lo aplica el hilo de captura, igual que la entrada.</summary>
     private static readonly System.Collections.Concurrent.ConcurrentQueue<string> PortapapelesEntrante = new();
+
+    /// <summary>
+    /// Pantalla que el tecnico quiere ver. La escribe el hilo de red y la lee el
+    /// de captura, que al verla cambiar rehace la cadena entera: duplicador,
+    /// codificador y config_version.
+    /// </summary>
+    private static int _pantalla;
 
     private sealed class Contadores
     {
@@ -220,15 +232,8 @@ public static class RelaySession
                     }, cancellationToken);
                 }
 
-                if (pieza.Portapapeles is not null)
-                {
-                    await EscribirAsync(llamada, new RemotePacket
-                    {
-                        ProtocolVersion = RemoteSessionProtocol.Version,
-                        SessionId = opciones.SesionId,
-                        Clipboard = new ClipboardText { Text = pieza.Portapapeles }
-                    }, cancellationToken);
-                }
+                if (pieza.Otro is not null)
+                    await EscribirAsync(llamada, pieza.Otro, cancellationToken);
 
                 if (pieza.Grupo is not null)
                 {
@@ -336,7 +341,28 @@ public static class RelaySession
         RelayOptions opciones, InputDesktop escritorio, Stopwatch reloj, TimeSpan duracion,
         CancellationToken cancellationToken)
     {
-        using var captura = new DxgiDesktopCapture(opciones.Adapter, opciones.Output);
+        var pantallas = Pantallas.Listar();
+        var pedida = _pantalla;
+        var elegida = pantallas.FirstOrDefault(p => p.Id == pedida);
+
+        // Todas a la vez compone N duplicaciones en una imagen del tamano del
+        // escritorio virtual; una sola entrega la textura del duplicador sin
+        // copiar nada. La entrada funciona igual con las dos: InputInjector
+        // recibe la esquina de lo capturado y traduce a coordenadas virtuales.
+        using IScreenCapture captura = pedida == Pantallas.Todas
+            ? new VirtualDesktopCapture(opciones.Adapter)
+            : new DxgiDesktopCapture(
+                elegida?.AdapterIndex ?? opciones.Adapter,
+                elegida?.OutputIndex ?? opciones.Output);
+
+        // La lista viaja al empezar y en cada cambio de pantalla: es cuando el
+        // visor necesita repintar su selector, y cuesta un mensaje.
+        salida.TryWrite(new Enviable(null, null, new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = opciones.SesionId,
+            Displays = ListaDePantallas(pantallas, pedida)
+        }));
 
         // El inyector necesita el tamano y la esquina de ESTA pantalla, que
         // solo se conocen despues de abrir la captura. Se publica aqui para
@@ -376,6 +402,16 @@ public static class RelaySession
                         return;
                     }
 
+                    // Cambiar de pantalla invalida el duplicador Y el codificador:
+                    // el SPS que el visor tiene descodifica la pantalla anterior.
+                    // Se sale y el bucle de fuera rehace la cadena entera con una
+                    // config_version nueva, que es justo para lo que existe.
+                    if (_pantalla != pedida)
+                    {
+                        opciones.Escribir($"El tecnico pidio la pantalla {_pantalla}; se rehace la captura");
+                        return;
+                    }
+
                     // El portapapeles, en la MISMA cadencia de medio segundo: no
                     // hay evento que avisar y sondearlo mas a menudo seria
                     // pelearse con el resto de la PC por un recurso exclusivo.
@@ -383,7 +419,14 @@ public static class RelaySession
                         ClipboardBridge.Escribir(pegado);
 
                     if (ClipboardBridge.LeerSiCambio() is { } copiado)
-                        salida.TryWrite(new Enviable(null, null, copiado));
+                    {
+                        salida.TryWrite(new Enviable(null, null, new RemotePacket
+                        {
+                            ProtocolVersion = RemoteSessionProtocol.Version,
+                            SessionId = opciones.SesionId,
+                            Clipboard = new ClipboardText { Text = copiado }
+                        }));
+                    }
                 }
 
                 // La entrada del tecnico, aplicada AQUI: este hilo es el que esta
@@ -469,6 +512,28 @@ public static class RelaySession
     /// para cada una.
     /// </summary>
     private static InputInjector? _entrada;
+
+    private static DisplayList ListaDePantallas(IReadOnlyList<Pantalla> pantallas, int actual)
+    {
+        var lista = new DisplayList { Current = actual };
+
+        foreach (var p in pantallas)
+        {
+            lista.Displays.Add(new DisplayInfo
+            {
+                Id = p.Id,
+                Name = p.Nombre,
+                Adapter = p.Adaptador,
+                X = p.X,
+                Y = p.Y,
+                Width = p.Ancho,
+                Height = p.Alto,
+                Primary = p.Primaria
+            });
+        }
+
+        return lista;
+    }
 
     /// <summary>
     /// Entrada recibida y todavia sin aplicar. La llena el hilo de red y la vacia
@@ -595,6 +660,13 @@ public static class RelaySession
                             _ => $"Accion desconocida: {paquete.HostAction.Kind}"
                         });
 
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.SelectDisplay:
+                        // Solo se anota. Quien rehace la captura es el hilo que la
+                        // tiene, cuando le viene bien: tocar DXGI desde aqui es
+                        // exactamente el error que colgo el pipeline en la Fase 2.
+                        _pantalla = paquete.SelectDisplay.DisplayId;
                         break;
 
                     case RemotePacket.PayloadOneofCase.Clipboard:

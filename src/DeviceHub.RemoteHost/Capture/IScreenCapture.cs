@@ -22,6 +22,29 @@ public interface IScreenCapture : IDisposable
     int Width { get; }
     int Height { get; }
 
+    /// <summary>
+    /// El dispositivo sobre el que llegan las texturas. El encoder tiene que usar
+    /// ESTE y no crear el suyo: dos dispositivos distintos obligarian a copiar
+    /// cada frame entre ellos, que es justo lo que se evita trabajando en GPU.
+    /// </summary>
+    Vortice.Direct3D11.ID3D11Device Device { get; }
+
+    /// <summary>Identificador exacto del adaptador DXGI. Es lo que usa el encoder
+    /// para pedir a Windows los MFT de ESTA GPU y no los de la de al lado.</summary>
+    Vortice.Luid AdapterLuid { get; }
+
+    /// <summary>ID de fabricante de la GPU (PCI), para elegir un MFT del mismo
+    /// fabricante y no cruzar frames entre tarjetas.</summary>
+    uint AdapterVendorId { get; }
+
+    /// <summary>
+    /// Esquina de lo capturado dentro del escritorio VIRTUAL, que no empieza en
+    /// 0,0 cuando hay varios monitores. Sin esta traslacion el raton remoto
+    /// aparece en el monitor equivocado en cuanto hay mas de uno.
+    /// </summary>
+    int DesktopLeft { get; }
+    int DesktopTop { get; }
+
     /// <summary>Veces que AcquireNextFrame expiro sin novedades en pantalla.</summary>
     long Timeouts { get; }
 

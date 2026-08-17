@@ -368,6 +368,10 @@ public partial class RelayWindow : Window
                         RecibirPortapapeles(paquete.Clipboard.Text);
                         break;
 
+                    case RemotePacket.PayloadOneofCase.Displays:
+                        RecibirPantallas(paquete.Displays);
+                        break;
+
                     // El motivo se AÑADE al informe, no lo sustituye. Reemplazarlo
                     // borraba las cifras justo cuando terminaba la sesion, que es
                     // cuando hacen falta: en el checkpoint de la Fase 5 el host
@@ -606,6 +610,75 @@ public partial class RelayWindow : Window
 
         if (respuesta == MessageBoxResult.OK)
             Enviar(new HostAction { Kind = HostAction.Types.Kind.HostActionReboot });
+    }
+
+    // --------------------------------------------------------------- pantallas
+
+    /// <summary>Una entrada del selector. `Etiqueta` es lo que se ve y `Id` lo
+    /// que viaja; -1 es el escritorio virtual entero.</summary>
+    private sealed record Monitor(int Id, string Etiqueta);
+
+    /// <summary>Rellenar el ComboBox dispara SelectionChanged, que pediria al host
+    /// la pantalla que el host acaba de decir que ya esta mostrando. Sin esta
+    /// bandera, cada lista provoca una recaptura completa.</summary>
+    private bool _rellenandoMonitores;
+
+    private void RecibirPantallas(DisplayList lista)
+    {
+        var monitores = new List<Monitor>();
+
+        foreach (var d in lista.Displays)
+        {
+            monitores.Add(new Monitor(
+                d.Id,
+                $"{d.Name.Replace(@"\\.\", string.Empty)}  {d.Width}x{d.Height}" +
+                (d.Primary ? "  (principal)" : string.Empty)));
+        }
+
+        // Solo tiene sentido ofrecer el escritorio completo si hay mas de una.
+        if (monitores.Count > 1)
+        {
+            var ancho = lista.Displays.Max(d => d.X + d.Width) - lista.Displays.Min(d => d.X);
+            var alto = lista.Displays.Max(d => d.Y + d.Height) - lista.Displays.Min(d => d.Y);
+
+            monitores.Insert(0, new Monitor(-1, $"Todas a la vez  {ancho}x{alto}"));
+        }
+
+        var actual = lista.Current;
+
+        Dispatcher.BeginInvoke(() =>
+        {
+            _rellenandoMonitores = true;
+
+            try
+            {
+                Monitores.ItemsSource = monitores;
+                Monitores.SelectedItem = monitores.FirstOrDefault(m => m.Id == actual);
+                Monitores.IsEnabled = monitores.Count > 1;
+            }
+            finally
+            {
+                _rellenandoMonitores = false;
+            }
+        });
+    }
+
+    private void CambiarPantalla(object sender, SelectionChangedEventArgs e)
+    {
+        if (_rellenandoMonitores || Monitores.SelectedItem is not Monitor elegido)
+            return;
+
+        // El host rehace duplicador y codificador, asi que detras de esto vienen
+        // una config nueva y un IDR. Las cifras de la barra no se reinician a
+        // proposito: son de la SESION, no de la pantalla.
+        Encolar(new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = _sesion,
+            SelectDisplay = new SelectDisplay { DisplayId = elegido.Id }
+        });
+
+        Nota($"Cambiando a {elegido.Etiqueta}...");
     }
 
     // ------------------------------------------------------------ portapapeles
