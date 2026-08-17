@@ -102,6 +102,14 @@ public sealed class MachineIdentity(string directory, ILogger<MachineIdentity> l
             // el token es irrecuperable y hace falta un recovery code.
             return null;
         }
+        catch (FormatException)
+        {
+            // Ni siquiera es base64: machine.json editado a mano o truncado por
+            // un corte de luz. Se trata igual que el ilegible -- antes escapaba
+            // sin capturar y tumbaba el bucle de sesion con un error que no
+            // mencionaba el token por ningun lado.
+            return null;
+        }
     }
 
     public static string Protect(string token)

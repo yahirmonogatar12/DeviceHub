@@ -83,6 +83,30 @@ public sealed class Worker(
             {
                 break;
             }
+            catch (RpcException ex) when (ex.StatusCode == StatusCode.Unauthenticated)
+            {
+                // El servidor no reconoce el token. Pasa cuando un administrador
+                // emite identidad nueva desde el dashboard: la fila se queda con
+                // token_hash NULL y esta PC no volvia sola NUNCA, porque
+                // EnsureRegisteredAsync se salta el registro en cuanto hay un
+                // token guardado -- aunque sea uno muerto. La unica salida era ir
+                // fisicamente a la maquina a editar machine.json.
+                var espera = DescartarToken($"El servidor rechazo el token ({ex.Status.Detail})")
+                    ? Jitter(TimeSpan.FromSeconds(5))
+                    : TimeSpan.FromMinutes(5);
+
+                await SafeDelay(espera, stoppingToken);
+            }
+            catch (RpcException ex) when (ex.StatusCode == StatusCode.PermissionDenied)
+            {
+                // El codigo de enrolamiento no sirve: vencido, ya consumido o de
+                // otra maquina. Reintentarlo cada minuto no lo va a arreglar.
+                logger.LogError(
+                    "Registro rechazado: {Detail}. Emite un recovery code para {MachineId} y ponlo en appsettings.json",
+                    ex.Status.Detail, _identity.MachineId);
+
+                await SafeDelay(TimeSpan.FromMinutes(5), stoppingToken);
+            }
             catch (RpcException ex) when (ex.StatusCode == StatusCode.FailedPrecondition)
             {
                 // Conflicto de identidad: lo resuelve un administrador, no el reintento.
@@ -143,6 +167,41 @@ public sealed class Worker(
         }
     }
 
+    /// <summary>
+    /// Tira el token guardado para que el siguiente intento vuelva a registrarse.
+    /// Devuelve si merece la pena reintentar pronto.
+    ///
+    /// EL machineId NO SE TOCA. Es lo que ata esta PC a su historial, a su
+    /// ubicacion y al recovery code que el administrador emitio apuntando a ella.
+    /// El arreglo manual que se venia haciendo -- borrar machine.json entero --
+    /// genera un GUID nuevo, y entonces el recovery code sale rechazado y la
+    /// maquina vuelve como duplicada.
+    ///
+    /// Esto no debilita nada: registrarse sigue exigiendo un codigo valido y sin
+    /// consumir. Un agente sin token no entra a ningun sitio, asi que descartarlo
+    /// no le da acceso a nada que no tuviera.
+    /// </summary>
+    private bool DescartarToken(string motivo)
+    {
+        if (string.IsNullOrWhiteSpace(_options.EnrollmentCode))
+        {
+            logger.LogError(
+                "{Motivo}. Sin codigo de enrolamiento no hay forma de recuperarse: emite un recovery code " +
+                "para {MachineId} y ponlo en el appsettings.json del agente", motivo, _identity.MachineId);
+
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(_identity.ProtectedToken))
+            return false;   // ya se descarto; lo que falla ahora es el codigo
+
+        logger.LogWarning("{Motivo}. Se descarta y se reintenta el registro con el codigo configurado", motivo);
+
+        _identity.ProtectedToken = null;
+        identityStore.Save(_identity);
+        return true;
+    }
+
     private async Task EnsureRegisteredAsync(GrpcChannel channel, CancellationToken ct)
     {
         if (!string.IsNullOrWhiteSpace(_identity.ProtectedToken))
@@ -179,9 +238,19 @@ public sealed class Worker(
 
     private async Task RunSessionAsync(GrpcChannel channel, CancellationToken stoppingToken)
     {
-        var token = MachineIdentity.Unprotect(_identity.ProtectedToken)
-            ?? throw new InvalidOperationException(
+        var token = MachineIdentity.Unprotect(_identity.ProtectedToken);
+
+        if (token is null)
+        {
+            // DPAPI con ambito LocalMachine no descifra lo que cifro otra
+            // instalacion de Windows: pasa al restaurar una imagen o al
+            // reinstalar el sistema conservando ProgramData. El token es
+            // irrecuperable, y guardarlo solo sirve para no volver nunca.
+            DescartarToken("El token guardado no se puede descifrar (DPAPI)");
+
+            throw new InvalidOperationException(
                 "Token ilegible (DPAPI). Hace falta un recovery code emitido por un administrador.");
+        }
 
         var client = new AgentService.AgentServiceClient(channel);
         var headers = new Metadata
