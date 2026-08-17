@@ -1,3 +1,6 @@
+using System.IO;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using Vortice;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
@@ -125,8 +128,13 @@ public sealed class VideoPresenter : IDisposable
     /// <summary>
     /// Pinta un frame NV12 y lo presenta. `subresource` es la rebanada del array
     /// de texturas del decodificador; sin el se pinta siempre la misma imagen.
+    ///
+    /// `guardarEn` pide una captura de ESTE frame. Se atiende aqui y no desde
+    /// fuera porque el unico momento en que la imagen existe ya convertida a RGB
+    /// es entre el Blt y el Present: con SwapEffect.FlipDiscard el contenido del
+    /// buffer trasero queda indefinido en cuanto se presenta.
     /// </summary>
-    public void Present(ID3D11Texture2D nv12, uint subresource)
+    public void Present(ID3D11Texture2D nv12, uint subresource, string? guardarEn = null)
     {
         // En el modelo flip hay que volver a pedir el buffer despues de cada
         // Present: los buffers rotan y guardarse el primero pinta sobre uno que
@@ -154,13 +162,66 @@ public sealed class VideoPresenter : IDisposable
             InputSurface = entrada
         }]);
 
+        if (guardarEn is not null)
+            Guardar(trasera, guardarEn);
+
         // Intervalo 0: el ritmo lo marca el reproductor, no el monitor. Esperar
         // al vsync aqui sumaria hasta 16 ms de retraso a cada frame.
         _swapChain.Present(0, PresentFlags.None);
     }
 
+    /// <summary>Textura de lectura para las capturas. Se crea la primera vez y se
+    /// reutiliza: una captura es un gesto manual, pero reservar video por cada
+    /// pulsacion no tiene ninguna ventaja.</summary>
+    private ID3D11Texture2D? _lectura;
+
+    private void Guardar(ID3D11Texture2D trasera, string ruta)
+    {
+        _lectura ??= _device.CreateTexture2D(new Texture2DDescription
+        {
+            Width = (uint)Width,
+            Height = (uint)Height,
+            MipLevels = 1,
+            ArraySize = 1,
+            Format = Format.B8G8R8A8_UNorm,
+            SampleDescription = new SampleDescription(1, 0),
+            Usage = ResourceUsage.Staging,
+            CPUAccessFlags = CpuAccessFlags.Read
+        });
+
+        var contexto = _device.ImmediateContext;
+
+        // GPU -> RAM. Es la unica copia a memoria de todo el visor, y ocurre solo
+        // cuando alguien pulsa el boton.
+        contexto.CopyResource(_lectura, trasera);
+
+        var mapa = contexto.Map(_lectura, 0, MapMode.Read);
+
+        try
+        {
+            // El paso (RowPitch) casi nunca es ancho*4: la GPU alinea las filas.
+            // Pasarlo como stride es lo que evita la imagen inclinada.
+            var imagen = BitmapSource.Create(
+                Width, Height, 96, 96, PixelFormats.Bgra32, null,
+                mapa.DataPointer, (int)(mapa.RowPitch * (uint)Height), (int)mapa.RowPitch);
+
+            var png = new PngBitmapEncoder();
+            png.Frames.Add(BitmapFrame.Create(imagen));
+
+            Directory.CreateDirectory(Path.GetDirectoryName(ruta)!);
+
+            using var archivo = File.Create(ruta);
+            png.Save(archivo);
+        }
+        finally
+        {
+            contexto.Unmap(_lectura, 0);
+        }
+    }
+
     public void Dispose()
     {
+        _lectura?.Dispose();
         _processor.Dispose();
         _enumerator.Dispose();
         _videoContext.Dispose();

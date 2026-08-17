@@ -1,7 +1,10 @@
 using System.Diagnostics;
+using System.Globalization;
+using System.IO;
 using System.Net.Http;
 using System.Threading.Channels;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using Contracts = DeviceHub.Remote.Contracts;
@@ -257,6 +260,22 @@ public partial class RelayWindow : Window
                         cambiosConfig++;
                         config = paquete.VideoConfig;
 
+                        // La resolucion remota puede cambiar a media sesion, asi
+                        // que el tamano del lienzo se recalcula aqui y no una vez
+                        // al arrancar.
+                        var (ancho, alto) = ((int)config.Width, (int)config.Height);
+                        _ = Dispatcher.BeginInvoke(() =>
+                        {
+                            _videoAncho = ancho;
+                            _videoAlto = alto;
+                            Ajustar();
+                        });
+
+                        // Una grabacion en curso no sobrevive a un cambio de
+                        // flujo: el SPS que lleva dentro deja de valer y el
+                        // archivo quedaria con dos resoluciones pegadas.
+                        CerrarGrabacion();
+
                         // Version nueva SI es flujo nuevo: el decodificador viejo
                         // lleva el SPS anterior dentro.
                         presentador?.Dispose();
@@ -292,6 +311,8 @@ public partial class RelayWindow : Window
                         if (completo!.KeyFrame)
                             idr++;
 
+                        Grabar(completo, config);
+
                         var antes = Stopwatch.GetTimestamp();
                         var salidas = decoder.Decode(completo.Payload, 0, completo.Payload.Length, completo.CaptureTimestampUs);
                         decodificaciones.Add(Micros(Stopwatch.GetTimestamp() - antes));
@@ -307,8 +328,16 @@ public partial class RelayWindow : Window
                                     decoder.Aperture.X, decoder.Aperture.Y,
                                     decoder.Aperture.Width, decoder.Aperture.Height);
 
-                                presentador.Present(imagen.Texture, imagen.Subresource);
+                                // La captura la pide la interfaz y la atiende el
+                                // presentador: el frame solo existe convertido a
+                                // RGB dentro de Present.
+                                var captura = Interlocked.Exchange(ref _captura, null);
+
+                                presentador.Present(imagen.Texture, imagen.Subresource, captura);
                                 pintados++;
+
+                                if (captura is not null)
+                                    Nota($"Captura guardada en {captura}");
                             }
                         }
 
@@ -366,6 +395,7 @@ public partial class RelayWindow : Window
                         // el video se ve pero no se puede controlar, esta cifra
                         // dice de un vistazo cual de las dos mitades falla.
                         $"entrada {_entradaEnviada}   " +
+                        (_grabacion is null ? string.Empty : $"grabando {_grabados} frames   ") +
                         $"incompletos {montador.Dropped}   invalidos {montador.Rejected}   tardios {montador.Stale}   " +
                         $"IDR {idr}   cambios de config {cambiosConfig}   " +
                         $"RAM {proceso.PrivateMemorySize64 / 1024 / 1024} MB (inicio {ramInicio / 1024 / 1024})   " +
@@ -392,12 +422,162 @@ public partial class RelayWindow : Window
         }
         finally
         {
+            CerrarGrabacion();
             presentador?.Dispose();
             decoder?.Dispose();
 
             await _cancelacion.CancelAsync();
             try { await latidos; } catch (Exception) { /* cerrando */ }
         }
+    }
+
+    // ------------------------------------------------------- barra del visor
+
+    /// <summary>
+    /// Ruta pedida por la interfaz para la proxima captura. Se lee con
+    /// Interlocked desde el hilo de reproduccion: son dos hilos y una referencia.
+    /// </summary>
+    private string? _captura;
+
+    /// <summary>Lo que quiere la interfaz. Abrir y cerrar el archivo lo hace SIEMPRE
+    /// el hilo de reproduccion, que es el unico que escribe en el.</summary>
+    private volatile bool _quiereGrabar;
+
+    private FileStream? _grabacion;
+    private bool _esperandoIdr;
+    private long _grabados;
+
+    private static string Carpeta(Environment.SpecialFolder donde)
+        => Path.Combine(Environment.GetFolderPath(donde), "DeviceHub");
+
+    private string NombreArchivo(string extension)
+        => Path.Combine(
+            Carpeta(extension == ".png" ? Environment.SpecialFolder.MyPictures : Environment.SpecialFolder.MyVideos),
+            $"{_machineId}-{DateTime.Now:yyyyMMdd-HHmmss}{extension}");
+
+    private void Capturar(object sender, RoutedEventArgs e)
+    {
+        Interlocked.Exchange(ref _captura, NombreArchivo(".png"));
+
+        // La captura sale del proximo frame PINTADO. Con el escritorio remoto
+        // quieto no hay frames nuevos, asi que puede tardar: se avisa en vez de
+        // dejar el boton sin respuesta aparente.
+        Nota("Captura pedida: se guarda en el proximo frame.");
+    }
+
+    private void AlternarGrabacion(object sender, RoutedEventArgs e)
+    {
+        _quiereGrabar = !_quiereGrabar;
+
+        BotonGrabar.Content = _quiereGrabar ? "Detener" : "Grabar";
+        Nota(_quiereGrabar ? "Grabando desde el proximo fotograma clave..." : "Grabacion detenida.");
+    }
+
+    /// <summary>
+    /// Escribe el H.264 tal y como llega, SIN recodificar. Es lo que hace que
+    /// grabar sea casi gratis: los bytes ya vienen comprimidos y en Annex-B, que
+    /// es justo el formato que un reproductor externo espera en un .h264.
+    ///
+    /// Empieza siempre en un IDR. Arrancar en mitad de un GOP produce un archivo
+    /// que abre en verde y se va corrigiendo, y no hay forma de arreglarlo luego.
+    /// </summary>
+    private void Grabar(AssembledFrame frame, VideoConfig? config)
+    {
+        if (!_quiereGrabar)
+        {
+            CerrarGrabacion();
+            return;
+        }
+
+        if (_grabacion is null)
+        {
+            if (config is null)
+                return;
+
+            var ruta = NombreArchivo(".h264");
+            Directory.CreateDirectory(Path.GetDirectoryName(ruta)!);
+
+            _grabacion = File.Create(ruta);
+            _grabados = 0;
+            _esperandoIdr = true;
+
+            // SPS y PPS delante del primer IDR: en transporte viajan aparte, pero
+            // un archivo tiene que abrir sin ningun contexto previo.
+            var parametros = config.ParameterSets.ToByteArray();
+            _grabacion.Write(parametros, 0, parametros.Length);
+
+            Nota($"Grabando en {ruta}");
+        }
+
+        if (_esperandoIdr)
+        {
+            if (!frame.KeyFrame)
+                return;
+
+            _esperandoIdr = false;
+        }
+
+        _grabacion.Write(frame.Payload, 0, frame.Payload.Length);
+        _grabados++;
+    }
+
+    private void CerrarGrabacion()
+    {
+        if (_grabacion is null)
+            return;
+
+        _grabacion.Dispose();
+        _grabacion = null;
+    }
+
+    /// <summary>0 = adaptar al tamano de la ventana. Cualquier otro valor es el
+    /// factor sobre los pixeles reales de la pantalla remota.</summary>
+    private double _escala;
+
+    private int _videoAncho, _videoAlto;
+
+    private void CambiarEscala(object sender, SelectionChangedEventArgs e)
+    {
+        if (Escala.SelectedItem is ComboBoxItem { Tag: string etiqueta })
+            _escala = double.Parse(etiqueta, CultureInfo.InvariantCulture);
+
+        Ajustar();
+    }
+
+    private void Ajustar(object sender, SizeChangedEventArgs e) => Ajustar();
+
+    /// <summary>
+    /// El tamano del video lo decide el LIENZO, no el swapchain: DXGI se creo con
+    /// Scaling.Stretch a la resolucion remota, asi que escalar es solo cambiar el
+    /// tamano de la ventana hija. Redimensionar el swapchain seria rehacer el
+    /// presentador, que es como se deja el visor en negro.
+    /// </summary>
+    private void Ajustar()
+    {
+        if (_videoAncho <= 0 || _videoAlto <= 0)
+            return;
+
+        var ancho = Lienzo.ViewportWidth > 0 ? Lienzo.ViewportWidth : Lienzo.ActualWidth;
+        var alto = Lienzo.ViewportHeight > 0 ? Lienzo.ViewportHeight : Lienzo.ActualHeight;
+
+        if (ancho <= 0 || alto <= 0)
+            return;
+
+        (Video.Width, Video.Height) = Escalado.Encajar(_videoAncho, _videoAlto, ancho, alto, _escala);
+    }
+
+    private void AlternarDatos(object sender, RoutedEventArgs e)
+        => BarraEstado.Visibility = BarraEstado.Visibility == Visibility.Visible
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+
+    private void EnviarCtrlAltSupr(object sender, RoutedEventArgs e)
+        => Enviar(new HostAction { Kind = HostAction.Types.Kind.HostActionCtrlAltDel });
+
+    private void Nota(string texto)
+    {
+        if (!Dispatcher.HasShutdownStarted)
+            Dispatcher.BeginInvoke(() => Aviso.Text = texto);
     }
 
     private long _rttUs = -1;
@@ -587,6 +767,16 @@ public partial class RelayWindow : Window
             && Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
         {
             Enviar(new HostAction { Kind = HostAction.Types.Kind.HostActionCtrlAltDel });
+            e.Handled = true;
+            return;
+        }
+
+        // Cierra la Fase 12: las medidas ya se calculaban, faltaba el interruptor.
+        if (pulsada && tecla == Key.F12
+            && Keyboard.Modifiers.HasFlag(ModifierKeys.Control)
+            && Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+        {
+            AlternarDatos(this, e);
             e.Handled = true;
             return;
         }

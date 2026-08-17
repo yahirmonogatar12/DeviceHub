@@ -8,6 +8,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\DeviceHub.Agent\DeviceHub.Agent.csproj" />
     <ProjectReference Include="..\..\src\DeviceHub.RemoteHost\DeviceHub.RemoteHost.csproj" />
+    <ProjectReference Include="..\..\src\DeviceHub.RemoteViewer\DeviceHub.RemoteViewer.csproj" />
     <ProjectReference Include="..\..\src\DeviceHub.Server\DeviceHub.Server.csproj" />
   </ItemGroup>
 

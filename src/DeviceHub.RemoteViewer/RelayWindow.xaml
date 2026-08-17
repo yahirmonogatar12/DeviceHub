@@ -5,17 +5,61 @@
         Title="DeviceHub - Sesion remota" Height="700" Width="1180"
         Background="#0B1F55" WindowStartupLocation="CenterScreen">
 
+    <Window.Resources>
+        <!-- Focusable=False en TODOS: si un boton se queda el foco, la barra
+             espaciadora lo vuelve a pulsar en vez de viajar a la PC remota. -->
+        <Style TargetType="Button">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Background" Value="#16295E" />
+            <Setter Property="Foreground" Value="#E8EEFB" />
+            <Setter Property="BorderBrush" Value="#2B4488" />
+            <Setter Property="Padding" Value="12,4" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Width" Value="110" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+        </Style>
+    </Window.Resources>
+
     <DockPanel>
+
+        <Border DockPanel.Dock="Top" Background="#08163D" Padding="12,7">
+            <StackPanel Orientation="Horizontal">
+                <Button x:Name="BotonCaptura" Content="Captura" Click="Capturar" />
+                <Button x:Name="BotonGrabar" Content="Grabar" Click="AlternarGrabacion" />
+                <ComboBox x:Name="Escala" SelectionChanged="CambiarEscala" SelectedIndex="0">
+                    <ComboBoxItem Content="Adaptar" Tag="0" />
+                    <ComboBoxItem Content="Original" Tag="1" />
+                    <ComboBoxItem Content="50 %" Tag="0.5" />
+                    <ComboBoxItem Content="150 %" Tag="1.5" />
+                    <ComboBoxItem Content="200 %" Tag="2" />
+                </ComboBox>
+                <Button x:Name="BotonDatos" Content="Datos" Click="AlternarDatos" />
+                <Button Content="Ctrl+Alt+Supr" Click="EnviarCtrlAltSupr" />
+
+                <TextBlock x:Name="Aviso" VerticalAlignment="Center" FontFamily="Consolas"
+                           FontSize="12" Foreground="#8FA6CE" Text="" />
+            </StackPanel>
+        </Border>
 
         <!-- Al lado del video, nunca encima: un HwndHost dibuja fuera del arbol
              visual de WPF y cualquier XAML superpuesto quedaria tapado. -->
-        <Border DockPanel.Dock="Bottom" Background="#08163D" Padding="12,7">
+        <Border x:Name="BarraEstado" DockPanel.Dock="Bottom" Background="#08163D" Padding="12,7">
             <TextBlock x:Name="Estado" FontFamily="Consolas" FontSize="12"
                        Foreground="#B6C2DC" TextWrapping="Wrap"
                        Text="Conectando..." />
         </Border>
 
-        <render:VideoSurface x:Name="Video" />
+        <ScrollViewer x:Name="Lienzo" Background="#0B1F55" SizeChanged="Ajustar"
+                      HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+            <!-- Un minimo, no un tamano: sin el, el ScrollViewer mide 0x0 y el
+                 HWND del video no llega a crearse. El tamano real lo pone
+                 Ajustar() en cuanto se conoce la resolucion remota. -->
+            <render:VideoSurface x:Name="Video" MinWidth="320" MinHeight="180"
+                                 HorizontalAlignment="Center" VerticalAlignment="Center" />
+        </ScrollViewer>
 
     </DockPanel>
 </Window>
