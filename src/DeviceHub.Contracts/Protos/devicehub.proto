@@ -388,6 +388,13 @@ message TerminalCommandReply {
   string working_dir = 4;    // puede cambiar si el comando fue un `cd`
   bool truncated = 5;
   int32 duration_ms = 6;
+
+  // Fase 23. Bajo que identidad se ejecuto: el agente es un servicio LocalSystem,
+  // asi que es NT AUTHORITY\SYSTEM -- por encima de administrador. Viaja para
+  // que el tecnico lo vea, porque cambia lo que devuelven los comandos:
+  // %USERPROFILE% es el perfil de SYSTEM y las unidades de red del usuario no
+  // existen ahi.
+  string identity = 7;
 }
 
 message RemoteSessionRef {

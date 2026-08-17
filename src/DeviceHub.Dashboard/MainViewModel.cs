@@ -319,6 +319,27 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Fase 23. Los RPC de terminal existian desde la Fase 15 y no habia forma de
+    /// usarlos: no habia terminal en ninguna interfaz.
+    ///
+    /// Va en el dashboard y no en el visor remoto porque la terminal se autentica
+    /// con el JWT del tecnico contra AdminService, y el visor solo habla con el
+    /// relay -- darle credenciales de administrador seria ampliar lo que puede
+    /// hacer un proceso que ya recibe datos de la PC controlada.
+    /// </summary>
+    [RelayCommand]
+    private void OpenTerminal()
+    {
+        if (SelectedMachine is null)
+            return;
+
+        new Views.TerminalWindow(_client, SelectedMachine.MachineId, SelectedMachine.MachineCode)
+        {
+            Owner = Application.Current.MainWindow
+        }.Show();
+    }
+
     [RelayCommand]
     private Task ApproveHardwareAsync()
         => ResolveAsync(ResolveConflictRequest.Types.Resolution.ApproveNewHardware,

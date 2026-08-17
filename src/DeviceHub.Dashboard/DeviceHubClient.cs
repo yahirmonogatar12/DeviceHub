@@ -157,6 +157,24 @@ public sealed class DeviceHubClient : IDisposable
     public Task<RemoteSessionReply> EndRemoteSessionAsync(string sessionId, CancellationToken ct)
         => _client.EndRemoteSessionAsync(new RemoteSessionRef { SessionId = sessionId }, _auth, cancellationToken: ct).ResponseAsync;
 
+    /// <summary>
+    /// Fase 23. No existe "ejecuta este comando" suelto: hay que abrir sesion, y
+    /// cada comando queda ligado a ella con su salida en la auditoria.
+    /// </summary>
+    public Task<TerminalSessionReply> StartTerminalSessionAsync(string machineId, CancellationToken ct)
+        => _client.StartTerminalSessionAsync(
+            new MachineRef { MachineId = machineId }, _auth, cancellationToken: ct).ResponseAsync;
+
+    public Task<TerminalCommandReply> RunTerminalCommandAsync(
+        string sessionId, string command, CancellationToken ct)
+        => _client.RunTerminalCommandAsync(
+            new TerminalCommandRequest { SessionId = sessionId, Command = command },
+            _auth, cancellationToken: ct).ResponseAsync;
+
+    public Task<TerminalSessionReply> EndTerminalSessionAsync(string sessionId, CancellationToken ct)
+        => _client.EndTerminalSessionAsync(
+            new RemoteSessionRef { SessionId = sessionId }, _auth, cancellationToken: ct).ResponseAsync;
+
     public Task<CommandEntry> SendCommandAsync(SendCommandRequest request, CancellationToken ct)
         => _client.SendCommandAsync(request, _auth, cancellationToken: ct).ResponseAsync;
 

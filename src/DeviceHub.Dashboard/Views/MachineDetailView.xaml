@@ -58,6 +58,9 @@
                             Command="{Binding EndRemoteSessionCommand}"
                             Visibility="{Binding SelectedMachine.RemoteAvailable, Converter={StaticResource BoolToVis}}" />
 
+                    <Button Content="&#x25B6;  Terminal" Style="{StaticResource BtnGhost}"
+                            Command="{Binding OpenTerminalCommand}" Margin="0,0,8,0" />
+
                     <Button Content="Ping" Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
                             Command="{Binding PingCommand}" />
 

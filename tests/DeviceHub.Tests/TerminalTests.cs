@@ -20,6 +20,27 @@ public class ShellRunnerTests
     }
 
     /// <summary>
+    /// Fase 23. El agente escribe "Identity" y el servidor lo lee por ese mismo
+    /// nombre; nada obliga a que coincidan salvo esta prueba. Si uno de los dos
+    /// cambia la clave, el campo desaparece SIN error y el tecnico deja de ver
+    /// bajo que identidad ejecuta -- que es justo lo que la fase venia a arreglar.
+    /// </summary>
+    [Fact]
+    public void The_serialized_result_carries_the_identity()
+    {
+        var json = ShellRunner.Execute("Write-Output 'x'", Temp, TimeSpan.FromSeconds(30));
+
+        using var documento = System.Text.Json.JsonDocument.Parse(json);
+
+        Assert.True(documento.RootElement.TryGetProperty("Identity", out var identidad));
+        Assert.False(string.IsNullOrWhiteSpace(identidad.GetString()));
+
+        // El nombre de la cuenta, sea la que sea. En CI es un usuario normal y en
+        // planta es SYSTEM, asi que no se puede afirmar cual -- solo que se dice.
+        Assert.Contains(Environment.UserName, identidad.GetString()!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Sin -NonInteractive, un comando que pide confirmacion se queda esperando
     /// para siempre a alguien que no existe. El timeout es la ultima red.
     /// </summary>

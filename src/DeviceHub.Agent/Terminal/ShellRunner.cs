@@ -4,7 +4,8 @@ using System.Text.Json;
 
 namespace DeviceHub.Agent.Terminal;
 
-public sealed record ShellResult(string Output, int ExitCode, string WorkingDir, bool Truncated);
+public sealed record ShellResult(
+    string Output, int ExitCode, string WorkingDir, bool Truncated, string Identity);
 
 /// <summary>
 /// Ejecuta un comando de shell dentro de una sesion de terminal (Fase 15).
@@ -26,6 +27,44 @@ public static class ShellRunner
     /// </summary>
     public const int MaxOutputBytes = 64 * 1024;
 
+    /// <summary>
+    /// Bajo QUE identidad se ejecuta todo esto. Fase 23.
+    ///
+    /// El agente es un servicio LocalSystem, asi que powershell.exe hereda su
+    /// token y cada comando corre como NT AUTHORITY\SYSTEM -- por encima de
+    /// administrador. Eso no es un anadido de esta fase: es asi desde que existe
+    /// la terminal, y lo que faltaba era que alguien lo dijera.
+    ///
+    /// Importa saberlo porque cambia lo que uno ve: %USERPROFILE% apunta al
+    /// perfil de SYSTEM, las unidades de red del usuario no existen y HKCU es
+    /// otra rama. Un tecnico que investigue un problema del usuario y no sepa
+    /// esto llega a la conclusion contraria.
+    ///
+    /// Se calcula una vez: la identidad de un servicio no cambia mientras corre.
+    /// </summary>
+    public static readonly string Identity = Identificar();
+
+    private static string Identificar()
+    {
+        try
+        {
+            using var actual = System.Security.Principal.WindowsIdentity.GetCurrent();
+            var principal = new System.Security.Principal.WindowsPrincipal(actual);
+
+            var papel = actual.IsSystem
+                ? "SYSTEM"
+                : principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator)
+                    ? "administrador"
+                    : "usuario sin elevar";
+
+            return $"{actual.Name} ({papel})";
+        }
+        catch (Exception ex)
+        {
+            return $"identidad desconocida: {ex.GetType().Name}";
+        }
+    }
+
     public static string Execute(string command, string workingDir, TimeSpan timeout)
     {
         var result = Run(command, workingDir, timeout);
@@ -35,7 +74,8 @@ public static class ShellRunner
             result.Output,
             result.ExitCode,
             result.WorkingDir,
-            result.Truncated
+            result.Truncated,
+            result.Identity
         });
     }
 
@@ -72,7 +112,7 @@ public static class ShellRunner
         if (!process.WaitForExit((int)timeout.TotalMilliseconds))
         {
             TryKill(process);
-            return new ShellResult($"Cancelado: excedio {timeout.TotalSeconds:0} s", -1, directory, false);
+            return new ShellResult($"Cancelado: excedio {timeout.TotalSeconds:0} s", -1, directory, false, Identity);
         }
 
         var output = string.Concat(stdout.Result, stderr.Result);
@@ -85,7 +125,8 @@ public static class ShellRunner
             truncated = true;
         }
 
-        return new ShellResult(output, process.ExitCode, ResolveWorkingDir(command, directory), truncated);
+        return new ShellResult(
+            output, process.ExitCode, ResolveWorkingDir(command, directory), truncated, Identity);
     }
 
     /// <summary>

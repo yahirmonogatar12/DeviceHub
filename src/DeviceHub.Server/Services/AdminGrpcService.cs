@@ -715,7 +715,8 @@ public sealed class AdminGrpcService(
             ExitCode = shell.ExitCode,
             WorkingDir = shell.WorkingDir,
             Truncated = shell.Truncated,
-            DurationMs = duration
+            DurationMs = duration,
+            Identity = shell.Identity
         };
     }
 
@@ -777,7 +778,8 @@ public sealed class AdminGrpcService(
                 root.TryGetProperty("Output", out var output) ? output.GetString() ?? string.Empty : string.Empty,
                 root.TryGetProperty("ExitCode", out var code) ? code.GetInt32() : -1,
                 root.TryGetProperty("WorkingDir", out var dir) ? dir.GetString() ?? fallbackDir : fallbackDir,
-                root.TryGetProperty("Truncated", out var truncated) && truncated.GetBoolean());
+                root.TryGetProperty("Truncated", out var truncated) && truncated.GetBoolean(),
+                root.TryGetProperty("Identity", out var identity) ? identity.GetString() ?? string.Empty : string.Empty);
         }
         catch (System.Text.Json.JsonException)
         {
@@ -785,7 +787,8 @@ public sealed class AdminGrpcService(
         }
     }
 
-    private sealed record ShellOutcome(string Output, int ExitCode, string WorkingDir, bool Truncated);
+    private sealed record ShellOutcome(
+        string Output, int ExitCode, string WorkingDir, bool Truncated, string Identity = "");
 
     // -------------------------------------------------- control remoto (Fases 10-11)
 
