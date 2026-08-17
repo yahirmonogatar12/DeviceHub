@@ -364,6 +364,10 @@ public partial class RelayWindow : Window
                         $"chunks {chunks}   frames {reconstruidos}   decodificados {decodificados}   pintados {pintados}   " +
                         $"render {pintados / segundos:0.00} FPS   " +
                         $"decode p50 {Percentil(ordenadas, 0.50):0.00} ms   p95 {Percentil(ordenadas, 0.95):0.00} ms\n" +
+                        // La entrada enviada va en la barra a proposito: cuando
+                        // el video se ve pero no se puede controlar, esta cifra
+                        // dice de un vistazo cual de las dos mitades falla.
+                        $"entrada {_entradaEnviada}   " +
                         $"incompletos {montador.Dropped}   invalidos {montador.Rejected}   tardios {montador.Stale}   " +
                         $"IDR {idr}   cambios de config {cambiosConfig}   " +
                         $"RAM {proceso.PrivateMemorySize64 / 1024 / 1024} MB (inicio {ramInicio / 1024 / 1024})   " +
@@ -491,9 +495,13 @@ public partial class RelayWindow : Window
 
     private void Encolar(RemotePacket paquete)
     {
-        if (!_salida.Writer.TryWrite(paquete))
+        if (_salida.Writer.TryWrite(paquete))
+            _entradaEnviada++;
+        else
             _entradaPerdida++;
     }
+
+    private long _entradaEnviada;
 
     /// <summary>
     /// De pixeles de la ventana a 0..1 sobre la pantalla remota.
