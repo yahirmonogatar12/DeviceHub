@@ -78,11 +78,10 @@ public partial class RelayWindow : Window
             Name = "devicehub-relay-viewer"
         }.Start();
 
-        Closed += (_, _) =>
-        {
-            _cancelacion.Cancel();
-            _cancelacion.Dispose();
-        };
+        // Cancelar si, disponer NO: el hilo de reconexion puede estar esperando
+        // en _cancelacion.Token.WaitHandle, y disponer el origen mientras alguien
+        // espera en su handle lanza. El proceso termina detras de esto.
+        Closed += (_, _) => _cancelacion.Cancel();
 
         // Del WndProc de la ventana hija, no de los eventos de WPF: el video se
         // dibuja en una ventana Win32 encima del arbol visual, y los mensajes del
@@ -123,16 +122,30 @@ public partial class RelayWindow : Window
             // Bucle de reconexion. Mientras haya token vigente se vuelve a la
             // MISMA sesion sin gastar un ticket nuevo; cuando el servidor lo
             // rechaza -- porque paso la gracia -- se termina.
+            var corte = DateTimeOffset.UtcNow;
+
             while (!_cancelacion.IsCancellationRequested)
             {
                 try
                 {
+                    corte = DateTimeOffset.UtcNow;
                     RecibirAsync().GetAwaiter().GetResult();
                 }
-                catch (RpcException ex) when (_token is not null && !_cancelacion.IsCancellationRequested)
+                catch (RpcException ex) when (PuedeReconectar(corte))
                 {
-                    Mostrar($"Conexion perdida ({ex.StatusCode}). Reconectando con el token...");
-                    Thread.Sleep(500);
+                    Mostrar(
+                        $"Conexion perdida ({ex.StatusCode}). Reintentando en {_espera.TotalSeconds:0.0} s...\n" +
+                        $"{_cierre ?? string.Empty}");
+
+                    // Espera CANCELABLE: con Thread.Sleep, cerrar la ventana
+                    // dejaba el hilo dormido y el proceso sin terminar.
+                    if (_cancelacion.Token.WaitHandle.WaitOne(_espera))
+                        break;
+
+                    _espera = _espera < TimeSpan.FromSeconds(5)
+                        ? _espera + _espera
+                        : TimeSpan.FromSeconds(5);
+
                     continue;
                 }
 
@@ -152,8 +165,37 @@ public partial class RelayWindow : Window
         }
     }
 
+    /// <summary>
+    /// Espera antes del proximo intento: 250 ms y doblando hasta 5 s. Se
+    /// reinicia en cada HelloAccepted, o sea cada vez que la reconexion funciona
+    /// de verdad -- si no, un microcorte a los diez minutos empezaria esperando
+    /// los 5 s del corte anterior.
+    /// </summary>
+    private TimeSpan _espera = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// Se reintenta durante un minuto con el RELOJ DE AQUI, no con el
+    /// `reconnect_until` del servidor: esa marca viene de otra maquina y si
+    /// llegara mal -- o no llegara -- la comparacion diria que la gracia ya paso
+    /// y no se reintentaria nunca. El servidor rechaza el token cuando toca, y
+    /// esa es la autoridad de verdad.
+    /// </summary>
+    private bool PuedeReconectar(DateTimeOffset desde)
+        => _token is not null
+           && !_cancelacion.IsCancellationRequested
+           && DateTimeOffset.UtcNow - desde < TimeSpan.FromMinutes(1);
+
     private async Task RecibirAsync()
     {
+        // UN token por intento, enlazado al de la ventana.
+        //
+        // Antes esto usaba el de la ventana directamente y el `finally` de abajo
+        // lo cancelaba al terminar. Efecto: despues del PRIMER corte el bucle de
+        // reconexion quedaba muerto para siempre -- su condicion mira ese mismo
+        // token -- y la sesion se congelaba con la excepcion cruda en la barra en
+        // vez de reintentar. La Fase 14 figuraba como hecha en el visor y no lo
+        // estaba.
+        using var intento = CancellationTokenSource.CreateLinkedTokenSource(_cancelacion.Token);
         var hwnd = Video.WaitForWindow(TimeSpan.FromSeconds(5));
 
         if (hwnd == IntPtr.Zero)
@@ -196,7 +238,7 @@ public partial class RelayWindow : Window
         using var canal = GrpcChannel.ForAddress(_servidor, opciones);
         var cliente = new RemoteRelayService.RemoteRelayServiceClient(canal);
 
-        using var llamada = cliente.ViewerChannel(cancellationToken: _cancelacion.Token);
+        using var llamada = cliente.ViewerChannel(cancellationToken: intento.Token);
 
         await llamada.RequestStream.WriteAsync(new RemotePacket
         {
@@ -219,9 +261,9 @@ public partial class RelayWindow : Window
                     SupportsInput = true
                 }
             }
-        }, _cancelacion.Token);
+        }, intento.Token);
 
-        var latidos = LatirAsync(llamada.RequestStream, _cancelacion.Token);
+        var latidos = LatirAsync(llamada.RequestStream, intento.Token);
 
         using var device = VideoPresenter.CreateDevice();
 
@@ -242,7 +284,7 @@ public partial class RelayWindow : Window
 
         try
         {
-            while (await llamada.ResponseStream.MoveNext(_cancelacion.Token))
+            while (await llamada.ResponseStream.MoveNext(intento.Token))
             {
                 var paquete = llamada.ResponseStream.Current;
 
@@ -358,6 +400,11 @@ public partial class RelayWindow : Window
                         _reconectarHasta = DateTimeOffset.FromUnixTimeMilliseconds(
                             paquete.HelloAccepted.ReconnectUntilUs / 1000);
 
+                        // La reconexion funciono: la espera vuelve al principio.
+                        // Sin esto, un microcorte a los diez minutos empezaria
+                        // esperando los 5 s a los que llego el corte anterior.
+                        _espera = TimeSpan.FromMilliseconds(250);
+
                         break;
 
                     case RemotePacket.PayloadOneofCase.Pong:
@@ -448,7 +495,7 @@ public partial class RelayWindow : Window
             presentador?.Dispose();
             decoder?.Dispose();
 
-            await _cancelacion.CancelAsync();
+            await intento.CancelAsync();
             try { await latidos; } catch (Exception) { /* cerrando */ }
         }
     }
