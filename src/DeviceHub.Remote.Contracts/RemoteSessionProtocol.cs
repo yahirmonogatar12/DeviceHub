@@ -53,4 +53,13 @@ public static class RemoteSessionProtocol
     /// <summary>Texto de cierre y de error. Va a la auditoria, no al cable en
     /// bucle.</summary>
     public const int MaxDetailChars = 512;
+
+    /// <summary>
+    /// Portapapeles de texto, Fase 21. 256 Ki caracteres es de sobra para lo que
+    /// alguien copia a mano y corta en seco un log entero pegado sin querer.
+    ///
+    /// El tope existe porque la sincronizacion es AUTOMATICA: nadie pulsa nada
+    /// para que esto viaje, asi que nadie se dara cuenta de lo que manda.
+    /// </summary>
+    public const int MaxClipboardChars = 256 * 1024;
 }

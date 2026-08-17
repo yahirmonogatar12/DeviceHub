@@ -94,6 +94,8 @@ public partial class RelayWindow : Window
         // el control "static" no lo toma.
         PreviewKeyDown += (_, e) => Tecla(e, pulsada: true);
         PreviewKeyUp += (_, e) => Tecla(e, pulsada: false);
+
+        Activated += EnviarPortapapeles;
     }
 
     /// <summary>Token de reconexion vigente. SOLO en RAM: ni disco, ni log, ni
@@ -362,6 +364,10 @@ public partial class RelayWindow : Window
                         _rttUs = NowUs() - paquete.Pong.SentAtUs;
                         break;
 
+                    case RemotePacket.PayloadOneofCase.Clipboard:
+                        RecibirPortapapeles(paquete.Clipboard.Text);
+                        break;
+
                     // El motivo se AÑADE al informe, no lo sustituye. Reemplazarlo
                     // borraba las cifras justo cuando terminaba la sesion, que es
                     // cuando hacen falta: en el checkpoint de la Fase 5 el host
@@ -573,6 +579,99 @@ public partial class RelayWindow : Window
 
     private void EnviarCtrlAltSupr(object sender, RoutedEventArgs e)
         => Enviar(new HostAction { Kind = HostAction.Types.Kind.HostActionCtrlAltDel });
+
+    private void BloquearRemota(object sender, RoutedEventArgs e)
+        => Enviar(new HostAction { Kind = HostAction.Types.Kind.HostActionLock });
+
+    private void CongelarEntrada(object sender, RoutedEventArgs e)
+        => Enviar(new HostAction
+        {
+            Kind = MenuCongelar.IsChecked
+                ? HostAction.Types.Kind.HostActionBlockInput
+                : HostAction.Types.Kind.HostActionUnblockInput
+        });
+
+    /// <summary>
+    /// Con confirmacion, y es la unica de la barra que la lleva. Las demas se
+    /// deshacen solas; esta se lleva por delante lo que alguien tuviera abierto
+    /// en una PC de planta, y el menu esta a dos milimetros de "Bloquear".
+    /// </summary>
+    private void ReiniciarRemota(object sender, RoutedEventArgs e)
+    {
+        var respuesta = MessageBox.Show(
+            $"Se va a reiniciar {_machineId}.\n\n" +
+            "Si hay alguien trabajando en esa PC, perdera lo que no haya guardado.",
+            "Reiniciar la PC remota", MessageBoxButton.OKCancel, MessageBoxImage.Warning,
+            MessageBoxResult.Cancel);
+
+        if (respuesta == MessageBoxResult.OK)
+            Enviar(new HostAction { Kind = HostAction.Types.Kind.HostActionReboot });
+    }
+
+    // ------------------------------------------------------------ portapapeles
+
+    /// <summary>Lo ultimo que cruzo, en cualquiera de los dos sentidos. Sin esto,
+    /// lo que llega de la PC remota se detecta como copia local y se le devuelve
+    /// en cuanto la ventana recupera el foco.</summary>
+    private string? _ultimoPortapapeles;
+
+    /// <summary>
+    /// Se sincroniza al ACTIVARSE la ventana, no continuamente: el tecnico copia
+    /// algo en su PC, vuelve al visor, y en ese momento ya lo tiene alla. Sondear
+    /// el portapapeles en bucle seria pelearse con el resto de sus aplicaciones
+    /// por un recurso exclusivo para nada.
+    /// </summary>
+    private void EnviarPortapapeles(object? sender, EventArgs e)
+    {
+        try
+        {
+            if (!Clipboard.ContainsText())
+                return;
+
+            var texto = Clipboard.GetText();
+
+            if (string.IsNullOrEmpty(texto)
+                || texto == _ultimoPortapapeles
+                || texto.Length > RemoteSessionProtocol.MaxClipboardChars)
+            {
+                return;
+            }
+
+            _ultimoPortapapeles = texto;
+
+            Encolar(new RemotePacket
+            {
+                ProtocolVersion = RemoteSessionProtocol.Version,
+                SessionId = _sesion,
+                Clipboard = new ClipboardText { Text = texto }
+            });
+        }
+        catch (System.Runtime.InteropServices.COMException)
+        {
+            // El portapapeles lo tiene otra aplicacion abierto. No es un fallo de
+            // la sesion: se reintenta la proxima vez que la ventana se active.
+        }
+    }
+
+    /// <summary>Lo que copiaron en la PC remota, en el portapapeles de aqui.</summary>
+    private void RecibirPortapapeles(string texto)
+    {
+        if (string.IsNullOrEmpty(texto) || texto == _ultimoPortapapeles)
+            return;
+
+        _ultimoPortapapeles = texto;
+
+        Dispatcher.BeginInvoke(() =>
+        {
+            try
+            {
+                Clipboard.SetText(texto);
+            }
+            catch (System.Runtime.InteropServices.COMException)
+            {
+            }
+        });
+    }
 
     private void Nota(string texto)
     {

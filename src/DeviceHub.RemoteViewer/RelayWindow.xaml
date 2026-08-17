@@ -37,7 +37,17 @@
                     <ComboBoxItem Content="200 %" Tag="2" />
                 </ComboBox>
                 <Button x:Name="BotonDatos" Content="Datos" Click="AlternarDatos" />
-                <Button Content="Ctrl+Alt+Supr" Click="EnviarCtrlAltSupr" />
+
+                <Menu Background="Transparent" VerticalAlignment="Center" Margin="0,0,12,0">
+                    <MenuItem Header="Acciones" Foreground="#E8EEFB" Padding="12,4">
+                        <MenuItem Header="Ctrl + Alt + Supr" Click="EnviarCtrlAltSupr" />
+                        <MenuItem Header="Bloquear la PC remota" Click="BloquearRemota" />
+                        <MenuItem x:Name="MenuCongelar" Header="Congelar entrada local"
+                                  IsCheckable="True" Click="CongelarEntrada" />
+                        <Separator />
+                        <MenuItem Header="Reiniciar la PC remota..." Click="ReiniciarRemota" />
+                    </MenuItem>
+                </Menu>
 
                 <TextBlock x:Name="Aviso" VerticalAlignment="Center" FontFamily="Consolas"
                            FontSize="12" Foreground="#8FA6CE" Text="" />

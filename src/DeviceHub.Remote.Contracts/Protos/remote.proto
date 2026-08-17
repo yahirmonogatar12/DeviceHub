@@ -67,7 +67,20 @@ message RemotePacket {
     RemoteError     error            = 19;
     HelloAccepted   hello_accepted   = 20;
     HostAction      host_action      = 21;
+    ClipboardText   clipboard        = 22;
   }
+}
+
+// Fase 21. El portapapeles de TEXTO, en los dos sentidos -- el unico payload que
+// viaja en ambas direcciones aparte de Ping y Close.
+//
+// Solo texto. Los archivos son CF_HDROP y necesitan la transferencia troceada de
+// la Fase 24: mandarlos por aqui solo funcionaria con archivos diminutos.
+message ClipboardText {
+  // <= 256 KiB. No es una limitacion tecnica sino una decision: el portapapeles
+  // se sincroniza SOLO, sin que nadie lo pida, y copiar un log entero en la PC
+  // remota no deberia mandarlo por la red sin avisar.
+  string text = 1;
 }
 
 // Fase 19. Ordenes que NO son entrada: no viajan por SendInput porque Windows no
@@ -83,6 +96,19 @@ message HostAction {
     // segura esta reservada, y por eso existe SendSAS -- que exige SYSTEM y la
     // directiva SoftwareSASGeneration.
     HOST_ACTION_CTRL_ALT_DEL = 1;
+
+    // Bloquear la PC remota al terminar, como quien cierra la puerta al salir.
+    HOST_ACTION_LOCK = 2;
+
+    // Congelar el raton y el teclado DE ALLA. Es para que nadie estorbe desde la
+    // planta a mitad de una reparacion, no para esconderse: Windows lo levanta
+    // solo si el proceso muere, y Ctrl+Alt+Supr lo desactiva siempre.
+    HOST_ACTION_BLOCK_INPUT = 3;
+    HOST_ACTION_UNBLOCK_INPUT = 4;
+
+    // Reiniciar. El comando ya existia en el dashboard; esto es el mismo gesto
+    // sin salir de la sesion.
+    HOST_ACTION_REBOOT = 5;
   }
 
   Kind kind = 1;

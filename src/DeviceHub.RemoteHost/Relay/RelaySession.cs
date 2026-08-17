@@ -147,7 +147,12 @@ public static class RelaySession
 
     /// <summary>Lo que el hilo de captura le pasa al de red: bytes ya
     /// codificados. Ni texturas, ni muestras, ni nada de GPU.</summary>
-    private sealed record Enviable(VideoConfig? Config, VideoFrameChunks? Grupo);
+    private sealed record Enviable(
+        VideoConfig? Config, VideoFrameChunks? Grupo, string? Portapapeles = null);
+
+    /// <summary>Lo que el tecnico copio en SU PC, camino del portapapeles de
+    /// esta. Lo aplica el hilo de captura, igual que la entrada.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentQueue<string> PortapapelesEntrante = new();
 
     private sealed class Contadores
     {
@@ -212,6 +217,16 @@ public static class RelaySession
                         ProtocolVersion = RemoteSessionProtocol.Version,
                         SessionId = opciones.SesionId,
                         VideoConfig = pieza.Config
+                    }, cancellationToken);
+                }
+
+                if (pieza.Portapapeles is not null)
+                {
+                    await EscribirAsync(llamada, new RemotePacket
+                    {
+                        ProtocolVersion = RemoteSessionProtocol.Version,
+                        SessionId = opciones.SesionId,
+                        Clipboard = new ClipboardText { Text = pieza.Portapapeles }
                     }, cancellationToken);
                 }
 
@@ -360,6 +375,15 @@ public static class RelaySession
                         opciones.Escribir($"La entrada salto a {escritorio.Name}; se rehace la captura");
                         return;
                     }
+
+                    // El portapapeles, en la MISMA cadencia de medio segundo: no
+                    // hay evento que avisar y sondearlo mas a menudo seria
+                    // pelearse con el resto de la PC por un recurso exclusivo.
+                    while (PortapapelesEntrante.TryDequeue(out var pegado))
+                        ClipboardBridge.Escribir(pegado);
+
+                    if (ClipboardBridge.LeerSiCambio() is { } copiado)
+                        salida.TryWrite(new Enviable(null, null, copiado));
                 }
 
                 // La entrada del tecnico, aplicada AQUI: este hilo es el que esta
@@ -546,16 +570,38 @@ public static class RelaySession
                         Pendientes.Enqueue(paquete.Input);
                         break;
 
-                    case RemotePacket.PayloadOneofCase.HostAction
-                        when paquete.HostAction.Kind == HostAction.Types.Kind.HostActionCtrlAltDel:
-
-                        // Este si se registra, al contrario que el raton: no es
-                        // trafico continuo y es de las pocas cosas que el tecnico
+                    case RemotePacket.PayloadOneofCase.HostAction:
+                        // Estas si se registran, al contrario que el raton: no son
+                        // trafico continuo y son de las pocas cosas que el tecnico
                         // hace y quiere ver confirmadas.
-                        opciones.Escribir(SecureAttention.Enviar(out var detalle)
-                            ? detalle
-                            : $"No se pudo enviar Ctrl+Alt+Supr: {detalle}");
+                        //
+                        // Se atienden en el hilo de RED y no en el de captura como
+                        // la entrada: ninguna es SendInput, asi que ninguna
+                        // depende del escritorio al que este atado el hilo. Y
+                        // pasarlas por la cola las retrasaria hasta el proximo
+                        // frame, que con el escritorio quieto puede no llegar.
+                        opciones.Escribir(paquete.HostAction.Kind switch
+                        {
+                            HostAction.Types.Kind.HostActionCtrlAltDel =>
+                                SecureAttention.Enviar(out var detalle)
+                                    ? detalle
+                                    : $"No se pudo enviar Ctrl+Alt+Supr: {detalle}",
 
+                            HostAction.Types.Kind.HostActionLock => HostActions.Bloquear(),
+                            HostAction.Types.Kind.HostActionBlockInput => HostActions.Congelar(true),
+                            HostAction.Types.Kind.HostActionUnblockInput => HostActions.Congelar(false),
+                            HostAction.Types.Kind.HostActionReboot => HostActions.Reiniciar(),
+
+                            _ => $"Accion desconocida: {paquete.HostAction.Kind}"
+                        });
+
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.Clipboard:
+                        // Como la entrada: se encola y lo aplica el hilo de
+                        // captura. El portapapeles pertenece a la estacion de
+                        // ventanas y ese es el hilo que esta atado a ella.
+                        PortapapelesEntrante.Enqueue(paquete.Clipboard.Text);
                         break;
 
                     case RemotePacket.PayloadOneofCase.KeyframeRequest:

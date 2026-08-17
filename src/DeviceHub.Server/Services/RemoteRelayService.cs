@@ -326,7 +326,9 @@ public sealed class RemoteRelayGrpcService(
     /// pantalla del tecnico, y un host que manda InputEvent esta intentando
     /// escribir en la PC del propio tecnico.
     /// </summary>
-    private static Queja? Revisar(RemotePacket paquete, RemoteRole papel, string sesionId)
+    /// <summary>Publico por la misma razon que RevisarHola: es una funcion pura y
+    /// es la frontera que decide que se reenvia, asi que se prueba directa.</summary>
+    public static Queja? Revisar(RemotePacket paquete, RemoteRole papel, string sesionId)
     {
         if (paquete.ProtocolVersion != 0 && paquete.ProtocolVersion != RemoteSessionProtocol.Version)
             return new Queja(RemoteErrorCode.UnsupportedVersion, $"Protocolo {paquete.ProtocolVersion}.");
@@ -347,7 +349,11 @@ public sealed class RemoteRelayGrpcService(
             RemotePacket.PayloadOneofCase.Ping or
             RemotePacket.PayloadOneofCase.Pong or
             RemotePacket.PayloadOneofCase.Close or
-            RemotePacket.PayloadOneofCase.Error => true,
+            RemotePacket.PayloadOneofCase.Error or
+
+            // El portapapeles va en los dos sentidos: se copia aqui y se pega
+            // alla, y al reves.
+            RemotePacket.PayloadOneofCase.Clipboard => true,
 
             // Un segundo Hello, o un oneof vacio.
             _ => false
@@ -372,6 +378,18 @@ public sealed class RemoteRelayGrpcService(
 
             if (trozo.ChunkIndex >= trozo.ChunkCount)
                 return new Queja(RemoteErrorCode.Unspecified, "chunk_index fuera de rango.");
+        }
+
+        // El portapapeles se sincroniza SOLO, sin que nadie lo pida. Sin tope,
+        // copiar un log de 40 MB en cualquiera de los dos lados lo mandaria por
+        // la red entero y sin avisar.
+        if (paquete.PayloadCase == RemotePacket.PayloadOneofCase.Clipboard
+            && paquete.Clipboard.Text.Length > RemoteSessionProtocol.MaxClipboardChars)
+        {
+            return new Queja(
+                RemoteErrorCode.PayloadTooLarge,
+                $"Portapapeles de {paquete.Clipboard.Text.Length} caracteres; " +
+                $"el maximo son {RemoteSessionProtocol.MaxClipboardChars}.");
         }
 
         return null;
