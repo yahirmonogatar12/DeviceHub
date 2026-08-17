@@ -122,6 +122,10 @@ public sealed class DeviceHubClient : IDisposable
     public Task<MachineDetail> ResolveConflictAsync(ResolveConflictRequest request, CancellationToken ct)
         => _client.ResolveIdentityConflictAsync(request, _auth, cancellationToken: ct).ResponseAsync;
 
+    public Task<MachineDetail> AuthorizeReenrollmentAsync(string machineId, CancellationToken ct)
+        => _client.AuthorizeReenrollmentAsync(
+            new MachineRef { MachineId = machineId }, _auth, cancellationToken: ct).ResponseAsync;
+
     /// <summary>
     /// Fase 6. Autoriza una sesion del motor propio y trae sus dos tickets.
     ///

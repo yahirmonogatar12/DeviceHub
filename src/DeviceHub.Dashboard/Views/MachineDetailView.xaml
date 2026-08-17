@@ -66,6 +66,11 @@
                         <MenuItem Header="Mas acciones  &#x25BE;" Style="{StaticResource MenuAccionesRaiz}">
                             <MenuItem Header="Reiniciar PC" Style="{StaticResource MenuAccion}"
                                       Command="{Binding RestartMachineCommand}" />
+                            <!-- Para una PC que dejo de conectar porque su token
+                                 ya no vale. Aqui dentro y no en la fila de
+                                 botones: no es una accion de todos los dias. -->
+                            <MenuItem Header="Reasociar maquina" Style="{StaticResource MenuAccion}"
+                                      Command="{Binding AuthorizeReenrollmentCommand}" />
                             <Separator Margin="8,4" Background="{StaticResource Line}" />
                             <MenuItem Header="Apagar PC" Style="{StaticResource MenuAccionPeligro}"
                                       Command="{Binding ShutdownMachineCommand}" />

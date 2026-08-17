@@ -267,6 +267,10 @@ service AdminService {
   rpc MoveMachine (MoveMachineRequest) returns (MachineDetail);
   rpc CreateEnrollmentCode (CreateEnrollmentCodeRequest) returns (EnrollmentCodeReply);
   rpc ResolveIdentityConflict (ResolveConflictRequest) returns (MachineDetail);
+  // Autoriza a UNA maquina a reasociarse sin recovery code durante unos
+  // minutos. Es la salida para una PC cuyo token se invalido estando
+  // desconectada: sin esto hay que ir fisicamente hasta ella.
+  rpc AuthorizeReenrollment (MachineRef) returns (MachineDetail);
   rpc ListUsers (ListUsersRequest) returns (UserList);
   rpc CreateUser (CreateUserRequest) returns (UserRecord);
   rpc UpdateUser (UpdateUserRequest) returns (UserRecord);

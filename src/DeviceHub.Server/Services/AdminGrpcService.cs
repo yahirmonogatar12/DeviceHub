@@ -34,6 +34,7 @@ public sealed class AdminGrpcService(
     MachineBroadcaster broadcaster,
     ConnectionRegistry registry,
     RemoteTicketRegistry remoteTickets,
+    ReenrollmentGrants reenrollment,
     ServerPins pins,
     JwtKeyProvider jwtKey,
     IOptions<ServerOptions> options,
@@ -320,6 +321,41 @@ public sealed class AdminGrpcService(
             ExpiresAtUs = host.ExpiresAt.ToUnixTimeMilliseconds() * 1000,
             HostNotified = avisado
         };
+    }
+
+    /// <summary>
+    /// Autoriza a una maquina a reasociarse sin recovery code durante unos
+    /// minutos.
+    ///
+    /// Es la salida de un callejon real: emitir identidad nueva sobre una PC
+    /// DESCONECTADA le invalida el token, y como el agente no vuelve a
+    /// registrarse mientras tenga uno guardado, esa PC no regresaba nunca. La
+    /// unica cura era ir hasta ella a editar un archivo. Le paso a INPUTM1.
+    ///
+    /// Un administrador y solo un administrador: el permiso no lleva secreto, y
+    /// quien conozca el machineId de esa PC podria aprovechar la ventana. Por eso
+    /// dura minutos y se audita.
+    /// </summary>
+    [Authorize(Roles = Roles.Administrator)]
+    public override async Task<MachineDetail> AuthorizeReenrollment(MachineRef request, ServerCallContext context)
+    {
+        var ct = context.CancellationToken;
+
+        var maquina = await machines.GetAsync(request.MachineId, ct)
+            ?? throw new RpcException(new Status(StatusCode.NotFound, "Maquina desconocida"));
+
+        var vence = reenrollment.Authorize(maquina.Id);
+
+        await audit.WriteAsync(BuildAudit(
+            context, AuditActions.ReenrollmentAuthorized, maquina, AuditEntry.Allowed,
+            $"vence {vence:O}"), ct);
+
+        logger.LogWarning(
+            "{Actor} autorizo la reasociacion de {MachineCode} ({MachineId}) hasta {Vence:HH:mm:ss}",
+            context.GetHttpContext().User.Identity?.Name ?? "desconocido",
+            maquina.MachineCode, maquina.Id, vence);
+
+        return await GetMachine(request, context);
     }
 
     /// <summary>

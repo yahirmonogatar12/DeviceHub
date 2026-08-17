@@ -18,6 +18,7 @@ public static class AuditActions
     public const string RemoteEnd = "REMOTE_SESSION_ENDED";
     public const string MachineMoved = "MACHINE_MOVED";
     public const string IdentityResolved = "IDENTITY_CONFLICT_RESOLVED";
+    public const string ReenrollmentAuthorized = "REENROLLMENT_AUTHORIZED";
     public const string EnrollmentCodeCreated = "ENROLLMENT_CODE_CREATED";
     public const string LoginFailed = "LOGIN_FAILED";
     public const string LoginThrottled = "LOGIN_THROTTLED";

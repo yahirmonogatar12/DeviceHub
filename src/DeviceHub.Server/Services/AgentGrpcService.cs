@@ -16,6 +16,7 @@ public sealed class AgentGrpcService(
     ConnectionRegistry registry,
     MachineBroadcaster broadcaster,
     ServerPins pins,
+    ReenrollmentGrants reenrollment,
     ILogger<AgentGrpcService> logger) : AgentService.AgentServiceBase
 {
     // ------------------------------------------------------------- enrolamiento
@@ -27,12 +28,36 @@ public sealed class AgentGrpcService(
         if (!Guid.TryParse(request.MachineId, out _))
             throw new RpcException(new Status(StatusCode.InvalidArgument, "machineId no es un GUID"));
 
-        var codeHash = Secrets.Sha256Hex(request.EnrollmentCode.Trim().ToUpperInvariant());
-        var consumed = await enrollment.TryConsumeAsync(codeHash, request.MachineId, ct)
-            ?? throw new RpcException(new Status(StatusCode.PermissionDenied,
-                "Codigo de enrolamiento invalido, vencido o ya consumido"));
-
         var existing = await machines.GetForAuthAsync(request.MachineId, ct);
+
+        // Sin codigo: solo se admite si un administrador autorizo la reasociacion
+        // de ESTA maquina hace pocos minutos, y solo para una que ya existe.
+        //
+        // Es el camino de vuelta de una PC cuyo token se invalido estando
+        // desconectada. No crea maquinas nuevas -- para eso sigue haciendo falta
+        // un codigo de enrolamiento -- y el permiso es de un solo uso.
+        EnrollmentCodeRow consumed;
+
+        if (string.IsNullOrWhiteSpace(request.EnrollmentCode))
+        {
+            if (existing is null || !reenrollment.TryConsume(request.MachineId))
+                throw new RpcException(new Status(StatusCode.PermissionDenied,
+                    "Sin codigo de enrolamiento y sin autorizacion de reasociacion"));
+
+            // SiteId no se usa: solo hace falta para CREAR una maquina, y aqui
+            // la maquina existe por construccion. TargetMachineId se rellena
+            // porque el permiso apunta a esta y a ninguna otra.
+            consumed = new EnrollmentCodeRow { TargetMachineId = request.MachineId };
+            logger.LogWarning("Reasociacion autorizada consumida por {MachineId}", request.MachineId);
+        }
+        else
+        {
+            var codeHash = Secrets.Sha256Hex(request.EnrollmentCode.Trim().ToUpperInvariant());
+
+            consumed = await enrollment.TryConsumeAsync(codeHash, request.MachineId, ct)
+                ?? throw new RpcException(new Status(StatusCode.PermissionDenied,
+                    "Codigo de enrolamiento invalido, vencido o ya consumido"));
+        }
 
         // Un recovery code apunta a UNA maquina: no sirve para adoptar otra identidad.
         if (!string.IsNullOrEmpty(consumed.TargetMachineId) && consumed.TargetMachineId != request.MachineId)

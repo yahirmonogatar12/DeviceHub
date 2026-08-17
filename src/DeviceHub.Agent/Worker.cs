@@ -99,13 +99,15 @@ public sealed class Worker(
             }
             catch (RpcException ex) when (ex.StatusCode == StatusCode.PermissionDenied)
             {
-                // El codigo de enrolamiento no sirve: vencido, ya consumido o de
-                // otra maquina. Reintentarlo cada minuto no lo va a arreglar.
+                // Registro rechazado: sin codigo valido y sin permiso vivo. Se
+                // reintenta cada minuto -- ni mas, porque solo lo arregla una
+                // persona, ni menos, porque en cuanto esa persona pulse el boton
+                // del dashboard esta PC tiene que volver sin que nadie la toque.
                 logger.LogError(
-                    "Registro rechazado: {Detail}. Emite un recovery code para {MachineId} y ponlo en appsettings.json",
+                    "Registro rechazado: {Detail}. Autoriza la reasociacion de {MachineId} en el dashboard",
                     ex.Status.Detail, _identity.MachineId);
 
-                await SafeDelay(TimeSpan.FromMinutes(5), stoppingToken);
+                await SafeDelay(Jitter(TimeSpan.FromMinutes(1)), stoppingToken);
             }
             catch (RpcException ex) when (ex.StatusCode == StatusCode.FailedPrecondition)
             {
@@ -183,19 +185,12 @@ public sealed class Worker(
     /// </summary>
     private bool DescartarToken(string motivo)
     {
-        if (string.IsNullOrWhiteSpace(_options.EnrollmentCode))
-        {
-            logger.LogError(
-                "{Motivo}. Sin codigo de enrolamiento no hay forma de recuperarse: emite un recovery code " +
-                "para {MachineId} y ponlo en el appsettings.json del agente", motivo, _identity.MachineId);
-
-            return false;
-        }
-
         if (string.IsNullOrWhiteSpace(_identity.ProtectedToken))
-            return false;   // ya se descarto; lo que falla ahora es el codigo
+            return false;   // ya se descarto; lo que falla ahora es el registro
 
-        logger.LogWarning("{Motivo}. Se descarta y se reintenta el registro con el codigo configurado", motivo);
+        logger.LogWarning(
+            "{Motivo}. Se descarta y se reintenta el registro. Si no hay codigo configurado, hace falta " +
+            "autorizar la reasociacion de {MachineId} desde el dashboard", motivo, _identity.MachineId);
 
         _identity.ProtectedToken = null;
         identityStore.Save(_identity);
@@ -207,10 +202,12 @@ public sealed class Worker(
         if (!string.IsNullOrWhiteSpace(_identity.ProtectedToken))
             return;
 
-        if (string.IsNullOrWhiteSpace(_options.EnrollmentCode))
-            throw new InvalidOperationException(
-                "Sin token y sin codigo de enrolamiento. Genera uno en el dashboard (Admin -> Create enrollment code).");
-
+        // Sin codigo se intenta IGUAL, con el campo vacio. El servidor lo acepta
+        // solo si un administrador autorizo la reasociacion de esta maquina hace
+        // pocos minutos; si no, contesta PermissionDenied y se reintenta luego.
+        //
+        // Esa es la diferencia entre una PC que vuelve sola en cuanto alguien
+        // pulsa un boton y una a la que hay que ir fisicamente.
         var fingerprint = Fingerprint.Collect();
         var client = new AgentService.AgentServiceClient(channel);
 

@@ -160,6 +160,7 @@ builder.Services.AddSingleton<UserRepository>();
 builder.Services.AddSingleton<ConnectionRegistry>();
 builder.Services.AddSingleton<RemoteSessionRegistry>();
 builder.Services.AddSingleton<RemoteTicketRegistry>();
+builder.Services.AddSingleton<ReenrollmentGrants>();
 builder.Services.AddSingleton<RemoteLeaseRegistry>();
 builder.Services.AddSingleton<MachineBroadcaster>();
 builder.Services.AddSingleton(jwtKeyProvider);
