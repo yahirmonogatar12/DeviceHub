@@ -189,73 +189,29 @@ public sealed class InputInjector(int ancho, int alto, int izquierda, int arriba
         });
     }
 
+    /// <summary>
+    /// SOLO se llama desde el hilo de captura.
+    ///
+    /// SendInput no inyecta "en Windows": inyecta en el escritorio al que esta
+    /// atado el hilo que llama. El hilo de captura ya esta atado al escritorio
+    /// activo -- InputDesktop lo mantiene asi -- y ademas es el unico dueño de
+    /// DXGI y del codificador.
+    ///
+    /// El intento anterior fue atar TAMBIEN el hilo de red, para no coordinarse
+    /// con el de captura. Fue peor: dos hilos abriendo y CERRANDO handles del
+    /// mismo escritorio por su cuenta, y el CloseDesktop del hilo de red tiraba
+    /// el escritorio bajo los pies del de captura. El sintoma no apuntaba a nada
+    /// -- el visor recibia una configuracion que ningun decodificador aceptaba.
+    ///
+    /// Evitar la coordinacion era el problema, no la solucion.
+    /// </summary>
     private void Enviar(INPUT entrada)
     {
-        Atar();
-
         if (SendInput(1, [entrada], Marshal.SizeOf<INPUT>()) == 1)
             Applied++;
         else
             Rejected++;   // el escritorio activo no es el nuestro, o falta privilegio
     }
-
-    private IntPtr _escritorio;
-    private long _ultimaRevision;
-
-    /// <summary>
-    /// Ata ESTE hilo al escritorio que recibe la entrada.
-    ///
-    /// SendInput no inyecta "en Windows": inyecta en el escritorio al que esta
-    /// atado el hilo que llama. La Fase 19 ato el hilo de CAPTURA al escritorio
-    /// activo, pero la entrada se aplica desde el hilo de RED, que no estaba
-    /// atado a ninguno -- y ahi SendInput dice que si y no pasa nada. El video se
-    /// veia perfecto y no se podia controlar.
-    ///
-    /// Cada hilo lleva su propia atadura, asi que este se la pone el mismo en vez
-    /// de coordinarse con el de captura. Se revisa cada 500 ms: reatar en cada
-    /// evento serian dos llamadas al sistema por movimiento del raton.
-    /// </summary>
-    private void Atar()
-    {
-        var ahora = Environment.TickCount64;
-
-        if (_escritorio != IntPtr.Zero && ahora - _ultimaRevision < 500)
-            return;
-
-        _ultimaRevision = ahora;
-
-        var entrada = OpenInputDesktop(0, false, DesktopGenericAll);
-
-        if (entrada == IntPtr.Zero)
-            return;
-
-        if (entrada == _escritorio || !SetThreadDesktop(entrada))
-        {
-            CloseDesktop(entrada);
-            return;
-        }
-
-        // El anterior se cierra DESPUES de atarse al nuevo: al reves, el hilo se
-        // quedaria un instante sin escritorio.
-        if (_escritorio != IntPtr.Zero)
-            CloseDesktop(_escritorio);
-
-        _escritorio = entrada;
-    }
-
-    private const uint DesktopGenericAll = 0x10000000;
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr OpenInputDesktop(
-        uint flags, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint desiredAccess);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetThreadDesktop(IntPtr desktop);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CloseDesktop(IntPtr desktop);
 
     // ------------------------------------------------------------------ interop
 

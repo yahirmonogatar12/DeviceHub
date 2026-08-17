@@ -362,6 +362,12 @@ public static class RelaySession
                     }
                 }
 
+                // La entrada del tecnico, aplicada AQUI: este hilo es el que esta
+                // atado al escritorio activo. Se drena entera para que la cola no
+                // crezca y para no repartir un arrastre entre dos vueltas.
+                while (Pendientes.TryDequeue(out var evento))
+                    _entrada?.Apply(evento);
+
                 IReadOnlyList<EncodedFrame> producidos;
 
                 // El frame DXGI se suelta ANTES de esperar por nada. Encolar
@@ -441,6 +447,17 @@ public static class RelaySession
     private static InputInjector? _entrada;
 
     /// <summary>
+    /// Entrada recibida y todavia sin aplicar. La llena el hilo de red y la vacia
+    /// el de captura, que es el unico atado al escritorio activo.
+    ///
+    /// Sin tope y sin descarte: se drena ENTERA en cada vuelta del bucle de
+    /// captura -- 60 veces por segundo -- asi que no crece. Y descartar aqui
+    /// dejaria un KeyUp sin su KeyDown, que es como se queda una tecla pegada al
+    /// otro lado.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentQueue<InputEvent> Pendientes = new();
+
+    /// <summary>
     /// El mismo escritor para todo. gRPC no admite dos escrituras a la vez en el
     /// stream de peticion, y aqui escriben dos sitios: el bucle de video y la
     /// respuesta al Ping.
@@ -518,10 +535,15 @@ public static class RelaySession
                         break;
 
                     case RemotePacket.PayloadOneofCase.Input:
+                        // NO se aplica aqui. Este es el hilo de red, y SendInput
+                        // inyecta en el escritorio al que esta atado el hilo que
+                        // llama. Se encola y lo aplica el hilo de captura, que ya
+                        // esta atado al escritorio activo.
+                        //
                         // Silencioso a proposito: cada movimiento del raton
                         // pasaria por aqui, y un log por evento convierte el
                         // visor de eventos en el cuello de botella de la sesion.
-                        _entrada?.Apply(paquete.Input);
+                        Pendientes.Enqueue(paquete.Input);
                         break;
 
                     case RemotePacket.PayloadOneofCase.HostAction
