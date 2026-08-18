@@ -141,6 +141,10 @@ public sealed class RemoteRelayGrpcService(
             }
         }, cancelacion);
 
+        // Lo que la sesion ya sabia y este recien llegado no. Va DESPUES del
+        // HelloAccepted y fuera de cualquier candado.
+        await sesion.PonerAlDiaAsync(cancelacion);
+
         var motivo = SessionCloseReason.Normal;
         string? detalle = null;
         var cerroOrdenado = false;

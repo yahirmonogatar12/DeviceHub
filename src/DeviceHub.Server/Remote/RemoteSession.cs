@@ -59,6 +59,22 @@ public sealed class RemoteSession(string id)
     /// servidor no persiste nada del video, ni siquiera sus parametros.</summary>
     public VideoConfig? Config { get; private set; }
 
+    /// <summary>
+    /// Ultima lista de pantallas que mando el host, para dársela a un viewer que
+    /// llegue tarde.
+    ///
+    /// Es el mismo problema que la configuracion de video y se resuelve igual: el
+    /// host manda la lista al abrir la captura, y si el viewer conecta despues
+    /// -- que pasa siempre que el agente tarda en arrancar el host -- se perdia
+    /// el unico mensaje y el desplegable se quedaba vacio toda la sesion.
+    ///
+    /// RustDesk hace lo mismo: guarda el SwitchDisplay en una instantanea y se la
+    /// entrega a los suscriptores que llegan despues. Guardarlo en el RELAY es
+    /// mejor que repetirlo desde el host cada pocos segundos, porque tambien
+    /// cubre la reconexion del viewer y no gasta trafico cuando no hace falta.
+    /// </summary>
+    public DisplayList? Displays { get; private set; }
+
     public long FramesReceived { get; private set; }
     public long FramesForwarded { get; private set; }
     public long BytesForwarded { get; private set; }
@@ -91,6 +107,11 @@ public sealed class RemoteSession(string id)
                     conexion.SetVideoConfig(Config);
                 else
                     conexion.RequireKeyframe();
+
+                // La lista de pantallas viaja fuera de la cola de video, asi que
+                // se le manda aparte en cuanto entra.
+                if (Displays is not null)
+                    _pendienteDePantallas = conexion;
             }
 
             State = (Host, Viewer) switch
@@ -196,6 +217,13 @@ public sealed class RemoteSession(string id)
                 Viewer?.SetVideoConfig(paquete.VideoConfig);
                 break;
 
+            case RemotePacket.PayloadOneofCase.Displays:
+                lock (_puerta)
+                    Displays = paquete.Displays;
+
+                await ReenviarControlAsync(Viewer, paquete, cancellationToken);
+                break;
+
             case RemotePacket.PayloadOneofCase.VideoChunk:
                 if (_agrupador.TryAdd(paquete.VideoChunk, out var frame))
                 {
@@ -214,6 +242,35 @@ public sealed class RemoteSession(string id)
                 await ReenviarControlAsync(Viewer, paquete, cancellationToken);
                 break;
         }
+    }
+
+    /// <summary>
+    /// El viewer que acaba de entrar y todavia no ha recibido la lista guardada.
+    ///
+    /// No se le manda dentro de TryJoin porque ahi se sostiene el candado de la
+    /// sesion, y escribir en un socket con un candado tomado es como se cuelgan
+    /// las dos mitades a la vez.
+    /// </summary>
+    private RelayConnection? _pendienteDePantallas;
+
+    /// <summary>Entrega lo guardado al viewer recien llegado. Lo llama el relay
+    /// cuando ya no sostiene ningun candado.</summary>
+    public async ValueTask PonerAlDiaAsync(CancellationToken cancellationToken)
+    {
+        RelayConnection? destino;
+        DisplayList? pantallas;
+
+        lock (_puerta)
+        {
+            destino = _pendienteDePantallas;
+            pantallas = Displays;
+            _pendienteDePantallas = null;
+        }
+
+        if (destino is null || pantallas is null)
+            return;
+
+        await destino.SendControlAsync(new RemotePacket { Displays = pantallas }, cancellationToken);
     }
 
     /// <summary>Lo que manda la PC del tecnico: entrada y peticiones.</summary>
