@@ -237,6 +237,10 @@ public static class RelaySession
     /// </summary>
     private static int _pantalla;
 
+    /// <summary>Numeracion de frames de toda la SESION. No se reinicia al rehacer
+    /// la captura: ver el comentario en la llamada a Split.</summary>
+    private static ulong _frameDeLaSesion;
+
     /// <summary>
     /// Fase 13. Los dos los PIDE el hilo de red y los APLICA el de captura, que
     /// es el unico dueno del MFT. Tocar el codificador desde fuera de su hilo es
@@ -937,8 +941,21 @@ public static class RelaySession
                     if (!configEnviada)
                         continue;   // sin configuracion no hay nada descodificable
 
+                    // EL NUMERO DE FRAME ES DE LA SESION, no del codificador.
+                    //
+                    // Aqui estaba la congelacion al cambiar de pantalla, y era
+                    // silenciosa: cada captura nueva estrena su propio contador y
+                    // volvia a empezar en 1. Los reensambladores -- el del relay
+                    // y el del visor -- descartan como ATRASADO todo frame con un
+                    // id menor o igual al ultimo que completaron, asi que despues
+                    // de un cambio TODOS los frames nuevos se tiraban. Para
+                    // siempre, sin un solo error, con el contador `tardios`
+                    // subiendo donde nadie lo miraba.
+                    //
+                    // Un contador de sesion nunca retrocede, asi que el cambio de
+                    // captura deja de ser visible desde fuera.
                     var grupo = VideoFraming.Split(
-                        frameCodificado.Sequence, frameCodificado.IsKeyFrame, version,
+                        ++_frameDeLaSesion, frameCodificado.IsKeyFrame, version,
                         frameCodificado.TimestampUs, frameCodificado.Payload);
 
                     salida.WriteAsync(new Enviable(config, grupo), cancellationToken)

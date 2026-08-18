@@ -308,6 +308,16 @@ public partial class RelayWindow : Window
                         // que si no se queda pegado aunque ya no sea verdad.
                         Nota($"{config.Width}x{config.Height}");
 
+                        // EL REENSAMBLADOR SE TIRA CON EL FLUJO VIEJO.
+                        //
+                        // Guarda cual fue el ultimo frame completado y descarta
+                        // como atrasado todo id menor o igual. Un host que
+                        // reinicie su numeracion -- uno viejo, o cualquier caso
+                        // que no hayamos previsto -- dejaria la imagen congelada
+                        // sin un solo error. Una config nueva ES un flujo nuevo:
+                        // no hay nada del anterior que conservar.
+                        montador = new VideoFrameAssembler();
+
                         // La resolucion remota puede cambiar a media sesion, asi
                         // que el tamano del lienzo se recalcula aqui y no una vez
                         // al arrancar.
