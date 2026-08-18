@@ -155,6 +155,13 @@ builder.Services.AddSingleton<AuditRepository>();
 builder.Services.AddSingleton<RateLimiter>();
 
 // Unico punto donde se elige el motor remoto. La Fase 18 cambia esta linea.
+// LA UNICA LINEA QUE ELIGE MOTOR DE CONTROL REMOTO. Fase 8.
+//
+// RustDeskProvider      lanza el cliente de RustDesk contra su device_id
+// DeviceHubRemoteProvider  lanza el visor propio contra el relay
+//
+// Cambiar de motor en toda la planta es cambiar el tipo de aqui. Ni el
+// contrato, ni la base de datos, ni el dashboard nombran ningun producto.
 builder.Services.AddSingleton<IRemoteProvider, RustDeskProvider>();
 builder.Services.AddSingleton<UserRepository>();
 builder.Services.AddSingleton<ConnectionRegistry>();

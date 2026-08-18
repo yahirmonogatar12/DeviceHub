@@ -8,10 +8,19 @@ namespace DeviceHub.Tests;
 
 public class RemoteProviderTests
 {
+    private static RemoteLaunchContext Contexto(string deviceId) => new(
+        MachineId: "m-1",
+        DeviceId: deviceId,
+        SessionId: "s-1",
+        ViewerTicket: "TICKET-SECRETO",
+        ViewerMachineId: "PC-TECNICO",
+        ServerAddress: "https://192.168.1.10:5443",
+        ServerPin: "PIN");
+
     [Fact]
     public void The_launch_carries_the_device_id()
     {
-        var launch = new RustDeskProvider().BuildLaunch("861237322");
+        var launch = new RustDeskProvider().BuildLaunch(Contexto("861237322"));
 
         Assert.Equal("rustdesk", launch.Provider);
         Assert.Equal("861237322", launch.DeviceId);
@@ -26,12 +35,52 @@ public class RemoteProviderTests
     [Fact]
     public void Only_the_provider_names_the_engine()
     {
-        var launch = new RustDeskProvider().BuildLaunch("123456789");
+        var launch = new RustDeskProvider().BuildLaunch(Contexto("123456789"));
 
         // Lo que viaja al dashboard es ejecutable + argumentos, no estructura
         // propia de un producto concreto.
         Assert.NotEmpty(launch.Target);
         Assert.NotEmpty(launch.Arguments);
+    }
+
+    /// <summary>
+    /// Fase 8. La diferencia de flujo entre los dos motores es UNA bandera, y de
+    /// ella depende que el servidor emita tickets y le mande la orden de arrancar
+    /// al agente. Si alguien la invierte, RustDesk empezaria a pedir tickets que
+    /// no usa y el motor propio se quedaria sin host al otro lado.
+    /// </summary>
+    [Fact]
+    public void Solo_el_motor_propio_necesita_arrancar_el_otro_extremo()
+    {
+        Assert.False(new RustDeskProvider().RequiresHostLaunch);
+        Assert.True(new DeviceHubRemoteProvider().RequiresHostLaunch);
+    }
+
+    /// <summary>
+    /// EL TICKET NO PUEDE IR EN LOS ARGUMENTOS. Los argumentos de un proceso los
+    /// lee cualquier usuario de esa PC con abrir el administrador de tareas, y
+    /// esto da acceso a ver y controlar una pantalla. Va por stdin, y esta
+    /// prueba es lo que impide que alguien lo "simplifique" a un --ticket.
+    /// </summary>
+    [Fact]
+    public void El_ticket_viaja_por_stdin_y_no_en_la_linea_de_comandos()
+    {
+        var launch = new DeviceHubRemoteProvider().BuildLaunch(Contexto("no-se-usa"));
+
+        Assert.Equal("TICKET-SECRETO", launch.Secret);
+        Assert.DoesNotContain("TICKET-SECRETO", launch.Arguments);
+    }
+
+    /// <summary>Sin pin no se finge que la sesion es segura: el visor arranca en
+    /// modo laboratorio y lo avisa en su barra de estado.</summary>
+    [Fact]
+    public void Sin_pin_el_visor_arranca_avisando()
+    {
+        var launch = new DeviceHubRemoteProvider()
+            .BuildLaunch(Contexto("x") with { ServerPin = "" });
+
+        Assert.Contains("--allow-untrusted", launch.Arguments);
+        Assert.DoesNotContain("--pin", launch.Arguments);
     }
 }
 

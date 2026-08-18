@@ -284,7 +284,7 @@ service AdminService {
   // lanza cada motor, y eso es la Fase 8. Este solo autoriza, que es lo unico
   // que la Fase 6 tiene que resolver.
   rpc IssueRemoteTickets (IssueRemoteTicketsRequest) returns (IssueRemoteTicketsResponse);
-  rpc StartRemoteSession (MachineRef) returns (RemoteSessionReply);
+  rpc StartRemoteSession (RemoteSessionRequest) returns (RemoteSessionReply);
   rpc EndRemoteSession (RemoteSessionRef) returns (RemoteSessionReply);
   rpc SendCommand (SendCommandRequest) returns (CommandEntry);
   rpc ListCommands (MachineRef) returns (CommandList);
@@ -434,6 +434,30 @@ message RemoteSessionReply {
   string launch_arguments = 5;
   google.protobuf.Timestamp started_at = 6;
   google.protobuf.Timestamp ended_at = 7;
+
+  // Fase 8. Lo que el dashboard tiene que escribir en el STDIN del proceso que
+  // lanza, si el motor lo necesita. Vacio para los que no.
+  //
+  // Va aparte de launch_arguments a proposito y no es un capricho: los
+  // argumentos de un proceso los lee cualquier usuario de esa PC, y esto es la
+  // credencial que da acceso a ver y controlar una pantalla. No se registra en
+  // ningun log.
+  string viewer_secret = 8;
+
+  // Si el motor necesitaba arrancar el otro extremo y el agente estaba
+  // conectado para recibir la orden. Falso no invalida la sesion, pero el
+  // tecnico tiene que saber que nadie va a conectarse del otro lado.
+  bool host_notified = 9;
+}
+
+// Fase 8. La direccion y el pin los trae el DASHBOARD: el servidor no puede
+// saber por que direccion se le ve desde la red del tecnico -- puede haber NAT,
+// varias interfaces, o un nombre distinto segun la planta.
+message RemoteSessionRequest {
+  string machine_id = 1;
+  string viewer_machine_id = 2;
+  string server_address = 3;
+  string server_pin = 4;
 }
 
 message SendCommandRequest {

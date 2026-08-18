@@ -156,82 +156,16 @@ public sealed partial class MainViewModel
     [ObservableProperty]
     private ServiceRow? _selectedService;
 
+
     /// <summary>
-    /// Control remoto (Fase 10). El servidor autoriza, registra la sesion y
-    /// devuelve QUE ejecutar; aqui solo se lanza el cliente local.
+    /// UN SOLO camino, sea cual sea el motor. Fase 8.
     ///
-    /// Nada de esto nombra a RustDesk: si la Fase 18 cambia de motor, este
-    /// metodo no se toca.
+    /// Antes habia dos botones y dos flujos, y el de aqui montaba a mano los
+    /// argumentos del visor propio: el dashboard sabia que motor habia detras,
+    /// que es exactamente lo que IRemoteProvider existe para evitar. Ahora el
+    /// servidor devuelve QUE ejecutar y, si hace falta, que escribirle por
+    /// stdin; aqui no se nombra ningun producto.
     /// </summary>
-    /// <summary>
-    /// Fase 6: abre una sesion con el motor PROPIO de DeviceHub.
-    ///
-    /// Aparte del boton de siempre a proposito. Ese va por IRemoteProvider y hoy
-    /// lanza RustDesk; elegir motor es la Fase 8 y no se toca aqui.
-    ///
-    /// El ticket va del canal TLS a la tuberia de stdin del visor y de ahi a su
-    /// memoria: no toca disco, ni consola, ni argumentos. Vive 45 s, asi que el
-    /// visor se lanza inmediatamente.
-    /// </summary>
-    [RelayCommand]
-    private async Task DeviceHubRemoteAsync()
-    {
-        if (SelectedMachine is null)
-            return;
-
-        try
-        {
-            CommandFeedback = "Autorizando sesion...";
-
-            var tickets = await _client.IssueRemoteTicketsAsync(
-                SelectedMachine.MachineId, CancellationToken.None);
-
-            // JUNTO AL DASHBOARD, y no con ResolverCliente: ese busca en las
-            // claves de desinstalacion de RustDesk, porque es lo que hace falta
-            // para un programa de terceros. El visor es nuestro, se publica en
-            // la misma carpeta que el dashboard y no se registra en ningun
-            // sitio, asi que se busca donde de verdad esta.
-            var visor = Path.Combine(AppContext.BaseDirectory, "DeviceHub.RemoteViewer.exe");
-
-            if (!File.Exists(visor))
-                throw new FileNotFoundException(
-                    $"No esta DeviceHub.RemoteViewer.exe en {AppContext.BaseDirectory}\n\n" +
-                    "Se instala junto al dashboard: reinstala ese componente y vuelve a intentarlo.");
-
-            var proceso = System.Diagnostics.Process.Start(
-                new System.Diagnostics.ProcessStartInfo(visor,
-                    $"--relay-test --server {_client.ServerAddress} " +
-                    $"--session {tickets.SessionId} --machine-id {Environment.MachineName} " +
-                    // El mismo pin con el que este dashboard ya habla con el
-                    // servidor. Sin pin configurado se cae a --allow-untrusted y
-                    // el visor lo avisa en pantalla.
-                    (string.IsNullOrWhiteSpace(_client.ServerPin)
-                        ? "--allow-untrusted"
-                        : $"--pin {_client.ServerPin}"))
-                {
-                    UseShellExecute = false,
-                    RedirectStandardInput = true
-                })
-                ?? throw new InvalidOperationException("No se pudo lanzar el visor.");
-
-            await proceso.StandardInput.WriteLineAsync(tickets.ViewerTicket);
-            await proceso.StandardInput.FlushAsync();
-            proceso.StandardInput.Close();
-
-            // Que el agente este conectado no es un detalle: si no lo esta, el
-            // ticket es valido pero no hay nadie que arranque el host y el visor
-            // se queda en negro sin decir por que.
-            CommandFeedback = tickets.HostNotified
-                ? $"Sesion {tickets.SessionId[..8]} abierta sobre {SelectedMachine.MachineCode}."
-                : $"Sesion {tickets.SessionId[..8]} autorizada, pero el agente de " +
-                  $"{SelectedMachine.MachineCode} no esta conectado y nadie va a arrancar el host.";
-        }
-        catch (Exception ex)
-        {
-            CommandFeedback = Describe(ex);
-        }
-    }
-
     [RelayCommand]
     private async Task RemoteControlAsync()
     {
@@ -247,18 +181,42 @@ public sealed partial class MainViewModel
 
             var ejecutable = ResolverCliente(session.LaunchTarget)
                 ?? throw new FileNotFoundException(
-                    $"No se encontro {session.LaunchTarget} en esta PC.\n\n" +
-                    "El cliente de control remoto se ejecuta AQUI, no en la maquina controlada:\n" +
-                    "instalalo en este equipo y vuelve a intentarlo.");
+                    $"No se encontro {session.LaunchTarget} en esta PC." + Environment.NewLine +
+                    Environment.NewLine +
+                    "El cliente de control remoto se ejecuta AQUI, no en la maquina controlada:" +
+                    Environment.NewLine + "instalalo en este equipo y vuelve a intentarlo.");
 
-            System.Diagnostics.Process.Start(
+            // Solo se redirige stdin cuando hay algo que mandar por ahi. Con
+            // UseShellExecute=true no se puede escribir al proceso, asi que los
+            // motores sin secreto conservan el lanzamiento de siempre.
+            var conSecreto = session.ViewerSecret.Length > 0;
+
+            var proceso = System.Diagnostics.Process.Start(
                 new System.Diagnostics.ProcessStartInfo(ejecutable, session.LaunchArguments)
                 {
-                    UseShellExecute = true
-                });
+                    UseShellExecute = !conSecreto,
+                    RedirectStandardInput = conSecreto
+                })
+                ?? throw new InvalidOperationException("No se pudo lanzar el cliente remoto.");
+
+            if (conSecreto)
+            {
+                // Por stdin y no por argumentos: los argumentos de un proceso los
+                // lee cualquier usuario de esta PC.
+                await proceso.StandardInput.WriteLineAsync(session.ViewerSecret);
+                proceso.StandardInput.Close();
+            }
 
             _remoteSessionId = session.SessionId;
-            CommandFeedback = $"Sesion remota abierta sobre {SelectedMachine.MachineCode}";
+
+            // host_notified viene en falso cuando el motor necesitaba arrancar el
+            // otro extremo y el agente no estaba conectado. La sesion es valida,
+            // pero no va a contestar nadie: mas vale decirlo que dejar al tecnico
+            // mirando una ventana negra.
+            CommandFeedback = session.HostNotified || session.ViewerSecret.Length == 0
+                ? $"Sesion remota abierta sobre {SelectedMachine.MachineCode}"
+                : $"Sesion abierta sobre {SelectedMachine.MachineCode}, pero su agente no esta " +
+                  "conectado: nadie va a atender del otro lado.";
         }
         catch (Exception ex)
         {
@@ -290,6 +248,18 @@ public sealed partial class MainViewModel
 
         var nombre = Path.GetFileName(target);
 
+        // Primero JUNTO AL DASHBOARD. Los clientes propios se publican en esta
+        // misma carpeta y no se registran en ningun sitio, asi que buscarlos en
+        // las claves de desinstalacion no los encontraria nunca.
+        var alLado = Path.Combine(AppContext.BaseDirectory, nombre);
+
+        if (File.Exists(alLado))
+            return alLado;
+
+        // Y despues en las claves de desinstalacion. Esto SI nombra un producto,
+        // y es el unico sitio del dashboard donde pasa: es una busqueda de
+        // instalacion de terceros, no logica de motor. Cuando haya un segundo
+        // motor externo, esta lista se movera a configuracion.
         foreach (var clave in new[]
                  {
                      @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\RustDesk",

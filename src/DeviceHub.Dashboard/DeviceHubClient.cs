@@ -151,8 +151,25 @@ public sealed class DeviceHubClient : IDisposable
     public Task<AuditList> ListAuditAsync(string machineId, CancellationToken ct)
         => _client.ListAuditAsync(new AuditQuery { MachineId = machineId, Limit = 30 }, _auth, cancellationToken: ct).ResponseAsync;
 
+    /// <summary>
+    /// Fase 8. La direccion y el pin viajan en la peticion porque el SERVIDOR no
+    /// puede saber por que direccion se le ve desde la red del tecnico: puede
+    /// haber NAT, varias interfaces, o un nombre distinto segun la planta. Quien
+    /// lo sabe es este dashboard, que acaba de conectarse por ahi.
+    ///
+    /// El dashboard sigue sin saber que motor hay detras: solo aporta datos de
+    /// conexion, y quien decide que hacer con ellos es el proveedor del servidor.
+    /// </summary>
     public Task<RemoteSessionReply> StartRemoteSessionAsync(string machineId, CancellationToken ct)
-        => _client.StartRemoteSessionAsync(new MachineRef { MachineId = machineId }, _auth, cancellationToken: ct).ResponseAsync;
+        => _client.StartRemoteSessionAsync(
+            new RemoteSessionRequest
+            {
+                MachineId = machineId,
+                ViewerMachineId = Environment.MachineName,
+                ServerAddress = ServerAddress,
+                ServerPin = _settings.ServerPin
+            },
+            _auth, cancellationToken: ct).ResponseAsync;
 
     public Task<RemoteSessionReply> EndRemoteSessionAsync(string sessionId, CancellationToken ct)
         => _client.EndRemoteSessionAsync(new RemoteSessionRef { SessionId = sessionId }, _auth, cancellationToken: ct).ResponseAsync;

@@ -799,7 +799,8 @@ public sealed class AdminGrpcService(
     /// El device_id viaja porque el cliente local lo necesita, pero el dashboard
     /// no lo muestra: al tecnico le basta el boton.
     /// </summary>
-    public override async Task<RemoteSessionReply> StartRemoteSession(MachineRef request, ServerCallContext context)
+    public override async Task<RemoteSessionReply> StartRemoteSession(
+        RemoteSessionRequest request, ServerCallContext context)
     {
         var ct = context.CancellationToken;
         var user = context.GetHttpContext().User;
@@ -812,20 +813,76 @@ public sealed class AdminGrpcService(
             await DenyAsync(context, AuditActions.RemoteStart, machine,
                 "El control remoto requiere rol technician o superior");
 
-        if (!machine.RemoteAvailable || string.IsNullOrWhiteSpace(machine.RemoteDeviceId))
+        // Solo los motores que NO arrancan el otro extremo dependen de que haya
+        // un producto de terceros instalado alli con su propio identificador. El
+        // motor propio direcciona por machine_id, que siempre existe.
+        if (!remote.RequiresHostLaunch
+            && (!machine.RemoteAvailable || string.IsNullOrWhiteSpace(machine.RemoteDeviceId)))
+        {
             throw new RpcException(new Status(StatusCode.FailedPrecondition,
                 "Esta maquina no tiene motor de control remoto instalado"));
+        }
 
-        var launch = remote.BuildLaunch(machine.RemoteDeviceId);
         var sourceIp = context.Peer;
 
         // Las huerfanas se cierran aqui, sin servicio de fondo.
         await sessions.CloseOrphansAsync(ct);
 
-        // Sesion y auditoria en la misma transaccion.
+        // Sesion y auditoria en la misma transaccion. El id que sale de aqui es
+        // TAMBIEN el del canal del relay cuando el motor lo usa: asi "alguien
+        // controlo esta PC" y el trafico de esa sesion son la misma fila.
         var sessionId = await sessions.StartAsync(
-            machine.Id, actor, launch.Provider, launch.DeviceId, sourceIp,
+            machine.Id, actor, remote.Provider, machine.RemoteDeviceId ?? string.Empty, sourceIp,
             BuildAudit(context, AuditActions.RemoteStart, machine, AuditEntry.Allowed), ct);
+
+        var viewerTicket = string.Empty;
+        var avisado = false;
+        var destinatario = string.IsNullOrWhiteSpace(request.ViewerMachineId)
+            ? actor
+            : request.ViewerMachineId;
+
+        if (remote.RequiresHostLaunch)
+        {
+            // El del host se ata a la PC controlada; el del viewer, a la del
+            // tecnico Y a su usuario. Asi ninguno sirve en el lugar del otro.
+            var (hostTicket, host) = remoteTickets.Issue(
+                sessionId, DeviceHub.Remote.Contracts.RemoteRole.Host, machine.Id);
+
+            (viewerTicket, _) = remoteTickets.Issue(
+                sessionId, DeviceHub.Remote.Contracts.RemoteRole.Viewer, destinatario, actor);
+
+            // Se le ordena al agente que arranque el host en la sesion
+            // interactiva. El ticket viaja por el stream del agente, ya
+            // autenticado y con el certificado fijado, y de ahi a un named pipe
+            // con ACL. Nunca por linea de comandos.
+            //
+            // Si la PC esta offline el ticket sigue siendo valido y caduca solo:
+            // el tecnico se entera por host_notified, no por un error de
+            // autorizacion que no lo es.
+            avisado = registry.TryPush(machine.Id, new ServerMessage
+            {
+                RemoteHost = new RemoteHostControl
+                {
+                    Action = RemoteHostControl.Types.Action.Start,
+                    SessionId = sessionId,
+                    HostTicket = hostTicket,
+                    ExpiresAtUs = host.ExpiresAt.ToUnixTimeMilliseconds() * 1000
+                }
+            });
+
+            await audit.WriteAsync(BuildAudit(
+                context, AuditActions.RemoteRequested, machine, AuditEntry.Allowed,
+                $"sesion {sessionId} vence {host.ExpiresAt:O} host={(avisado ? "avisado" : "sin agente")}"), ct);
+        }
+
+        var launch = remote.BuildLaunch(new RemoteLaunchContext(
+            machine.Id,
+            machine.RemoteDeviceId ?? string.Empty,
+            sessionId,
+            viewerTicket,
+            destinatario,
+            request.ServerAddress,
+            request.ServerPin));
 
         logger.LogWarning("{Actor} abrio sesion remota sobre {MachineCode} desde {Source}",
             actor, machine.MachineCode, sourceIp);
@@ -837,6 +894,10 @@ public sealed class AdminGrpcService(
             DeviceId = launch.DeviceId,
             LaunchTarget = launch.Target,
             LaunchArguments = launch.Arguments,
+
+            // Va por stdin en el dashboard. No se registra en ningun log.
+            ViewerSecret = launch.Secret,
+            HostNotified = avisado,
             StartedAt = Timestamp.FromDateTime(DateTime.UtcNow)
         };
     }
