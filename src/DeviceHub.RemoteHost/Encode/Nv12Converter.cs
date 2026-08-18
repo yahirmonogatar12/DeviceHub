@@ -21,10 +21,17 @@ public sealed class Nv12Converter : IDisposable
     private readonly ID3D11VideoProcessor _processor;
     private readonly ID3D11VideoProcessorOutputView _outputView;
 
-    public Nv12Converter(ID3D11Device device, int width, int height)
+    /// <summary>
+    /// `width`/`height` es lo que ENTRA; `salidaAncho`/`salidaAlto` lo que sale.
+    ///
+    /// Cuando difieren, el procesador de video ESCALA de paso: es un blit, y
+    /// escalar no le cuesta mas que copiar. Sirve para el modo compuesto, donde
+    /// dos monitores dan una imagen que el codificador de esta GPU no traga.
+    /// </summary>
+    public Nv12Converter(ID3D11Device device, int width, int height, int salidaAncho = 0, int salidaAlto = 0)
     {
-        Width = width;
-        Height = height;
+        Width = salidaAncho > 0 ? salidaAncho : width;
+        Height = salidaAlto > 0 ? salidaAlto : height;
 
         _videoDevice = device.QueryInterface<ID3D11VideoDevice>();
         _videoContext = device.ImmediateContext.QueryInterface<ID3D11VideoContext>();
@@ -34,12 +41,23 @@ public sealed class Nv12Converter : IDisposable
             InputFrameFormat = VideoFrameFormat.Progressive,
             InputWidth = (uint)width,
             InputHeight = (uint)height,
-            OutputWidth = (uint)width,
-            OutputHeight = (uint)height,
+            OutputWidth = (uint)Width,
+            OutputHeight = (uint)Height,
             Usage = VideoUsage.PlaybackNormal
         };
 
-        _enumerator = _videoDevice.CreateVideoProcessorEnumerator(contenido);
+        try
+        {
+            _enumerator = _videoDevice.CreateVideoProcessorEnumerator(contenido);
+        }
+        catch (SharpGen.Runtime.SharpGenException ex)
+        {
+            // El procesador de video tiene su propio tope de tamano, distinto del
+            // del codificador y del de la duplicacion. Con una sola pantalla no se
+            // roza nunca; componiendo dos, si.
+            throw new VideoEncoderUnavailableException(
+                $"El procesador de video no admite {width}x{height} para BGRA -> NV12: {ex.ResultCode}", ex);
+        }
         _processor = _videoDevice.CreateVideoProcessor(_enumerator, 0);
 
         // La textura NV12 se crea UNA vez y se reutiliza. Crear una por frame a
@@ -47,8 +65,8 @@ public sealed class Nv12Converter : IDisposable
         // ventaja de trabajar en GPU.
         Output = device.CreateTexture2D(new Texture2DDescription
         {
-            Width = (uint)width,
-            Height = (uint)height,
+            Width = (uint)Width,
+            Height = (uint)Height,
             MipLevels = 1,
             ArraySize = 1,
             Format = Format.NV12,

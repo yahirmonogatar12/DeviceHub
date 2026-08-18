@@ -664,7 +664,15 @@ public static class RelaySession
         // despues se compara contra el.
         var escritorioCapturado = InputDesktop.NombreDeEntrada();
 
-        using IScreenCapture captura = Abrir(pedida, elegida, opciones);
+        // CADA PASO CON SU NOMBRE.
+        //
+        // "Fallo al capturar: E_INVALIDARG" no dice nada: entre abrir la
+        // duplicacion y sacar el primer frame hay cuatro llamadas distintas que
+        // pueden rechazar por parametro, y sin saber cual se investiga a ciegas.
+        // Con la etiqueta, el mismo error se convierte en una direccion.
+        var paso = "abrir la captura";
+
+        using IScreenCapture captura = Etiquetar(paso, () => Abrir(pedida, elegida, opciones));
 
         // La lista viaja al empezar y en cada cambio de pantalla: es cuando el
         // visor necesita repintar su selector, y cuesta un mensaje.
@@ -684,9 +692,35 @@ public static class RelaySession
         _entrada = new InputInjector(
             captura.Width, captura.Height, captura.DesktopLeft, captura.DesktopTop);
 
-        using var codificador = new H264Encoder(
-            captura.Device, captura.Width, captura.Height, opciones.Fps, opciones.Bitrate,
-            captura.AdapterLuid, captura.AdapterVendorId);
+        // CUANTO SE CODIFICA DE VERDAD.
+        //
+        // RustDesk no compone: manda un flujo POR MONITOR y es su cliente quien
+        // los coloca lado a lado. Por eso su codificador nunca ve 3840x1080 y el
+        // nuestro si -- y una Intel UHD lo rechaza con E_INVALIDARG.
+        //
+        // Mientras no tengamos varios flujos, el compuesto se ESCALA a un tamano
+        // que esa GPU acepta. Se pierde nitidez y se conserva lo que el modo
+        // busca: ver las dos pantallas y poder arrastrar entre ellas.
+        //
+        // ponytail: el tope es 1920 de ancho porque es el unico que esta
+        // MEDIDO en esa maquina. Cuando el log diga cual es el limite real, se
+        // sube; y la salida definitiva es un flujo por monitor, como ellos.
+        var (anchoCodificado, altoCodificado) = Encajar(captura.Width, captura.Height, 1920);
+
+        if (anchoCodificado != captura.Width)
+        {
+            Avisar(opciones,
+                $"El compuesto mide {captura.Width}x{captura.Height} y se codifica a " +
+                $"{anchoCodificado}x{altoCodificado}: esta GPU no acepta el tamano completo");
+        }
+
+        paso = $"crear el codificador para {anchoCodificado}x{altoCodificado}";
+
+        using var codificador = Etiquetar(paso, () => new H264Encoder(
+            captura.Device, anchoCodificado, altoCodificado, opciones.Fps, opciones.Bitrate,
+            captura.AdapterLuid, captura.AdapterVendorId, captura.Width, captura.Height));
+
+        paso = "capturar";
 
         // La IDENTIDAD va en la misma linea que el MFT a proposito. Es la unica
         // forma de saber, leyendo el log del agente, si esta sesion corrio como
@@ -896,13 +930,17 @@ public static class RelaySession
                 // El frame DXGI se suelta ANTES de esperar por nada. Encolar
                 // puede bloquear si la red va por detras, y quedarse la
                 // superficie duplicada mientras tanto es lo que no se hace.
-                using (var frame = captura.CaptureAsync(cancellationToken).GetAwaiter().GetResult())
+                using (var frame = Etiquetar(
+                    "pedir el frame", () => captura.CaptureAsync(cancellationToken).GetAwaiter().GetResult()))
                 {
                     if (frame is null || !frame.DesktopChanged)
                         continue;
 
                     cuenta.Capturados++;
-                    producidos = codificador.Encode(frame, cancellationToken);
+
+                    producidos = Etiquetar(
+                        $"codificar {frame.Width}x{frame.Height}",
+                        () => codificador.Encode(frame, cancellationToken));
                 }
 
                 foreach (var frameCodificado in producidos)
@@ -1013,6 +1051,42 @@ public static class RelaySession
         opciones.Escribir(texto);
         _avisar?.Invoke(texto);
     }
+
+    /// <summary>
+    /// Ejecuta un paso y, si falla, le pone NOMBRE a la excepcion.
+    ///
+    /// Un HRESULT suelto no es un diagnostico: E_INVALIDARG puede venir de la
+    /// duplicacion, del convertidor a NV12, del tipo de entrada del codificador o
+    /// del de salida, y cada uno se arregla de una forma. La etiqueta convierte
+    /// "algo esta mal" en "esto esta mal".
+    /// </summary>
+    private static T Etiquetar<T>(string paso, Func<T> accion)
+    {
+        try
+        {
+            return accion();
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"al {paso}: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Reduce a un ancho maximo conservando la proporcion, con las dos medidas
+    /// PARES: H.264 codifica en macrobloques y no traga dimensiones impares.
+    /// </summary>
+    private static (int Ancho, int Alto) Encajar(int ancho, int alto, int maximo)
+    {
+        if (ancho <= maximo)
+            return (ancho, alto);
+
+        var escala = maximo / (double)ancho;
+
+        return (Par(maximo), Par((int)Math.Round(alto * escala)));
+    }
+
+    private static int Par(int valor) => valor % 2 == 0 ? valor : valor + 1;
 
     private static long Ahora()
         => Stopwatch.GetTimestamp() * 1_000_000L / Stopwatch.Frequency;

@@ -41,16 +41,27 @@ public sealed class H264Encoder : IVideoEncoder
 
     private readonly int Ancho, Alto, Fps, Bits;
 
+    /// <summary>
+    /// `width`/`height` es lo que se CODIFICA. `anchoEntrada`/`altoEntrada` es lo
+    /// que entrega la captura, y si son mayores el convertidor escala de paso --
+    /// es un blit, y escalar no le cuesta mas que copiar.
+    ///
+    /// Existe por el modo compuesto: dos monitores dan una imagen que el
+    /// codificador de una iGPU no siempre traga.
+    /// </summary>
     public H264Encoder(
         ID3D11Device device, int width, int height, int framesPerSecond, int bitrate,
-        Vortice.Luid adapterLuid, uint vendorId)
+        Vortice.Luid adapterLuid, uint vendorId, int anchoEntrada = 0, int altoEntrada = 0)
     {
+        if (anchoEntrada <= 0) anchoEntrada = width;
+        if (altoEntrada <= 0) altoEntrada = height;
+
         Ancho = width;
         Alto = height;
         Fps = framesPerSecond;
         Bits = bitrate;
 
-        _converter = new Nv12Converter(device, width, height);
+        _converter = new Nv12Converter(device, anchoEntrada, altoEntrada, width, height);
         _frameDurationHns = 10_000_000L / framesPerSecond;
 
         // El gestor DXGI es lo que permite entregar texturas al MFT sin copiarlas
@@ -675,7 +686,19 @@ public sealed class H264Encoder : IVideoEncoder
         entrada.Set(MediaTypeAttributeKeys.FrameSize, Pack((uint)width, (uint)height));
         entrada.Set(MediaTypeAttributeKeys.FrameRate, Pack((uint)fps, 1));
         entrada.Set(MediaTypeAttributeKeys.InterlaceMode, 2u);
-        transform.SetInputType(0, entrada, 0);
+
+        try
+        {
+            transform.SetInputType(0, entrada, 0);
+        }
+        catch (SharpGenException ex)
+        {
+            // El tipo de ENTRADA es el que rechaza las resoluciones que la GPU no
+            // sabe tragar. Distinguirlo del de salida importa: uno se arregla
+            // bajando la resolucion y el otro tocando perfil o bitrate.
+            throw new VideoEncoderUnavailableException(
+                $"El codificador no acepta NV12 de {width}x{height} como entrada: {ex.ResultCode}", ex);
+        }
 
         // Baja latencia por atributo, sin ICodecAPI. Si un codificador lo ignora,
         // se vera en la latencia captura->codificado y se documentara antes de
@@ -719,7 +742,16 @@ public sealed class H264Encoder : IVideoEncoder
         salida.Set(MediaTypeAttributeKeys.FrameSize, Pack((uint)width, (uint)height));
         salida.Set(MediaTypeAttributeKeys.FrameRate, Pack((uint)fps, 1));
         salida.Set(MediaTypeAttributeKeys.InterlaceMode, 2u);
-        transform.SetOutputType(0, salida, 0);
+        try
+        {
+            transform.SetOutputType(0, salida, 0);
+        }
+        catch (SharpGenException ex)
+        {
+            throw new VideoEncoderUnavailableException(
+                $"El codificador no acepta H.264 de {width}x{height} como salida " +
+                $"(perfil o bitrate fuera de rango): {ex.ResultCode}", ex);
+        }
     }
 
     private static ulong Pack(uint alto, uint bajo) => ((ulong)alto << 32) | bajo;
