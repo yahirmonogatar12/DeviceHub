@@ -16,10 +16,46 @@
             <Setter Property="Padding" Value="12,4" />
             <Setter Property="Margin" Value="0,0,8,0" />
         </Style>
+        <!-- Los colores van EXPLICITOS. Sin ellos, el desplegable hereda el
+             tema de Windows: en modo oscuro sale texto claro sobre el fondo
+             claro del popup y no se lee nada. -->
         <Style TargetType="ComboBox">
             <Setter Property="Focusable" Value="False" />
             <Setter Property="Width" Value="110" />
             <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="Background" Value="#16295E" />
+            <Setter Property="Foreground" Value="#E8EEFB" />
+            <Setter Property="BorderBrush" Value="#2B4488" />
+        </Style>
+
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Background" Value="#16295E" />
+            <Setter Property="Foreground" Value="#E8EEFB" />
+            <Setter Property="Padding" Value="8,4" />
+            <Style.Triggers>
+                <Trigger Property="IsHighlighted" Value="True">
+                    <Setter Property="Background" Value="#2B4488" />
+                    <Setter Property="Foreground" Value="#FFFFFF" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style TargetType="ListBoxItem">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="#C8D6EE" />
+            <Setter Property="Padding" Value="4,2" />
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="#2B4488" />
+                    <Setter Property="Foreground" Value="#FFFFFF" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- El menu de acciones, por lo mismo. -->
+        <Style TargetType="MenuItem">
+            <Setter Property="Background" Value="#16295E" />
+            <Setter Property="Foreground" Value="#E8EEFB" />
         </Style>
     </Window.Resources>
 

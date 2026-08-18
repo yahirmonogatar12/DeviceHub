@@ -728,8 +728,15 @@ public partial class RelayWindow : Window
 
     // ---------------------------------------------------------------- archivos
 
-    /// <summary>Una fila del panel. `Etiqueta` es lo que se ve.</summary>
-    private sealed record Entrada(string Nombre, bool Carpeta, ulong Tamano)
+    /// <summary>
+    /// Una fila del panel de archivos. `Etiqueta` es lo que se ve.
+    ///
+    /// PUBLICO, y no por gusto: el motor de binding de WPF llega a las
+    /// propiedades por reflexion y no puede leer las de un tipo no publico.
+    /// Siendo private no lanza nada -- pinta las filas VACIAS, que es como se
+    /// descubrio.
+    /// </summary>
+    public sealed record Entrada(string Nombre, bool Carpeta, ulong Tamano)
     {
         public string Etiqueta => Carpeta ? $"[{Nombre}]" : $"{Nombre}   {Legible(Tamano)}";
 
@@ -1160,9 +1167,14 @@ public partial class RelayWindow : Window
 
     // --------------------------------------------------------------- pantallas
 
-    /// <summary>Una entrada del selector. `Etiqueta` es lo que se ve y `Id` lo
-    /// que viaja; -1 es el escritorio virtual entero.</summary>
-    private sealed record Monitor(int Id, string Etiqueta);
+    /// <summary>
+    /// Una entrada del selector de pantalla. `Etiqueta` es lo que se ve y `Id` lo
+    /// que viaja; -1 es el escritorio virtual entero.
+    ///
+    /// Publico por lo mismo que <see cref="Entrada"/>: con un tipo private, WPF
+    /// deja el desplegable en blanco sin decir por que.
+    /// </summary>
+    public sealed record Monitor(int Id, string Etiqueta);
 
     /// <summary>Rellenar el ComboBox dispara SelectionChanged, que pediria al host
     /// la pantalla que el host acaba de decir que ya esta mostrando. Sin esta
