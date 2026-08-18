@@ -377,7 +377,12 @@ public static class RelaySession
             captura.Device, captura.Width, captura.Height, opciones.Fps, opciones.Bitrate,
             captura.AdapterLuid, captura.AdapterVendorId);
 
+        // La IDENTIDAD va en la misma linea que el MFT a proposito. Es la unica
+        // forma de saber, leyendo el log del agente, si esta sesion corrio como
+        // SYSTEM y con que codificador: son las dos cifras que hacen falta para
+        // cerrar la duda que dejo abierta el intento anterior de la Fase 19.
         opciones.Escribir(
+            $"Identidad {System.Security.Principal.WindowsIdentity.GetCurrent().Name}  " +
             $"Escritorio {escritorio.Name}  Adapter {captura.Adapter}  MFT {codificador.Capabilities.Name}  " +
             $"Hardware {(codificador.Capabilities.Hardware ? "TRUE" : "FALSE")}  " +
             $"Resolution {captura.Width}x{captura.Height}");

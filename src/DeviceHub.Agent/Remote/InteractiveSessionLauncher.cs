@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using DeviceHub.Remote.Contracts;
+using Microsoft.Extensions.Configuration;
 
 namespace DeviceHub.Agent.Remote;
 
@@ -25,8 +26,26 @@ namespace DeviceHub.Agent.Remote;
 /// Todo con DllImport y marshalling explicito, sin AllowUnsafeBlocks, igual que
 /// Monitoring\SystemSampler.cs.
 /// </summary>
-public sealed class InteractiveSessionLauncher(ILogger<InteractiveSessionLauncher> logger) : IDisposable
+public sealed class InteractiveSessionLauncher(
+    ILogger<InteractiveSessionLauncher> logger, IConfiguration configuracion) : IDisposable
 {
+    /// <summary>
+    /// Fase 19. Con esto puesto, RemoteHost corre como SYSTEM dentro de la sesion
+    /// interactiva y puede capturar el ESCRITORIO SEGURO: la pantalla de bloqueo,
+    /// el login y los dialogos de UAC. Sin ello se queda en el escritorio normal
+    /// del usuario.
+    ///
+    /// Es un interruptor y no una constante porque un intento anterior se
+    /// revirtio creyendo que SYSTEM rompia la descodificacion del video, y ese
+    /// diagnostico nunca se confirmo -- la biseccion comparaba dos PCs sin
+    /// querer. Con el interruptor, comprobarlo es cambiar una linea de
+    /// appsettings.json y reiniciar el servicio, en la MISMA maquina y sin
+    /// reinstalar nada. Sin el habria que volver a versiones viejas, que es
+    /// exactamente como se llego a la conclusion equivocada.
+    /// </summary>
+    private readonly bool _escritorioSeguro =
+        configuracion.GetValue("DeviceHub:SecureDesktop", true);
+
     private readonly Lock _puerta = new();
     private Sesion? _actual;
 
@@ -263,25 +282,87 @@ public sealed class InteractiveSessionLauncher(ILogger<InteractiveSessionLaunche
         if (sesion == 0xFFFFFFFF)
             throw new InvalidOperationException("No hay sesion de consola activa en esta PC");
 
-        // EL TOKEN DEL USUARIO LOGUEADO.
-        //
-        // La Fase 19 lo cambio por SYSTEM en la sesion interactiva para poder
-        // seguir el escritorio activo y capturar winsta0\Winlogon -- la pantalla
-        // de bloqueo, el login y los dialogos de UAC.
-        //
-        // REVERTIDO, y medido: con el host como SYSTEM el visor deja de poder
-        // descodificar. Todas las sesiones anteriores a ese cambio se ven; todas
-        // las posteriores mueren con "ningun decodificador H.264 acepto la
-        // configuracion". Bisecado por el usuario instalando el agente 1.3.0.
-        //
-        // La causa concreta esta sin identificar. La sospecha razonable es que un
-        // proceso SYSTEM no obtiene el mismo codificador de Media Foundation y
-        // cae a uno cuyo flujo el decodificador del visor rechaza -- pero eso hay
-        // que MEDIRLO, no suponerlo, y para medirlo hace falta que --encode-test
-        // corra bajo SYSTEM en una PC de planta.
-        //
-        // Hasta entonces: control remoto que funciona sin pantalla de bloqueo,
-        // antes que pantalla de bloqueo sin control remoto.
+        return _escritorioSeguro ? TokenDeSistema(sesion) : TokenDelUsuario(sesion);
+    }
+
+    /// <summary>
+    /// El token del propio agente -- SYSTEM -- movido a la sesion interactiva.
+    ///
+    /// POR QUE HACE FALTA SYSTEM Y NO BASTA EL USUARIO. El escritorio seguro
+    /// (winsta0\Winlogon) es donde Windows pinta la pantalla de bloqueo, el login
+    /// y los dialogos de UAC. Un usuario normal no puede ni abrirlo:
+    /// OpenInputDesktop devuelve acceso denegado, y con el la duplicacion DXGI
+    /// tambien. No hay forma de sortearlo desde fuera de SYSTEM, y esa es la
+    /// razon de que esta fase cueste privilegio.
+    ///
+    /// El coste, que el usuario acepto explicitamente: quien entre en una sesion
+    /// ve y escribe en el login de una PC de planta antes de que nadie inicie
+    /// sesion, y puede manejar los dialogos de UAC.
+    ///
+    /// SetTokenInformation con TokenSessionId es lo que mueve el token de la
+    /// Session 0 a la del usuario. Exige SeTcbPrivilege, que un servicio
+    /// LocalSystem ya tiene habilitado -- por eso esto funciona desde el agente y
+    /// no funcionaria desde un proceso elevado cualquiera.
+    /// </summary>
+    private (SafeTokenHandle? Token, SecurityIdentifier? Usuario) TokenDeSistema(uint sesion)
+    {
+        if (!OpenProcessToken(GetCurrentProcess(), MaximumAllowed, out var propio))
+        {
+            throw new InvalidOperationException(
+                $"OpenProcessToken fallo: {Marshal.GetLastWin32Error()}");
+        }
+
+        using (propio)
+        {
+            // CreateProcessAsUser exige un token PRIMARIO, y ademas no se puede
+            // manosear el del propio proceso: se duplica y se toca la copia.
+            if (!DuplicateTokenEx(propio, MaximumAllowed, IntPtr.Zero,
+                    SecurityImpersonation, TokenPrimary, out var primario))
+            {
+                throw new InvalidOperationException(
+                    $"DuplicateTokenEx fallo: {Marshal.GetLastWin32Error()}");
+            }
+
+            var destino = Marshal.AllocHGlobal(sizeof(uint));
+
+            try
+            {
+                Marshal.WriteInt32(destino, (int)sesion);
+
+                if (!SetTokenInformation(primario, TokenSessionId, destino, sizeof(uint)))
+                {
+                    primario.Dispose();
+
+                    throw new InvalidOperationException(
+                        $"No se pudo mover el token a la sesion {sesion} " +
+                        $"(SetTokenInformation: {Marshal.GetLastWin32Error()}). " +
+                        "Hace falta SeTcbPrivilege, que solo tiene un servicio LocalSystem.");
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(destino);
+            }
+
+            using var identidad = new WindowsIdentity(primario.DangerousGetHandle());
+
+            logger.LogInformation(
+                "RemoteHost se lanzara como {Identidad} en la sesion {Sesion}: escritorio seguro ACTIVO",
+                identidad.Name, sesion);
+
+            return (primario, identidad.User);
+        }
+    }
+
+    /// <summary>
+    /// El token del usuario conectado. Es lo que corria antes de la Fase 19 y
+    /// sigue disponible con DeviceHub:SecureDesktop en false.
+    ///
+    /// Con este NO se ve la pantalla de bloqueo: sin nadie logueado,
+    /// WTSQueryUserToken no devuelve nada y la sesion falla con motivo.
+    /// </summary>
+    private (SafeTokenHandle? Token, SecurityIdentifier? Usuario) TokenDelUsuario(uint sesion)
+    {
         if (!WTSQueryUserToken(sesion, out var bruto))
         {
             throw new InvalidOperationException(
@@ -300,6 +381,11 @@ public sealed class InteractiveSessionLauncher(ILogger<InteractiveSessionLaunche
             }
 
             using var identidad = new WindowsIdentity(primario.DangerousGetHandle());
+
+            logger.LogInformation(
+                "RemoteHost se lanzara como {Identidad}: escritorio seguro DESACTIVADO",
+                identidad.Name);
+
             return (primario, identidad.User);
         }
     }
@@ -361,6 +447,22 @@ public sealed class InteractiveSessionLauncher(ILogger<InteractiveSessionLaunche
     // ------------------------------------------------------------------ interop
 
     private const uint MaximumAllowed = 0x02000000;
+
+    /// <summary>TOKEN_INFORMATION_CLASS.TokenSessionId. El numero magico que mueve
+    /// un token de la Session 0 a la sesion interactiva.</summary>
+    private const int TokenSessionId = 12;
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool OpenProcessToken(IntPtr proceso, uint acceso, out SafeTokenHandle token);
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetTokenInformation(
+        SafeTokenHandle token, int clase, IntPtr informacion, int tamano);
     private const int SecurityImpersonation = 2;
     private const int TokenPrimary = 1;
     private const uint CreateUnicodeEnvironment = 0x00000400;
