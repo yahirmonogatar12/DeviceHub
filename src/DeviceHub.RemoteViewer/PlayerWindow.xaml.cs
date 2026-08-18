@@ -140,10 +140,17 @@ public partial class PlayerWindow : Window
                         {
                             // El presentador se crea con el tamano REAL, que sale
                             // del SPS y solo se conoce con el primer frame.
-                            presentador ??= new VideoPresenter(
-                                device, hwnd, decoder.Width, decoder.Height,
-                                decoder.Aperture.X, decoder.Aperture.Y,
-                                decoder.Aperture.Width, decoder.Aperture.Height);
+                            // Un solo flujo: la pantalla 0 ocupa el lienzo entero.
+                            if (presentador is null)
+                            {
+                                presentador = new VideoPresenter(
+                                    device, hwnd, decoder.Aperture.Width, decoder.Aperture.Height);
+
+                                presentador.Colocar(
+                                    0, decoder.Width, decoder.Height,
+                                    decoder.Aperture.X, decoder.Aperture.Y,
+                                    decoder.Aperture.Width, decoder.Aperture.Height, 0, 0);
+                            }
 
                             // Ritmo por reloj de pared y no por Sleep acumulado:
                             // sumar esperas arrastra el error de cada una y el
@@ -156,7 +163,7 @@ public partial class PlayerWindow : Window
                             else if (espera < TimeSpan.FromMicroseconds(-intervaloUs))
                                 tarde++;
 
-                            presentador.Present(frame.Texture, frame.Subresource);
+                            presentador.Present(0, frame.Texture, frame.Subresource);
                             presentados++;
                         }
                     }

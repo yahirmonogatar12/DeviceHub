@@ -383,6 +383,27 @@ message VideoConfig {
   uint32 visible_y = 9;
   uint32 visible_width = 10;
   uint32 visible_height = 11;
+
+  // A QUE PANTALLA pertenece este flujo, y donde va colocada.
+  //
+  // Con varias pantallas a la vez viaja un flujo POR MONITOR y los coloca el
+  // visor, en vez de componerlos en el host y mandar una sola imagen enorme. Es
+  // lo que hace RustDesk (src/server/display_service.rs) y la razon es concreta:
+  // componiendo, el codificador recibe la suma de los anchos -- 3840x1080 con
+  // dos monitores -- y una iGPU lo rechaza. Por separado nunca ve mas de una
+  // pantalla.
+  //
+  // layout_x/y son la esquina dentro del escritorio virtual, ya trasladada a
+  // coordenadas positivas: el monitor de la izquierda tiene x negativa en
+  // Windows y aqui empieza en 0.
+  uint32 display_id = 12;
+  uint32 layout_x = 13;
+  uint32 layout_y = 14;
+
+  // Tamano del lienzo completo, para que el visor sepa cuanto sitio reservar
+  // antes de que hayan llegado todos los flujos.
+  uint32 canvas_width = 15;
+  uint32 canvas_height = 16;
 }
 
 // Un trozo de un frame codificado.
@@ -417,6 +438,11 @@ message VideoChunk {
 
   // Como maximo 64 KiB. Se comprueba en el receptor ANTES de reservar nada.
   bytes data = 7;
+
+  // De que pantalla es. Los frame_id siguen siendo unicos y crecientes en toda
+  // la sesion aunque haya varios flujos: asi el relay los agrupa y los descarta
+  // como siempre, sin saber nada de pantallas.
+  uint32 display_id = 8;
 }
 
 // El viewer perdio sincronia. Se responde con VideoConfig Y DESPUES el IDR, no

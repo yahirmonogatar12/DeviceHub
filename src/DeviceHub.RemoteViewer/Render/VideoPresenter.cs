@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -13,12 +14,20 @@ namespace DeviceHub.RemoteViewer.Render;
 ///
 /// La conversion la hace ID3D11VideoProcessor, no un shader propio. Es la misma
 /// pieza que el host usa en sentido contrario para BGRA -> NV12, viene con el
-/// driver y ya sabe de rangos de color: escribir un shader HLSL para esto seria
-/// anadir compilacion en tiempo de ejecucion y una tabla de coeficientes que
-/// alguien tendria que mantener.
+/// driver y ya sabe de rangos de color.
 ///
-/// Todo lo de esta clase ocurre en el hilo de reproduccion. El unico contacto
-/// con el hilo de la interfaz es el HWND que recibe al construirse.
+/// PINTA VARIAS PANTALLAS EN UN LIENZO. Desde que el host manda un flujo por
+/// monitor, aqui llegan N imagenes independientes que hay que colocar. Cada una
+/// se pinta en su rectangulo de una textura propia que PERSISTE, y esa textura
+/// se copia al buffer trasero antes de presentar.
+///
+/// El lienzo intermedio no es un lujo: con SwapEffect.FlipDiscard el contenido
+/// del buffer trasero queda indefinido despues de cada Present, asi que pintar
+/// el monitor 1 y presentar borraria lo que el monitor 2 pinto en la vuelta
+/// anterior. Con una sola pantalla cuesta una copia de mas y ahorra una rama.
+///
+/// Todo ocurre en el hilo de reproduccion. El unico contacto con el hilo de la
+/// interfaz es el HWND que recibe al construirse.
 /// </summary>
 public sealed class VideoPresenter : IDisposable
 {
@@ -26,8 +35,24 @@ public sealed class VideoPresenter : IDisposable
     private readonly IDXGISwapChain1 _swapChain;
     private readonly ID3D11VideoDevice _videoDevice;
     private readonly ID3D11VideoContext _videoContext;
-    private ID3D11VideoProcessorEnumerator _enumerator;
-    private ID3D11VideoProcessor _processor;
+
+    /// <summary>Donde se acumula lo que pinta cada pantalla.</summary>
+    private ID3D11Texture2D _lienzo;
+
+    /// <summary>Un procesador de video POR PANTALLA: cada uno se crea con el
+    /// tamano de SU flujo, y ese tamano forma parte de su configuracion.</summary>
+    private readonly Dictionary<uint, Pantalla> _pantallas = [];
+
+    private sealed record Pantalla(
+        ID3D11VideoProcessorEnumerator Enumerador, ID3D11VideoProcessor Procesador,
+        int Ancho, int Alto, RawRect Destino) : IDisposable
+    {
+        public void Dispose()
+        {
+            Procesador.Dispose();
+            Enumerador.Dispose();
+        }
+    }
 
     /// <summary>
     /// Crea el dispositivo que comparten decodificador y presentador.
@@ -50,35 +75,25 @@ public sealed class VideoPresenter : IDisposable
         return device;
     }
 
-    /// <summary>
-    /// El tamano llega del primer frame descodificado, no del que creiamos: lo
-    /// dicta el SPS del flujo. `codificado` es la textura completa y `visible` el
-    /// trozo que hay que mostrar, que no coinciden cuando el alto no es multiplo
-    /// de 16.
-    /// </summary>
-    public VideoPresenter(
-        ID3D11Device device, IntPtr hwnd, int anchoCodificado, int altoCodificado,
-        int visibleX, int visibleY, int width, int height)
+    public VideoPresenter(ID3D11Device device, IntPtr hwnd, int ancho, int alto)
     {
-        Width = width;
-        Height = height;
+        Width = ancho;
+        Height = alto;
         _device = device;
 
         using var dxgiDevice = _device.QueryInterface<IDXGIDevice>();
         using var adapter = dxgiDevice.GetAdapter();
         using var factory = adapter.GetParent<IDXGIFactory2>();
 
-        // El swapchain se crea del tamano del VIDEO y nunca se redimensiona:
-        // Scaling.Stretch deja que DXGI escale al tamano de la ventana. Asi no
-        // hay que rehacer nada al cambiar el tamano, que es la parte que suele
-        // dejar el visor en negro.
-        //
-        // ponytail: estira sin respetar la relacion de aspecto. Si molesta, se
-        // arregla con VideoProcessorSetStreamDestRect, no redimensionando.
+        // El swapchain se crea del tamano del LIENZO y no se recrea nunca:
+        // Scaling.Stretch deja que DXGI escale al tamano de la ventana, y
+        // ResizeBuffers se encarga de los cambios de resolucion. Un swapchain
+        // NUEVO sobre el mismo HWND no lo compone el DWM hasta que llega un
+        // WM_SIZE, y esa fue la imagen congelada al cambiar de monitor.
         _swapChain = factory.CreateSwapChainForHwnd(_device, hwnd, new SwapChainDescription1
         {
-            Width = (uint)width,
-            Height = (uint)height,
+            Width = (uint)ancho,
+            Height = (uint)alto,
             Format = Format.B8G8R8A8_UNorm,
             BufferCount = 2,
             BufferUsage = Usage.RenderTargetOutput,
@@ -93,120 +108,143 @@ public sealed class VideoPresenter : IDisposable
 
         _videoDevice = _device.QueryInterface<ID3D11VideoDevice>();
         _videoContext = _device.ImmediateContext.QueryInterface<ID3D11VideoContext>();
-
-        _enumerator = _videoDevice.CreateVideoProcessorEnumerator(new VideoProcessorContentDescription
-        {
-            InputFrameFormat = VideoFrameFormat.Progressive,
-            InputWidth = (uint)anchoCodificado,
-            InputHeight = (uint)altoCodificado,
-            OutputWidth = (uint)width,
-            OutputHeight = (uint)height,
-            Usage = VideoUsage.PlaybackNormal
-        });
-
-        _processor = _videoDevice.CreateVideoProcessor(_enumerator, 0);
-
-        Recortar(visibleX, visibleY, width, height, anchoCodificado, altoCodificado);
-
+        _lienzo = CrearLienzo(ancho, alto);
     }
 
     public int Width { get; private set; }
     public int Height { get; private set; }
 
-    /// <summary>
-    /// Cambia de resolucion SIN tirar el swapchain.
-    ///
-    /// Es la diferencia entre que se vea y que no. Un swapchain NUEVO sobre el
-    /// mismo HWND no lo compone el DWM hasta que la ventana recibe un WM_SIZE, y
-    /// al cambiar de monitor el tamano de la ventana no tiene por que cambiar:
-    /// resultado, imagen congelada hasta que alguien la redimensiona a mano.
-    ///
-    /// ResizeBuffers conserva el swapchain y con el su asociacion con la
-    /// ventana, asi que lo unico que se rehace es el procesador de video -- que
-    /// SI depende del tamano de entrada.
-    /// </summary>
-    public void Reconfigurar(
-        int anchoCodificado, int altoCodificado, int visibleX, int visibleY, int width, int height)
+    private ID3D11Texture2D CrearLienzo(int ancho, int alto)
+        => _device.CreateTexture2D(new Texture2DDescription
+        {
+            Width = (uint)ancho,
+            Height = (uint)alto,
+            MipLevels = 1,
+            ArraySize = 1,
+            Format = Format.B8G8R8A8_UNorm,
+            SampleDescription = new SampleDescription(1, 0),
+            Usage = ResourceUsage.Default,
+            BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource
+        });
+
+    /// <summary>Cambia el tamano del lienzo SIN tirar el swapchain.</summary>
+    public void Redimensionar(int ancho, int alto)
     {
-        _processor.Dispose();
-        _enumerator.Dispose();
+        if (ancho == Width && alto == Height)
+            return;
 
-        Width = width;
-        Height = height;
+        foreach (var pantalla in _pantallas.Values)
+            pantalla.Dispose();
 
-        _swapChain.ResizeBuffers(2, (uint)width, (uint)height, Format.B8G8R8A8_UNorm, SwapChainFlags.None);
+        _pantallas.Clear();
 
-        _enumerator = _videoDevice.CreateVideoProcessorEnumerator(new VideoProcessorContentDescription
+        Width = ancho;
+        Height = alto;
+
+        _lienzo.Dispose();
+        _lienzo = CrearLienzo(ancho, alto);
+
+        _swapChain.ResizeBuffers(2, (uint)ancho, (uint)alto, Format.B8G8R8A8_UNorm, SwapChainFlags.None);
+    }
+
+    /// <summary>
+    /// Declara donde va una pantalla. `origen` es el trozo visible de su textura
+    /// codificada -- H.264 codifica en macrobloques de 16, asi que 1080 de alto
+    /// viaja como 1088 y sin recortar se pintan 8 filas de relleno -- y `destino`
+    /// su hueco dentro del lienzo.
+    /// </summary>
+    public void Colocar(
+        uint display, int anchoCodificado, int altoCodificado,
+        int visibleX, int visibleY, int visibleAncho, int visibleAlto,
+        int destinoX, int destinoY)
+    {
+        if (_pantallas.TryGetValue(display, out var previa))
+        {
+            if (previa.Ancho == anchoCodificado && previa.Alto == altoCodificado
+                && previa.Destino.Left == destinoX && previa.Destino.Top == destinoY)
+            {
+                return;
+            }
+
+            previa.Dispose();
+            _pantallas.Remove(display);
+        }
+
+        var enumerador = _videoDevice.CreateVideoProcessorEnumerator(new VideoProcessorContentDescription
         {
             InputFrameFormat = VideoFrameFormat.Progressive,
             InputWidth = (uint)anchoCodificado,
             InputHeight = (uint)altoCodificado,
-            OutputWidth = (uint)width,
-            OutputHeight = (uint)height,
+            OutputWidth = (uint)Width,
+            OutputHeight = (uint)Height,
             Usage = VideoUsage.PlaybackNormal
         });
 
-        _processor = _videoDevice.CreateVideoProcessor(_enumerator, 0);
+        var procesador = _videoDevice.CreateVideoProcessor(enumerador, 0);
 
-        Recortar(visibleX, visibleY, width, height, anchoCodificado, altoCodificado);
-    }
-
-    /// <summary>
-    /// Recorte al trozo visible. H.264 codifica en macrobloques de 16, asi que
-    /// 1080 de alto viaja como 1088 y las 8 filas de mas son relleno: sin este
-    /// recorte se pintan, y se ven.
-    /// </summary>
-    private void Recortar(int visibleX, int visibleY, int width, int height, int ancho, int alto)
-    {
-        if (visibleX != 0 || visibleY != 0 || width != ancho || height != alto)
+        if (visibleX != 0 || visibleY != 0
+            || visibleAncho != anchoCodificado || visibleAlto != altoCodificado)
         {
             _videoContext.VideoProcessorSetStreamSourceRect(
-                _processor, 0, true, new RawRect(visibleX, visibleY, visibleX + width, visibleY + height));
+                procesador, 0, true,
+                new RawRect(visibleX, visibleY, visibleX + visibleAncho, visibleY + visibleAlto));
         }
+
+        var destino = new RawRect(
+            destinoX, destinoY, destinoX + visibleAncho, destinoY + visibleAlto);
+
+        // El hueco de ESTA pantalla dentro del lienzo. Sin esto, la segunda
+        // pantalla se pintaria encima de la primera en la esquina.
+        _videoContext.VideoProcessorSetStreamDestRect(procesador, 0, true, destino);
 
         // Justo al reves que en el host: entra NV12 de rango limitado y sale RGB
         // de rango completo. Sin declararlo, los negros salen grises.
-        _videoContext.VideoProcessorSetStreamFrameFormat(_processor, 0, VideoFrameFormat.Progressive);
-        _videoContext.VideoProcessorSetStreamColorSpace(_processor, 0, new VideoProcessorColorSpace { Nominal_Range = 1 });
-        _videoContext.VideoProcessorSetOutputColorSpace(_processor, new VideoProcessorColorSpace { RGB_Range = 0 });
+        _videoContext.VideoProcessorSetStreamFrameFormat(procesador, 0, VideoFrameFormat.Progressive);
+        _videoContext.VideoProcessorSetStreamColorSpace(procesador, 0, new VideoProcessorColorSpace { Nominal_Range = 1 });
+        _videoContext.VideoProcessorSetOutputColorSpace(procesador, new VideoProcessorColorSpace { RGB_Range = 0 });
+
+        _pantallas[display] = new Pantalla(
+            enumerador, procesador, anchoCodificado, altoCodificado, destino);
     }
 
     /// <summary>
-    /// Pinta un frame NV12 y lo presenta. `subresource` es la rebanada del array
-    /// de texturas del decodificador; sin el se pinta siempre la misma imagen.
+    /// Pinta un frame NV12 de una pantalla en su hueco del lienzo y presenta.
     ///
-    /// `guardarEn` pide una captura de ESTE frame. Se atiende aqui y no desde
-    /// fuera porque el unico momento en que la imagen existe ya convertida a RGB
-    /// es entre el Blt y el Present: con SwapEffect.FlipDiscard el contenido del
-    /// buffer trasero queda indefinido en cuanto se presenta.
+    /// `guardarEn` pide una captura. Se atiende entre la copia y el Present:
+    /// con FlipDiscard el buffer trasero queda indefinido en cuanto se presenta.
     /// </summary>
-    public void Present(ID3D11Texture2D nv12, uint subresource, string? guardarEn = null)
+    public void Present(uint display, ID3D11Texture2D nv12, uint subresource, string? guardarEn = null)
     {
+        if (!_pantallas.TryGetValue(display, out var pantalla))
+            return;   // todavia no se sabe donde va
+
+        using (var entrada = _videoDevice.CreateVideoProcessorInputView(
+            nv12, pantalla.Enumerador, new VideoProcessorInputViewDescription
+            {
+                ViewDimension = VideoProcessorInputViewDimension.Texture2D,
+                Texture2D = new Texture2DVideoProcessorInputView { ArraySlice = subresource }
+            }))
+        using (var salidaLienzo = _videoDevice.CreateVideoProcessorOutputView(
+            _lienzo, pantalla.Enumerador, new VideoProcessorOutputViewDescription
+            {
+                ViewDimension = VideoProcessorOutputViewDimension.Texture2D
+            }))
+        {
+            _videoContext.VideoProcessorBlt(pantalla.Procesador, salidaLienzo, 0, [new VideoProcessorStream
+            {
+                Enable = true,
+                PastFrames = 0,
+                FutureFrames = 0,
+                InputSurface = entrada
+            }]);
+        }
+
         // En el modelo flip hay que volver a pedir el buffer despues de cada
         // Present: los buffers rotan y guardarse el primero pinta sobre uno que
         // ya no se ve.
         using var trasera = _swapChain.GetBuffer<ID3D11Texture2D>(0);
 
-        using var salida = _videoDevice.CreateVideoProcessorOutputView(
-            trasera, _enumerator, new VideoProcessorOutputViewDescription
-            {
-                ViewDimension = VideoProcessorOutputViewDimension.Texture2D
-            });
-
-        using var entrada = _videoDevice.CreateVideoProcessorInputView(
-            nv12, _enumerator, new VideoProcessorInputViewDescription
-            {
-                ViewDimension = VideoProcessorInputViewDimension.Texture2D,
-                Texture2D = new Texture2DVideoProcessorInputView { ArraySlice = subresource }
-            });
-
-        _videoContext.VideoProcessorBlt(_processor, salida, 0, [new VideoProcessorStream
-        {
-            Enable = true,
-            PastFrames = 0,
-            FutureFrames = 0,
-            InputSurface = entrada
-        }]);
+        _device.ImmediateContext.CopyResource(trasera, _lienzo);
 
         if (guardarEn is not null)
             Guardar(trasera, guardarEn);
@@ -267,9 +305,13 @@ public sealed class VideoPresenter : IDisposable
 
     public void Dispose()
     {
+        foreach (var pantalla in _pantallas.Values)
+            pantalla.Dispose();
+
+        _pantallas.Clear();
+
         _lectura?.Dispose();
-        _processor.Dispose();
-        _enumerator.Dispose();
+        _lienzo.Dispose();
         _videoContext.Dispose();
         _videoDevice.Dispose();
         _swapChain.Dispose();

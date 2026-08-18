@@ -267,9 +267,16 @@ public partial class RelayWindow : Window
 
         using var device = VideoPresenter.CreateDevice();
 
-        H264Decoder? decoder = null;
+        // UN DECODIFICADOR Y UNA CONFIG POR PANTALLA.
+        //
+        // Desde que el host manda un flujo por monitor aqui llegan N flujos
+        // independientes, cada uno con su SPS. Compartir decodificador haria que
+        // los frames de una pantalla se descodificaran con los parametros de la
+        // otra, y eso no da error: da imagen corrupta.
+        var decodificadores = new Dictionary<uint, H264Decoder>();
+        var configs = new Dictionary<uint, VideoConfig>();
+
         VideoPresenter? presentador = null;
-        VideoConfig? config = null;
 
         var montador = new VideoFrameAssembler();
         var proceso = Process.GetCurrentProcess();
@@ -291,22 +298,31 @@ public partial class RelayWindow : Window
                 switch (paquete.PayloadCase)
                 {
                     case RemotePacket.PayloadOneofCase.VideoConfig:
+                    {
+                        var nueva = paquete.VideoConfig;
+                        var pantalla = nueva.DisplayId;
+
                         // El relay REPITE la configuracion vigente cada vez que
                         // se recupera de una perdida, para que un viewer que se
                         // la hubiera perdido pueda descodificar el IDR que viene
                         // detras. Repetida no es nueva: rehacer el decodificador
-                        // aqui costaba 45 ms, tiraba el presentador y llenaba la
-                        // cola del relay, que provocaba otro descarte y otra
-                        // repeticion. Un bucle que se alimentaba solo.
-                        if (config is not null && paquete.VideoConfig.ConfigVersion == config.ConfigVersion)
+                        // aqui costaba 45 ms y llenaba la cola del relay, que
+                        // provocaba otro descarte y otra repeticion. Un bucle que
+                        // se alimentaba solo.
+                        if (configs.TryGetValue(pantalla, out var previa)
+                            && previa.ConfigVersion == nueva.ConfigVersion)
+                        {
                             break;
+                        }
 
                         cambiosConfig++;
-                        config = paquete.VideoConfig;
+                        configs[pantalla] = nueva;
 
                         // El cambio se completo: se limpia el "Cambiando a..."
                         // que si no se queda pegado aunque ya no sea verdad.
-                        Nota($"{config.Width}x{config.Height}");
+                        Nota(configs.Count > 1
+                            ? $"{configs.Count} pantallas en {nueva.CanvasWidth}x{nueva.CanvasHeight}"
+                            : $"{nueva.Width}x{nueva.Height}");
 
                         // EL REENSAMBLADOR SE TIRA CON EL FLUJO VIEJO.
                         //
@@ -318,10 +334,12 @@ public partial class RelayWindow : Window
                         // no hay nada del anterior que conservar.
                         montador = new VideoFrameAssembler();
 
-                        // La resolucion remota puede cambiar a media sesion, asi
-                        // que el tamano del lienzo se recalcula aqui y no una vez
-                        // al arrancar.
-                        var (ancho, alto) = ((int)config.Width, (int)config.Height);
+                        // El LIENZO, que con varias pantallas no es el tamano de
+                        // ninguna. El host lo manda para que aqui se reserve el
+                        // sitio antes de que hayan llegado todos los flujos.
+                        var ancho = (int)(nueva.CanvasWidth > 0 ? nueva.CanvasWidth : nueva.Width);
+                        var alto = (int)(nueva.CanvasHeight > 0 ? nueva.CanvasHeight : nueva.Height);
+
                         _ = Dispatcher.BeginInvoke(() =>
                         {
                             _videoAncho = ancho;
@@ -335,42 +353,45 @@ public partial class RelayWindow : Window
                         CerrarGrabacion();
 
                         // Version nueva SI es flujo nuevo: el decodificador viejo
-                        // lleva el SPS anterior dentro.
-                        decoder?.Dispose();
+                        // lleva el SPS anterior dentro. Solo el de ESA pantalla.
+                        if (decodificadores.Remove(pantalla, out var viejo))
+                            viejo.Dispose();
 
                         // EL PRESENTADOR NO SE TIRA NUNCA, ni aunque cambie la
-                        // resolucion.
-                        //
-                        // Un swapchain NUEVO sobre el mismo HWND no lo compone el
-                        // DWM hasta que la ventana recibe un WM_SIZE. Al bloquear
-                        // la PC eso dejaba la pantalla anterior congelada; al
-                        // cambiar de monitor pasa lo mismo y encima el tamano de
-                        // la ventana no tiene por que cambiar, asi que el WM_SIZE
-                        // no llega nunca y la imagen se queda clavada para
-                        // siempre.
-                        //
-                        // Se reconfigura mas abajo, cuando ya se conoce la
-                        // apertura real del flujo nuevo.
+                        // resolucion. Un swapchain NUEVO sobre el mismo HWND no
+                        // lo compone el DWM hasta que llega un WM_SIZE, y al
+                        // cambiar de monitor la ventana no cambia de tamano: el
+                        // WM_SIZE no llega y la imagen se queda clavada.
+                        presentador ??= new VideoPresenter(device, hwnd, ancho, alto);
+                        presentador.Redimensionar(ancho, alto);
 
-                        decoder = new H264Decoder(device, (int)config.Width, (int)config.Height);
+                        var nuevoDecoder = new H264Decoder(device, (int)nueva.Width, (int)nueva.Height);
+                        decodificadores[pantalla] = nuevoDecoder;
 
-                        if (config.ParameterSets.Length > 0)
+                        if (nueva.ParameterSets.Length > 0)
                         {
-                            var parametros = config.ParameterSets.ToByteArray();
+                            var parametros = nueva.ParameterSets.ToByteArray();
 
-                            foreach (var frame in decoder.Decode(parametros, 0, parametros.Length, 0))
+                            foreach (var frame in nuevoDecoder.Decode(parametros, 0, parametros.Length, 0))
                                 frame.Dispose();
                         }
 
                         break;
+                    }
 
                     case RemotePacket.PayloadOneofCase.VideoChunk:
+                    {
                         chunks++;
 
-                        if (decoder is null)
-                            break;   // llego video antes que su configuracion
+                        var pantalla = paquete.VideoChunk.DisplayId;
 
-                        if (paquete.VideoChunk.ConfigVersion != config?.ConfigVersion)
+                        if (!decodificadores.TryGetValue(pantalla, out var decoder)
+                            || !configs.TryGetValue(pantalla, out var config))
+                        {
+                            break;   // llego video antes que su configuracion
+                        }
+
+                        if (paquete.VideoChunk.ConfigVersion != config.ConfigVersion)
                             break;
 
                         if (!montador.TryAdd(paquete.VideoChunk, out var completo))
@@ -393,33 +414,23 @@ public partial class RelayWindow : Window
                             {
                                 decodificados++;
 
-                                if (presentador is null)
-                                {
-                                    presentador = new VideoPresenter(
-                                        device, hwnd, decoder.Width, decoder.Height,
-                                        decoder.Aperture.X, decoder.Aperture.Y,
-                                        decoder.Aperture.Width, decoder.Aperture.Height);
-                                }
-                                else if (presentador.Width != decoder.Aperture.Width
-                                         || presentador.Height != decoder.Aperture.Height)
-                                {
-                                    // Cambio de monitor o de resolucion. Se
-                                    // redimensionan los buffers y se rehace el
-                                    // procesador de video, pero el swapchain -- y
-                                    // con el su vinculo con la ventana -- sigue
-                                    // siendo el mismo.
-                                    presentador.Reconfigurar(
-                                        decoder.Width, decoder.Height,
-                                        decoder.Aperture.X, decoder.Aperture.Y,
-                                        decoder.Aperture.Width, decoder.Aperture.Height);
-                                }
+                                // Donde va ESTA pantalla dentro del lienzo. Se
+                                // declara aqui y no al llegar la config porque la
+                                // apertura real -- el trozo visible, sin las filas
+                                // de relleno de los macrobloques -- solo se conoce
+                                // despues de descodificar el primer frame.
+                                presentador?.Colocar(
+                                    pantalla, decoder.Width, decoder.Height,
+                                    decoder.Aperture.X, decoder.Aperture.Y,
+                                    decoder.Aperture.Width, decoder.Aperture.Height,
+                                    (int)config.LayoutX, (int)config.LayoutY);
 
                                 // La captura la pide la interfaz y la atiende el
                                 // presentador: el frame solo existe convertido a
                                 // RGB dentro de Present.
                                 var captura = Interlocked.Exchange(ref _captura, null);
 
-                                presentador.Present(imagen.Texture, imagen.Subresource, captura);
+                                presentador?.Present(pantalla, imagen.Texture, imagen.Subresource, captura);
                                 pintados++;
 
                                 if (captura is not null)
@@ -428,6 +439,7 @@ public partial class RelayWindow : Window
                         }
 
                         break;
+                    }
 
                     case RemotePacket.PayloadOneofCase.HelloAccepted:
                         // Token NUEVO: el anterior acaba de dejar de valer en el
@@ -525,7 +537,7 @@ public partial class RelayWindow : Window
                     var segundos = Math.Max(reloj.Elapsed.TotalSeconds, 0.001);
 
                     Mostrar(
-                        $"sesion {_sesion}   {(config is null ? "sin config" : $"{config.Width}x{config.Height} v{config.ConfigVersion}")}   " +
+                        $"sesion {_sesion}   {Resumen(configs)}   " +
                         $"RTT {(_rttUs < 0 ? "-" : $"{_rttUs / 1000.0:0.0} ms")}\n" +
                         $"chunks {chunks}   frames {reconstruidos}   decodificados {decodificados}   pintados {pintados}   " +
                         $"render {pintados / segundos:0.00} FPS   " +
@@ -563,7 +575,9 @@ public partial class RelayWindow : Window
         {
             CerrarGrabacion();
             presentador?.Dispose();
-            decoder?.Dispose();
+
+            foreach (var abierto in decodificadores.Values)
+                abierto.Dispose();
 
             await intento.CancelAsync();
             try { await latidos; } catch (Exception) { /* cerrando */ }
@@ -1608,6 +1622,22 @@ public partial class RelayWindow : Window
     private static long NowUs() => Stopwatch.GetTimestamp() * 1_000_000L / Stopwatch.Frequency;
 
     private static long Micros(long ticks) => ticks * 1_000_000L / Stopwatch.Frequency;
+
+    /// <summary>
+    /// Lo que se esta viendo, en una linea. Con varias pantallas interesa el
+    /// LIENZO y cuantos flujos lo componen, no la resolucion de una de ellas.
+    /// </summary>
+    private static string Resumen(Dictionary<uint, VideoConfig> configs)
+    {
+        if (configs.Count == 0)
+            return "sin config";
+
+        var primera = configs.Values.First();
+
+        return configs.Count == 1
+            ? $"{primera.Width}x{primera.Height} v{primera.ConfigVersion}"
+            : $"{configs.Count} pantallas {primera.CanvasWidth}x{primera.CanvasHeight}";
+    }
 
     private static double Percentil(List<long> ordenadas, double p)
     {

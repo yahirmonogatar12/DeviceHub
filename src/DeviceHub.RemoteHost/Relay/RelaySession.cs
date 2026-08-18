@@ -664,15 +664,26 @@ public static class RelaySession
         // despues se compara contra el.
         var escritorioCapturado = InputDesktop.NombreDeEntrada();
 
-        // CADA PASO CON SU NOMBRE.
-        //
-        // "Fallo al capturar: E_INVALIDARG" no dice nada: entre abrir la
-        // duplicacion y sacar el primer frame hay cuatro llamadas distintas que
-        // pueden rechazar por parametro, y sin saber cual se investiga a ciegas.
-        // Con la etiqueta, el mismo error se convierte en una direccion.
-        var paso = "abrir la captura";
+        // CADA PASO CON SU NOMBRE. Un HRESULT suelto no dice de donde sale.
+        var paso = "abrir las capturas";
 
-        using IScreenCapture captura = Etiquetar(paso, () => Abrir(pedida, elegida, opciones));
+        // UN FLUJO POR PANTALLA, y el visor los coloca.
+        //
+        // Antes el modo "todas a la vez" componia los monitores en UNA imagen y
+        // se la daba al codificador: 3840x1080 con dos pantallas, que una Intel
+        // UHD rechaza con E_INVALIDARG mientras acepta cada una por separado sin
+        // pestanear.
+        //
+        // RustDesk no compone (src/server/display_service.rs): transmite un flujo
+        // por monitor con sus coordenadas y los coloca el cliente. Asi su
+        // codificador nunca ve mas de una pantalla, y por eso alli funciona.
+        //
+        // Con una sola pantalla la lista tiene un elemento, asi que el camino de
+        // siempre no se bifurca: es el mismo bucle con N=1.
+        var flujos = Etiquetar(paso, () => AbrirFlujos(pedida, pantallas, elegida, opciones, cuenta));
+
+        try
+        {
 
         // La lista viaja al empezar y en cada cambio de pantalla: es cuando el
         // visor necesita repintar su selector, y cuesta un mensaje.
@@ -683,54 +694,19 @@ public static class RelaySession
             Displays = ListaDePantallas(pantallas, pedida)
         }));
 
-        // El inyector necesita el tamano y la esquina de ESTA pantalla, que
-        // solo se conocen despues de abrir la captura. Se publica aqui para
-        // que el hilo de red pueda aplicar la entrada en cuanto llegue.
-        //
-        // SendInput no toca la GPU, asi que puede correr en el hilo de red
-        // sin la disciplina de un solo hilo que exigen DXGI y el MFT.
-        _entrada = new InputInjector(
-            captura.Width, captura.Height, captura.DesktopLeft, captura.DesktopTop);
+        // El inyector trabaja sobre el LIENZO entero, no sobre una pantalla: el
+        // visor manda coordenadas normalizadas sobre lo que ve, y lo que ve es la
+        // composicion. Con una sola pantalla el lienzo es esa pantalla.
+        var lienzo = flujos[0].Lienzo;
 
-        // CUANTO SE CODIFICA DE VERDAD.
-        //
-        // RustDesk no compone: manda un flujo POR MONITOR y es su cliente quien
-        // los coloca lado a lado. Por eso su codificador nunca ve 3840x1080 y el
-        // nuestro si -- y una Intel UHD lo rechaza con E_INVALIDARG.
-        //
-        // Mientras no tengamos varios flujos, el compuesto se ESCALA a un tamano
-        // que esa GPU acepta. Se pierde nitidez y se conserva lo que el modo
-        // busca: ver las dos pantallas y poder arrastrar entre ellas.
-        //
-        // ponytail: el tope es 1920 de ancho porque es el unico que esta
-        // MEDIDO en esa maquina. Cuando el log diga cual es el limite real, se
-        // sube; y la salida definitiva es un flujo por monitor, como ellos.
-        var (anchoCodificado, altoCodificado) = Encajar(captura.Width, captura.Height, 1920);
+        _entrada = new InputInjector(lienzo.Ancho, lienzo.Alto, lienzo.X, lienzo.Y);
 
-        if (anchoCodificado != captura.Width)
-        {
-            Avisar(opciones,
-                $"El compuesto mide {captura.Width}x{captura.Height} y se codifica a " +
-                $"{anchoCodificado}x{altoCodificado}: esta GPU no acepta el tamano completo");
-        }
-
-        paso = $"crear el codificador para {anchoCodificado}x{altoCodificado}";
-
-        using var codificador = Etiquetar(paso, () => new H264Encoder(
-            captura.Device, anchoCodificado, altoCodificado, opciones.Fps, opciones.Bitrate,
-            captura.AdapterLuid, captura.AdapterVendorId, captura.Width, captura.Height));
-
-        paso = "capturar";
-
-        // La IDENTIDAD va en la misma linea que el MFT a proposito. Es la unica
-        // forma de saber, leyendo el log del agente, si esta sesion corrio como
-        // SYSTEM y con que codificador: son las dos cifras que hacen falta para
-        // cerrar la duda que dejo abierta el intento anterior de la Fase 19.
         opciones.Escribir(
             $"Identidad {System.Security.Principal.WindowsIdentity.GetCurrent().Name}  " +
-            $"Escritorio {escritorio.Name}  Adapter {captura.Adapter}  MFT {codificador.Capabilities.Name}  " +
-            $"Hardware {(codificador.Capabilities.Hardware ? "TRUE" : "FALSE")}  " +
-            $"Resolution {captura.Width}x{captura.Height}");
+            $"Escritorio {escritorio.Name}  Flujos {flujos.Count}  " +
+            $"MFT {flujos[0].Codificador.Capabilities.Name}  " +
+            $"Hardware {(flujos[0].Codificador.Capabilities.Hardware ? "TRUE" : "FALSE")}  " +
+            $"Lienzo {lienzo.Ancho}x{lienzo.Alto}");
 
         var siguienteFrame = Stopwatch.GetTimestamp();
         var avisadoDeCeguera = 0;
@@ -741,8 +717,6 @@ public static class RelaySession
         if (_bitrateDeseado == 0)
             _bitrateDeseado = opciones.Bitrate;
 
-        var version = ++cuenta.ConfigVersion;
-        var configEnviada = false;
         var siguienteRevision = reloj.Elapsed;
 
         {
@@ -858,12 +832,18 @@ public static class RelaySession
                 // pueden salir a 60-120 por segundo contra los 20-30 de la
                 // imagen. Es lo que hace que el control se SIENTA inmediato
                 // aunque la pantalla no lo sea.
-                if (captura.TomarCursor() is { } puntero)
+                foreach (var flujo in flujos)
                 {
+                    if (flujo.Captura.TomarCursor() is not { } puntero)
+                        continue;
+
+                    // Del sistema de coordenadas de SU pantalla al del lienzo. Con
+                    // un solo flujo la traslacion es la identidad; con dos, sin
+                    // ella el puntero del monitor derecho aparece en el izquierdo.
                     var aviso = new CursorUpdate
                     {
-                        X = puntero.X,
-                        Y = puntero.Y,
+                        X = (flujo.LayoutX + puntero.X * flujo.Captura.Width) / lienzo.Ancho,
+                        Y = (flujo.LayoutY + puntero.Y * flujo.Captura.Height) / lienzo.Alto,
                         Visible = puntero.Visible
                     };
 
@@ -895,18 +875,24 @@ public static class RelaySession
                 if (_keyframePedido)
                 {
                     _keyframePedido = false;
-                    codificador.ForzarKeyframe();
 
-                    // Y la config DELANTE del IDR. Si el visor perdio el SPS, un
-                    // keyframe suelto no le sirve de nada: es la regla que la
-                    // Fase 2 dejo escrita y que hasta ahora no tenia quien la
-                    // ejecutara.
-                    configEnviada = false;
+                    foreach (var flujo in flujos)
+                    {
+                        flujo.Codificador.ForzarKeyframe();
+                        flujo.ConfigEnviada = false;
+                    }
+
+                    // La config va DELANTE del IDR. Si el visor perdio el SPS,
+                    // un keyframe suelto no le sirve de nada.
                 }
 
                 if (_bitrateDeseado != bitrateActual && _bitrateDeseado > 0)
                 {
-                    if (codificador.CambiarBitrate(_bitrateDeseado))
+                    // El bitrate se REPARTE entre los flujos: dos pantallas a 6
+                    // Mbps cada una son 12 por el mismo cable.
+                    var porFlujo = Math.Max(_bitrateDeseado / flujos.Count, ControlBitrate.Minimo);
+
+                    if (flujos.All(f => f.Codificador.CambiarBitrate(porFlujo)))
                     {
                         opciones.Escribir(
                             $"Bitrate {bitrateActual / 1000} -> {_bitrateDeseado / 1000} kbps");
@@ -922,29 +908,29 @@ public static class RelaySession
                     }
                 }
 
-                if (captura is VirtualDesktopCapture compuesta && compuesta.Desajuste is { } desajuste)
-                    Avisar(opciones, desajuste);
-
-                IReadOnlyList<EncodedFrame> producidos;
-
-                // El frame DXGI se suelta ANTES de esperar por nada. Encolar
-                // puede bloquear si la red va por detras, y quedarse la
-                // superficie duplicada mientras tanto es lo que no se hace.
-                using (var frame = Etiquetar(
-                    "pedir el frame", () => captura.CaptureAsync(cancellationToken).GetAwaiter().GetResult()))
+                foreach (var flujo in flujos)
                 {
-                    if (frame is null || !frame.DesktopChanged)
-                        continue;
+                    IReadOnlyList<EncodedFrame> producidos;
 
-                    cuenta.Capturados++;
+                    // El frame DXGI se suelta ANTES de esperar por nada. Encolar
+                    // puede bloquear si la red va por detras, y quedarse la
+                    // superficie duplicada mientras tanto es lo que no se hace.
+                    using (var frame = Etiquetar(
+                        "pedir el frame",
+                        () => flujo.Captura.CaptureAsync(cancellationToken).GetAwaiter().GetResult()))
+                    {
+                        if (frame is null || !frame.DesktopChanged)
+                            continue;
 
-                    producidos = Etiquetar(
-                        $"codificar {frame.Width}x{frame.Height}",
-                        () => codificador.Encode(frame, cancellationToken));
-                }
+                        cuenta.Capturados++;
 
-                foreach (var frameCodificado in producidos)
-                {
+                        producidos = Etiquetar(
+                            $"codificar {frame.Width}x{frame.Height}",
+                            () => flujo.Codificador.Encode(frame, cancellationToken));
+                    }
+
+                    foreach (var frameCodificado in producidos)
+                    {
                     cuenta.Codificados++;
 
                     if (frameCodificado.IsKeyFrame)
@@ -956,18 +942,18 @@ public static class RelaySession
                     // manda en VideoConfig y a partir de ahi el viewer lo
                     // conserva: reenviarlo con cada keyframe es ancho de banda
                     // que no aporta nada a quien ya lo tiene.
-                    if (!configEnviada && frameCodificado.IsKeyFrame)
+                    if (!flujo.ConfigEnviada && frameCodificado.IsKeyFrame)
                     {
                         var parametros = H264AnnexB.ParameterSets(frameCodificado.Payload);
 
                         if (parametros.Length == 0)
                             continue;   // todavia no; el siguiente IDR los traera
 
-                        configEnviada = true;
+                        flujo.ConfigEnviada = true;
 
                         config = new VideoConfig
                         {
-                            ConfigVersion = version,
+                            ConfigVersion = flujo.Version,
                             Codec = VideoCodec.H264,
                             Width = (uint)frameCodificado.Width,
                             Height = (uint)frameCodificado.Height,
@@ -975,11 +961,18 @@ public static class RelaySession
                             BitrateBitsPerSecond = (uint)opciones.Bitrate,
                             ParameterSets = Google.Protobuf.ByteString.CopyFrom(parametros),
                             VisibleWidth = (uint)frameCodificado.Width,
-                            VisibleHeight = (uint)frameCodificado.Height
+                            VisibleHeight = (uint)frameCodificado.Height,
+
+                            // Donde va colocado este flujo dentro del lienzo.
+                            DisplayId = (uint)flujo.DisplayId,
+                            LayoutX = (uint)flujo.LayoutX,
+                            LayoutY = (uint)flujo.LayoutY,
+                            CanvasWidth = (uint)lienzo.Ancho,
+                            CanvasHeight = (uint)lienzo.Alto
                         };
                     }
 
-                    if (!configEnviada)
+                    if (!flujo.ConfigEnviada)
                         continue;   // sin configuracion no hay nada descodificable
 
                     // EL NUMERO DE FRAME ES DE LA SESION, no del codificador.
@@ -996,16 +989,29 @@ public static class RelaySession
                     // Un contador de sesion nunca retrocede, asi que el cambio de
                     // captura deja de ser visible desde fuera.
                     var grupo = VideoFraming.Split(
-                        ++_frameDeLaSesion, frameCodificado.IsKeyFrame, version,
+                        ++_frameDeLaSesion, frameCodificado.IsKeyFrame, flujo.Version,
                         frameCodificado.TimestampUs, frameCodificado.Payload);
+
+                    // De que pantalla es cada trozo. Los frame_id siguen siendo
+                    // unicos en toda la sesion, asi que el relay los agrupa como
+                    // siempre sin saber que hay varias pantallas.
+                    foreach (var trozo in grupo.Chunks)
+                        trozo.DisplayId = (uint)flujo.DisplayId;
 
                     salida.WriteAsync(new Enviable(config, grupo), cancellationToken)
                         .AsTask().GetAwaiter().GetResult();
+                    }
                 }
             }
 
-            cuenta.DescartesEncoder = codificador.Dropped;
-            cuenta.DescartesCaptura = captura.Dropped;
+            cuenta.DescartesEncoder = flujos.Sum(f => f.Codificador.Dropped);
+            cuenta.DescartesCaptura = flujos.Sum(f => f.Captura.Dropped);
+        }
+        }
+        finally
+        {
+            foreach (var flujo in flujos)
+                flujo.Dispose();
         }
     }
 
@@ -1087,6 +1093,119 @@ public static class RelaySession
     }
 
     private static int Par(int valor) => valor % 2 == 0 ? valor : valor + 1;
+
+    /// <summary>La caja que ocupan TODAS las pantallas del envio, en coordenadas
+    /// de Windows. Es sobre esto sobre lo que el visor manda el raton.</summary>
+    private readonly record struct Lienzo(int X, int Y, int Ancho, int Alto);
+
+    /// <summary>
+    /// Una pantalla en camino: su captura, su codificador y donde va colocada.
+    ///
+    /// Cada flujo lleva su PROPIA config_version. Con varias pantallas cada una
+    /// tiene su SPS, y compartir la version haria que el visor descodificara los
+    /// frames de una con los parametros de la otra -- que no da error, da imagen
+    /// corrupta.
+    /// </summary>
+    private sealed class Flujo : IDisposable
+    {
+        public required int DisplayId { get; init; }
+        public required IScreenCapture Captura { get; init; }
+        public required H264Encoder Codificador { get; init; }
+        public required uint Version { get; init; }
+        public required int LayoutX { get; init; }
+        public required int LayoutY { get; init; }
+        public required Lienzo Lienzo { get; init; }
+
+        public bool ConfigEnviada { get; set; }
+
+        public void Dispose()
+        {
+            Codificador.Dispose();
+            Captura.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Abre un flujo por pantalla, o uno solo si se pidio una concreta.
+    ///
+    /// El modo "todas a la vez" ya NO compone: cada monitor va por su cuenta y
+    /// el visor los coloca con layout_x/y. Es lo que hace RustDesk, y la razon
+    /// es que componiendo el codificador recibe la suma de los anchos y una iGPU
+    /// lo rechaza -- mientras acepta cada pantalla por separado.
+    ///
+    /// Si al abrir una de las pantallas falla, se sigue con las que si: media
+    /// composicion es mejor que ninguna sesion, y el aviso dice cual falto.
+    /// </summary>
+    private static List<Flujo> AbrirFlujos(
+        int pedida, IReadOnlyList<Pantalla> pantallas, Pantalla? elegida,
+        RelayOptions opciones, Contadores cuenta)
+    {
+        if (pedida != Pantallas.Todas || pantallas.Count <= 1)
+        {
+            var unica = Abrir(pedida, elegida, opciones);
+
+            return
+            [
+                new Flujo
+                {
+                    DisplayId = pedida,
+                    Captura = unica,
+                    Codificador = new H264Encoder(
+                        unica.Device, unica.Width, unica.Height, opciones.Fps, opciones.Bitrate,
+                        unica.AdapterLuid, unica.AdapterVendorId),
+                    Version = ++cuenta.ConfigVersion,
+                    LayoutX = 0,
+                    LayoutY = 0,
+                    Lienzo = new Lienzo(unica.DesktopLeft, unica.DesktopTop, unica.Width, unica.Height)
+                }
+            ];
+        }
+
+        var (x, y, ancho, alto) = Pantallas.Envolvente(
+            [.. pantallas.Select(p => (p.X, p.Y, p.Ancho, p.Alto))]);
+
+        var lienzo = new Lienzo(x, y, ancho, alto);
+        var flujos = new List<Flujo>(pantallas.Count);
+
+        foreach (var pantalla in pantallas)
+        {
+            IScreenCapture? captura = null;
+
+            try
+            {
+                captura = new DxgiDesktopCapture(pantalla.AdapterIndex, pantalla.OutputIndex);
+
+                flujos.Add(new Flujo
+                {
+                    DisplayId = pantalla.Id,
+                    Captura = captura,
+                    Codificador = new H264Encoder(
+                        captura.Device, captura.Width, captura.Height, opciones.Fps,
+                        Math.Max(opciones.Bitrate / pantallas.Count, ControlBitrate.Minimo),
+                        captura.AdapterLuid, captura.AdapterVendorId),
+                    Version = ++cuenta.ConfigVersion,
+
+                    // Coordenadas RELATIVAS al lienzo: el monitor de la izquierda
+                    // tiene X negativa en Windows y aqui tiene que caer en 0.
+                    LayoutX = pantalla.X - x,
+                    LayoutY = pantalla.Y - y,
+                    Lienzo = lienzo
+                });
+            }
+            catch (Exception ex)
+            {
+                captura?.Dispose();
+
+                Avisar(opciones,
+                    $"No se pudo abrir {pantalla.Nombre}: {ex.Message}. Se sigue sin esa pantalla.");
+            }
+        }
+
+        if (flujos.Count == 0)
+            throw new ScreenCaptureUnavailableException("No se pudo abrir ninguna de las pantallas.");
+
+        return flujos;
+    }
 
     private static long Ahora()
         => Stopwatch.GetTimestamp() * 1_000_000L / Stopwatch.Frequency;
