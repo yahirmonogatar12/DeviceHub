@@ -85,6 +85,14 @@
                         <Button Content="Descargar" Click="Descargar" />
                         <Button Content="Subir..." Click="Subir" />
                     </StackPanel>
+
+                    <!-- Portapapeles de archivos. Traer se habilita solo cuando
+                         la PC remota anuncia que copiaron algo. -->
+                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                        <Button x:Name="BotonTraer" Content="Traer copiado" Click="Traer"
+                                IsEnabled="False" />
+                        <Button Content="Llevar copiado" Click="Llevar" />
+                    </StackPanel>
                 </StackPanel>
 
                 <ListBox x:Name="Archivos" Background="#061029" Foreground="#C8D6EE"

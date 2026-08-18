@@ -418,13 +418,31 @@ public static class RelaySession
                     while (PortapapelesEntrante.TryDequeue(out var pegado))
                         ClipboardBridge.Escribir(pegado);
 
-                    if (ClipboardBridge.LeerSiCambio() is { } copiado)
+                    var (copiado, archivosCopiados) = ClipboardBridge.LeerSiCambio();
+
+                    if (copiado is not null)
                     {
                         salida.TryWrite(new Enviable(null, null, new RemotePacket
                         {
                             ProtocolVersion = RemoteSessionProtocol.Version,
                             SessionId = opciones.SesionId,
                             Clipboard = new ClipboardText { Text = copiado }
+                        }));
+                    }
+
+                    // Solo el ANUNCIO: aqui viajan rutas, nunca contenido. Los
+                    // bytes salen despues por la transferencia de la Fase 24, y
+                    // solo si el tecnico lo pide.
+                    if (archivosCopiados.Count > 0)
+                    {
+                        var aviso = new ClipboardFiles();
+                        aviso.Paths.AddRange(archivosCopiados);
+
+                        salida.TryWrite(new Enviable(null, null, new RemotePacket
+                        {
+                            ProtocolVersion = RemoteSessionProtocol.Version,
+                            SessionId = opciones.SesionId,
+                            ClipboardFiles = aviso
                         }));
                     }
                 }
@@ -725,6 +743,32 @@ public static class RelaySession
                         // tiene, cuando le viene bien: tocar DXGI desde aqui es
                         // exactamente el error que colgo el pipeline en la Fase 2.
                         _pantalla = paquete.SelectDisplay.DisplayId;
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.ClipboardFiles
+                        when paquete.ClipboardFiles.Apply:
+
+                        // El tecnico ya subio los bytes y estas rutas existen en
+                        // ESTA maquina. CF_HDROP son referencias: ponerlo con
+                        // rutas que no existen da un error del Explorador al
+                        // pegar y ninguna pista de por que.
+                        // Las variables se expanden AQUI: el visor mando
+                        // %TEMP%\... porque no sabe donde tiene el temporal esta
+                        // maquina, y CF_HDROP no admite nada sin resolver.
+                        var pegar = paquete.ClipboardFiles.Paths
+                            .Select(Environment.ExpandEnvironmentVariables)
+                            .ToList();
+
+                        opciones.Escribir(
+                            ClipboardBridge.EscribirArchivos(pegar)
+                                ? $"{pegar.Count} archivos en el portapapeles."
+                                : "No se pudo poner los archivos en el portapapeles.");
+
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.ClipboardFiles:
+                        // Anuncio del visor: el tecnico copio archivos en SU PC.
+                        // No se hace nada hasta que decida traerlos.
                         break;
 
                     case RemotePacket.PayloadOneofCase.Clipboard:

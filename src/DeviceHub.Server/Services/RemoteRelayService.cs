@@ -362,6 +362,7 @@ public sealed class RemoteRelayGrpcService(
             // Los trozos de archivo tambien: host -> viewer es una descarga y
             // viewer -> host una subida. El acuse siempre va del que recibe.
             RemotePacket.PayloadOneofCase.Clipboard or
+            RemotePacket.PayloadOneofCase.ClipboardFiles or
             RemotePacket.PayloadOneofCase.FileChunk or
             RemotePacket.PayloadOneofCase.FileAck => true,
 

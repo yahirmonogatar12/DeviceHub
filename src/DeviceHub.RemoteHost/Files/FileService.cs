@@ -23,6 +23,15 @@ public sealed class FileService : IDisposable
     private const int Trozo = 60 * 1024;
 
     /// <summary>
+    /// Expande %TEMP%, %ProgramData% y demas. Se resuelven AQUI y no en el visor
+    /// porque son variables de ESTA maquina: el visor no sabe donde tiene el
+    /// temporal la PC remota, y de hecho puede tenerlo en otra unidad.
+    ///
+    /// Sirve tambien para lo que el tecnico escriba a mano en la barra de ruta.
+    /// </summary>
+    private static string Resolver(string ruta) => Environment.ExpandEnvironmentVariables(ruta);
+
+    /// <summary>
     /// Subida en curso. Una a la vez: el visor manda un archivo y espera, y
     /// admitir varias solo multiplicaria los archivos a medias que hay que
     /// limpiar cuando la sesion se corta.
@@ -54,7 +63,7 @@ public sealed class FileService : IDisposable
                 return lista;
             }
 
-            var completa = Path.GetFullPath(ruta);
+            var completa = Path.GetFullPath(Resolver(ruta));
             lista.Path = completa;
 
             foreach (var directorio in Directory.EnumerateDirectories(completa))
@@ -113,7 +122,7 @@ public sealed class FileService : IDisposable
         try
         {
             using var archivo = new FileStream(
-                ruta, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                Resolver(ruta), FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
 
             var total = (ulong)archivo.Length;
 
@@ -188,12 +197,13 @@ public sealed class FileService : IDisposable
             {
                 Cerrar();
 
-                var carpeta = Path.GetDirectoryName(trozo.Path);
+                var destino = Resolver(trozo.Path);
+                var carpeta = Path.GetDirectoryName(destino);
 
                 if (!string.IsNullOrEmpty(carpeta))
                     Directory.CreateDirectory(carpeta);
 
-                _subida = new FileStream(trozo.Path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
+                _subida = new FileStream(destino, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
                 _rutaSubida = trozo.Path;
             }
 

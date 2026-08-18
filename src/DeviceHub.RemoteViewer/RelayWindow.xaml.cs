@@ -419,6 +419,10 @@ public partial class RelayWindow : Window
                         RecibirPantallas(paquete.Displays);
                         break;
 
+                    case RemotePacket.PayloadOneofCase.ClipboardFiles:
+                        RecibirArchivosCopiados(paquete.ClipboardFiles);
+                        break;
+
                     case RemotePacket.PayloadOneofCase.FileList:
                         RecibirLista(paquete.FileList);
                         break;
@@ -781,9 +785,14 @@ public partial class RelayWindow : Window
         var carpeta = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "DeviceHub");
 
-        Directory.CreateDirectory(carpeta);
+        IniciarBajada(Combinar(archivo.Nombre), Path.Combine(carpeta, archivo.Nombre));
+    }
 
-        _destinoFinal = Path.Combine(carpeta, archivo.Nombre);
+    private void IniciarBajada(string remoto, string local)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(local)!);
+
+        _destinoFinal = local;
         var parcial = _destinoFinal + ".parcial";
 
         // REANUDAR: lo que ya haya en el .parcial es el punto de partida. Nadie
@@ -794,16 +803,18 @@ public partial class RelayWindow : Window
         _bajando = new FileStream(parcial, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None);
         _bajando.Seek((long)desde, SeekOrigin.Begin);
 
+        var nombre = Path.GetFileName(local);
+
         Progreso.Value = 0;
         EstadoArchivos.Text = desde > 0
-            ? $"Reanudando {archivo.Nombre} desde {desde / 1024} KB..."
-            : $"Descargando {archivo.Nombre}...";
+            ? $"Reanudando {nombre} desde {desde / 1024} KB..."
+            : $"Descargando {nombre}...";
 
         Encolar(new RemotePacket
         {
             ProtocolVersion = RemoteSessionProtocol.Version,
             SessionId = _sesion,
-            FileDownload = new FileDownloadRequest { Path = Combinar(archivo.Nombre), Offset = desde }
+            FileDownload = new FileDownloadRequest { Path = remoto, Offset = desde }
         });
     }
 
@@ -844,6 +855,8 @@ public partial class RelayWindow : Window
 
             Progreso.Value = 100;
             EstadoArchivos.Text = $"Guardado en {_destinoFinal}";
+
+            SiguienteDeLaCola();
         });
 
     // ---------------------------------------------------------------- subida
@@ -861,13 +874,18 @@ public partial class RelayWindow : Window
         if (dialogo.ShowDialog(this) != true)
             return;
 
+        IniciarSubida(dialogo.FileName, Path.Combine(_rutaRemota, Path.GetFileName(dialogo.FileName)));
+    }
+
+    private void IniciarSubida(string local, string remoto)
+    {
         _subiendo?.Dispose();
-        _subiendo = new FileStream(dialogo.FileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        _subiendo = new FileStream(local, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         _tamanoSubida = (ulong)_subiendo.Length;
-        _destinoRemoto = Path.Combine(_rutaRemota, Path.GetFileName(dialogo.FileName));
+        _destinoRemoto = remoto;
 
         Progreso.Value = 0;
-        EstadoArchivos.Text = $"Subiendo {Path.GetFileName(dialogo.FileName)}...";
+        EstadoArchivos.Text = $"Subiendo {Path.GetFileName(local)}...";
 
         // EL SONDEO. Un trozo vacio no escribe nada: solo pregunta cuanto hay ya
         // en el destino. El host contesta con un FileAck y de ahi sale el offset
@@ -900,6 +918,8 @@ public partial class RelayWindow : Window
                 _subiendo = null;
                 Progreso.Value = 100;
                 EstadoArchivos.Text = $"Subido a {_destinoRemoto}";
+
+                SiguienteDeLaCola();
                 return;
             }
 
@@ -928,6 +948,164 @@ public partial class RelayWindow : Window
                 }
             });
         });
+
+    // -------------------------------------------- portapapeles de archivos (25)
+
+    /// <summary>
+    /// Lo que queda por transferir. Una a la vez, en orden.
+    ///
+    /// En serie y no en paralelo a proposito: el stream es el mismo que lleva el
+    /// video, y tres transferencias compitiendo por el solo consiguen que las
+    /// tres vayan lentas y que la pantalla se congele mientras tanto.
+    /// </summary>
+    private readonly Queue<(string Remoto, string Local, bool Bajando)> _cola = new();
+
+    /// <summary>Rutas ya transferidas de la tanda en curso. Al vaciarse la cola,
+    /// son las que van al portapapeles del destino.</summary>
+    private readonly List<string> _transferidos = [];
+
+    /// <summary>Lo que la PC remota anuncio tener copiado. Rutas, no bytes.</summary>
+    private IReadOnlyList<string> _copiadoAlla = [];
+
+    private static string Deposito(string donde)
+        => Path.Combine(Path.GetTempPath(), "DeviceHub", "portapapeles", donde);
+
+    private void RecibirArchivosCopiados(ClipboardFiles aviso)
+        => Dispatcher.BeginInvoke(() =>
+        {
+            _copiadoAlla = [.. aviso.Paths];
+
+            PanelArchivos.Visibility = Visibility.Visible;
+            BotonTraer.IsEnabled = _copiadoAlla.Count > 0;
+            EstadoArchivos.Text = $"{_copiadoAlla.Count} archivos copiados en la PC remota. Pulsa Traer.";
+        });
+
+    /// <summary>
+    /// Baja lo que copiaron alla y lo deja en el portapapeles de aqui.
+    ///
+    /// Un boton y no automatico: copiar 4 GB con Ctrl+C es un gesto de un
+    /// segundo, y mandarlos por la red de planta sin que nadie lo pida seria una
+    /// sorpresa cara. RustDesk tampoco lo esconde -- ensena su ventana de
+    /// progreso.
+    /// </summary>
+    private void Traer(object sender, RoutedEventArgs e)
+    {
+        if (_copiadoAlla.Count == 0)
+            return;
+
+        var deposito = Deposito("desde-remoto");
+
+        // Se vacia entre tandas: si no, pegar dos veces seguidas arrastraria los
+        // archivos de la copia anterior junto con los nuevos.
+        try { if (Directory.Exists(deposito)) Directory.Delete(deposito, recursive: true); }
+        catch (IOException) { }
+
+        _cola.Clear();
+        _transferidos.Clear();
+
+        foreach (var remoto in _copiadoAlla)
+            _cola.Enqueue((remoto, Path.Combine(deposito, Path.GetFileName(remoto)), true));
+
+        SiguienteDeLaCola();
+    }
+
+    /// <summary>Sube lo que hay copiado aqui y lo deja en el portapapeles de
+    /// alla.</summary>
+    private void Llevar(object sender, RoutedEventArgs e)
+    {
+        List<string> locales;
+
+        try
+        {
+            locales = [.. Clipboard.GetFileDropList().Cast<string>().Where(File.Exists)];
+        }
+        catch (System.Runtime.InteropServices.COMException)
+        {
+            EstadoArchivos.Text = "El portapapeles esta ocupado. Reintenta.";
+            return;
+        }
+
+        if (locales.Count == 0)
+        {
+            EstadoArchivos.Text = "No hay archivos copiados en esta PC.";
+            return;
+        }
+
+        _cola.Clear();
+        _transferidos.Clear();
+
+        // El deposito es del temporal de ALLA, no de la carpeta que este abierta:
+        // pegar no deberia ensuciar el sitio donde el tecnico estuviera mirando.
+        foreach (var local in locales)
+        {
+            var remoto = $@"%TEMP%\DeviceHub\portapapeles\hacia-remoto\{Path.GetFileName(local)}";
+            _cola.Enqueue((remoto, local, false));
+        }
+
+        SiguienteDeLaCola();
+    }
+
+    /// <summary>
+    /// Arranca lo siguiente, o cierra la tanda poniendo el portapapeles.
+    ///
+    /// El portapapeles se toca SOLO al final. Ponerlo archivo a archivo dejaria
+    /// al tecnico pegando una copia incompleta si se adelanta.
+    /// </summary>
+    private void SiguienteDeLaCola()
+    {
+        if (_cola.Count > 0)
+        {
+            var (remoto, local, bajando) = _cola.Dequeue();
+
+            _transferidos.Add(bajando ? local : remoto);
+
+            if (bajando)
+                IniciarBajada(remoto, local);
+            else
+                IniciarSubida(local, remoto);
+
+            EstadoArchivos.Text += $"   ({_cola.Count} en cola)";
+            return;
+        }
+
+        if (_transferidos.Count == 0)
+            return;
+
+        var rutas = _transferidos.ToList();
+        _transferidos.Clear();
+
+        // Bajando: las rutas son de AQUI y el portapapeles es el de aqui.
+        // Subiendo: son de ALLA y hay que pedirle al host que lo ponga el.
+        if (rutas[0].StartsWith(Deposito("desde-remoto"), StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var lista = new System.Collections.Specialized.StringCollection();
+                lista.AddRange([.. rutas]);
+
+                Clipboard.SetFileDropList(lista);
+                EstadoArchivos.Text = $"{rutas.Count} archivos listos para pegar aqui.";
+            }
+            catch (System.Runtime.InteropServices.COMException)
+            {
+                EstadoArchivos.Text = "Los archivos llegaron, pero el portapapeles estaba ocupado.";
+            }
+
+            return;
+        }
+
+        var orden = new ClipboardFiles { Apply = true };
+        orden.Paths.AddRange(rutas);
+
+        Encolar(new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = _sesion,
+            ClipboardFiles = orden
+        });
+
+        EstadoArchivos.Text = $"{rutas.Count} archivos listos para pegar en la PC remota.";
+    }
 
     // --------------------------------------------------------------- pantallas
 

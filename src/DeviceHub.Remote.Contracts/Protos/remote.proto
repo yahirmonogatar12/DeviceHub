@@ -76,7 +76,27 @@ message RemotePacket {
     FileDownloadRequest file_download     = 27;
     FileChunk           file_chunk        = 28;
     FileAck             file_ack          = 29;
+    ClipboardFiles      clipboard_files   = 30;
   }
+}
+
+// Fase 25. Archivos en el portapapeles (CF_HDROP), en los dos sentidos.
+//
+// Aqui viajan RUTAS, nunca contenido: los bytes van por la transferencia de la
+// Fase 24, y por eso esta fase no podia ir antes. Sin ella esto solo habria
+// funcionado con archivos diminutos, que es justo lo que no se queria.
+//
+// Y no se transfiere solo. Copiar 4 GB con Ctrl+C es un gesto de un segundo, y
+// mandarlos por la red de planta sin que nadie lo pida seria una sorpresa cara:
+// se ANUNCIA, y el tecnico decide con un clic. RustDesk tampoco lo esconde --
+// ensena su ventana de progreso.
+message ClipboardFiles {
+  repeated string paths = 1;
+
+  // false = "esto hay aqui" (anuncio).
+  // true  = "estos ya estan en TU disco: ponlos en el portapapeles".
+  //         Solo se manda despues de haber transferido los bytes.
+  bool apply = 2;
 }
 
 // ---------------------------------------------------------------------------
