@@ -542,6 +542,7 @@ public static class RelaySession
             $"Hardware {(codificador.Capabilities.Hardware ? "TRUE" : "FALSE")}  " +
             $"Resolution {captura.Width}x{captura.Height}");
 
+        var avisadoDeCeguera = 0;
         var version = ++cuenta.ConfigVersion;
         var configEnviada = false;
         var siguienteRevision = reloj.Elapsed;
@@ -570,6 +571,15 @@ public static class RelaySession
                     // Leer el nombre no exige atarse a nada y funciona igual en
                     // Winlogon, asi que cubre la ida Y la vuelta.
                     var entrada = InputDesktop.NombreDeEntrada();
+
+                    if (entrada.Length == 0 && InputDesktop.ErrorAlMirar != avisadoDeCeguera)
+                    {
+                        avisadoDeCeguera = InputDesktop.ErrorAlMirar;
+
+                        opciones.Escribir(
+                            $"No se puede leer el escritorio de entrada (error {avisadoDeCeguera}); " +
+                            "la captura no podra seguir los cambios de escritorio");
+                    }
 
                     if (entrada.Length > 0
                         && !entrada.Equals(escritorioCapturado, StringComparison.OrdinalIgnoreCase))
