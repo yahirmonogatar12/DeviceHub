@@ -452,7 +452,10 @@ public static class RelaySession
                 // botella de la sesion.
                 var aviso = salto switch
                 {
-                    Salto.Cambiado => $"La entrada salto a {escritorio.Name}",
+                    Salto.Cambiado => escritorio.EscrituraConcedida
+                        ? $"La entrada salto a {escritorio.Name}"
+                        : $"La entrada salto a {escritorio.Name} SOLO PARA LEER: " +
+                          "el raton y el teclado no van a entrar ahi",
 
                     Salto.NoSePudoAtar =>
                         $"NO se pudo atar la entrada a {escritorio.NombrePedido} " +

@@ -94,6 +94,13 @@ public sealed class InputDesktop : IDisposable
 
     /// <summary>Ultimo error de OpenInputDesktop al leer el nombre. 0 = ninguno.</summary>
     public static int ErrorAlMirar { get; private set; }
+
+    /// <summary>
+    /// false = el escritorio se abrio SOLO para leer, asi que SendInput no va a
+    /// entrar. Sin esto, atarse con permiso de lectura parece un exito y el
+    /// tecnico se queda mirando una pantalla que no responde sin saber por que.
+    /// </summary>
+    public bool EscrituraConcedida { get; private set; } = true;
     public long Switches { get; private set; }
 
     /// <summary>
@@ -106,14 +113,31 @@ public sealed class InputDesktop : IDisposable
     /// </summary>
     public Salto SeguirActivo()
     {
+        // De menos a mas, y en este orden por una razon aprendida a golpes: sobre
+        // un escritorio, PEDIR DE MAS ES COMO SE PIERDE EL PERMISO ENTERO. La
+        // peticion se concede o se deniega en bloque, asi que cada derecho que
+        // sobra es una forma nueva de que te digan que no.
+        //
+        // Ya paso dos veces seguidas: GENERIC_ALL son nueve derechos y Winlogon
+        // no los da todos; y despues pedi DESKTOP_SWITCHDESKTOP, que ni siquiera
+        // usamos -- no llamamos a SwitchDesktop en ningun sitio -- y esta
+        // restringido, asi que tumbo la peticion en el escritorio normal y dejo
+        // la sesion sin control.
+        EscrituraConcedida = true;
+
         var entrada = OpenInputDesktop(0, false, ParaEscribir);
 
-        // Sin permiso de escritura se intenta al menos el de lectura: la captura
-        // podra seguir al escritorio aunque la entrada no llegue. Media sesion es
-        // mejor que ninguna, y el contador de rechazados de SendInput dira que
-        // falta la otra mitad.
         if (entrada == IntPtr.Zero)
+            entrada = OpenInputDesktop(0, false, ComoAntes);
+
+        // Ultimo recurso: solo mirar. La captura podra seguir al escritorio
+        // aunque la entrada no llegue. Media sesion es mejor que ninguna, y el
+        // contador de rechazados de SendInput dira que falta la otra mitad.
+        if (entrada == IntPtr.Zero)
+        {
             entrada = OpenInputDesktop(0, false, ParaMirar);
+            EscrituraConcedida = false;
+        }
 
         if (entrada == IntPtr.Zero)
         {
@@ -223,12 +247,18 @@ public sealed class InputDesktop : IDisposable
     /// GENERIC_ALL sobre un escritorio son NUEVE, y Winlogon no los da todos.
     /// Pedir de mas es como se pierde el permiso entero.
     /// </summary>
-    private const uint ParaEscribir =
-        DesktopReadObjects | DesktopWriteObjects | DesktopSwitchDesktop;
+    private const uint ParaEscribir = DesktopReadObjects | DesktopWriteObjects;
 
     private const uint DesktopReadObjects = 0x0001;
     private const uint DesktopWriteObjects = 0x0080;
-    private const uint DesktopSwitchDesktop = 0x0100;
+
+    /// <summary>
+    /// Lo que se pedia antes de todo esto y funcionaba para controlar el
+    /// escritorio normal. Se conserva como segundo intento: si la peticion
+    /// minima fallara por algun motivo que no he previsto, no se puede acabar
+    /// peor que como se estaba.
+    /// </summary>
+    private const uint ComoAntes = 0x10000000;
     private const uint WinstaAllAccess = 0x0000037F;
     private const int UoiName = 2;
 
