@@ -25,9 +25,32 @@ namespace DeviceHub.Server.Services;
 /// </summary>
 public sealed class RemoteRelayGrpcService(
     RemoteSessionRegistry registro, RemoteTicketRegistry tickets, RemoteLeaseRegistry leases,
-    ILogger<RemoteRelayGrpcService> log)
+    DeviceHub.Server.Data.AuditRepository auditoria, ILogger<RemoteRelayGrpcService> log)
     : RemoteRelayService.RemoteRelayServiceBase
 {
+    /// <summary>
+    /// Escribe en la auditoria sin poder tumbar la sesion. Fase 17.
+    ///
+    /// El relay NO esta en la transaccion de nadie: aqui no vale la regla de "si
+    /// no se audita, no se ejecuta" que sigue el resto del servidor, porque lo
+    /// que se registra ya ocurrio. Que la base de datos falle no puede cortarle
+    /// la pantalla al tecnico, asi que se traga el error y se deja en el log.
+    /// </summary>
+    private async Task AuditarAsync(
+        string accion, string maquina, string usuario, string detalle, string ip)
+    {
+        try
+        {
+            await auditoria.WriteAsync(new DeviceHub.Server.Data.AuditEntry(
+                usuario, null, accion, maquina, null, null, null, ip,
+                DeviceHub.Server.Data.AuditEntry.Allowed, detalle), CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "No se pudo auditar {Accion} de la sesion remota", accion);
+        }
+    }
+
     public override Task HostChannel(
         IAsyncStreamReader<RemotePacket> entrada, IServerStreamWriter<RemotePacket> salida,
         ServerCallContext contexto)
@@ -97,6 +120,13 @@ public sealed class RemoteRelayGrpcService(
         log.LogInformation(
             "Relay: {Papel} conectado a la sesion {Sesion} (estado {Estado})",
             papel, sesion.Id, sesion.State);
+
+        // La linea que de verdad prueba que alguien vio esa pantalla. Las de
+        // REQUESTED y STARTED solo dicen que se pidio permiso.
+        await AuditarAsync(
+            DeviceHub.Server.Data.AuditActions.RemoteConnected,
+            hola.Hello.MachineId, hola.Hello.MachineId,
+            $"sesion {sesion.Id} papel {papel} estado {sesion.State}", contexto.Peer);
 
         var bomba = conexion.PumpAsync(new StreamWriter(salida), cancelacion);
 
@@ -177,6 +207,18 @@ public sealed class RemoteRelayGrpcService(
                 leases.Revoke(sesion.Id, papel);
             else
                 leases.Detach(sesion.Id, papel, conexion);
+
+            // FAILED solo cuando NO cerro en orden. Sin distinguirlo, en la
+            // auditoria una sesion que se corto sola y una que el tecnico cerro
+            // a mano son la misma linea, y la diferencia es justo la que se mira
+            // cuando alguien pregunta que paso.
+            await AuditarAsync(
+                cerroOrdenado
+                    ? DeviceHub.Server.Data.AuditActions.RemoteEnd
+                    : DeviceHub.Server.Data.AuditActions.RemoteFailed,
+                hola.Hello.MachineId, hola.Hello.MachineId,
+                $"sesion {sesion.Id} papel {papel} motivo {motivo} {detalle}".TrimEnd(),
+                contexto.Peer);
 
             var otro = sesion.Leave(conexion, motivo);
 
