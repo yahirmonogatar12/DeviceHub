@@ -634,6 +634,14 @@ public static class RelaySession
         CancellationToken cancellationToken)
     {
         var pantallas = Pantallas.Listar();
+
+        // Lo que DXGI enumero, tal cual, en el log del agente. Si el visor
+        // ensena el desplegable vacio, esta linea dice si el problema es que
+        // aqui no se ven o que el mensaje no llego.
+        opciones.Escribir(pantallas.Count == 0
+            ? $"DXGI no enumero NINGUNA pantalla. {Pantallas.Diagnostico()}"
+            : $"Pantallas: {string.Join(" | ", pantallas.Select(p => $"{p.Id}:{p.Nombre} {p.Ancho}x{p.Alto} @{p.X},{p.Y} [{p.Adaptador}]"))}");
+
         var pedida = _pantalla;
         var elegida = pantallas.FirstOrDefault(p => p.Id == pedida);
 

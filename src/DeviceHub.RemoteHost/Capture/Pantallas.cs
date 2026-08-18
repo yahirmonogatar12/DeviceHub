@@ -66,6 +66,43 @@ public static class Pantallas
     }
 
     /// <summary>
+    /// Que ve WINDOWS, al margen de lo que enumere DXGI.
+    ///
+    /// Los dos numeros juntos son el diagnostico: si Windows ve dos monitores y
+    /// DXGI enumera cero, el problema no es que no haya pantallas -- es que la
+    /// enumeracion de DXGI no las alcanza desde este proceso, que es otra cosa y
+    /// se arregla de otra forma.
+    /// </summary>
+    public static string Diagnostico()
+    {
+        var monitores = 0;
+
+        try
+        {
+            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (_, _, _, _) => { monitores++; return true; }, IntPtr.Zero);
+        }
+        catch (Exception ex)
+        {
+            return $"y EnumDisplayMonitors fallo: {ex.GetType().Name}";
+        }
+
+        return $"Windows ve {monitores} monitor(es), y el escritorio virtual mide " +
+               $"{GetSystemMetrics(SmCxVirtualScreen)}x{GetSystemMetrics(SmCyVirtualScreen)}.";
+    }
+
+    private const int SmCxVirtualScreen = 78;
+    private const int SmCyVirtualScreen = 79;
+
+    private delegate bool MonitorProc(IntPtr monitor, IntPtr dc, IntPtr rect, IntPtr datos);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool EnumDisplayMonitors(IntPtr dc, IntPtr recorte, MonitorProc callback, IntPtr datos);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int indice);
+
+    /// <summary>
     /// La caja que envuelve a todas: el escritorio virtual.
     ///
     /// Separada y pura porque es donde se equivoca uno. El monitor de la
