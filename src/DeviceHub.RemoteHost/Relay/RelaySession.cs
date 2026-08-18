@@ -246,6 +246,14 @@ public static class RelaySession
 
     private static int _bitrateDeseado;
 
+    /// <summary>Frames por segundo a los que capturar. Lo decide el hilo de red
+    /// mirando el RTT y lo obedece el de captura.</summary>
+    private static int _fpsDeseado = ControlFps.Inicial;
+
+    /// <summary>RTT medido POR EL HOST, con su propio reloj de ida y vuelta.
+    /// Negativo = todavia no hay medida.</summary>
+    private static double _rttMs = -1;
+
     private sealed class Contadores
     {
         public long Capturados, Codificados, Claves, Enviados, Trozos, Bytes;
@@ -350,6 +358,20 @@ public static class RelaySession
                     // controlador que reacciona a cada hipo produce vaiven.
                     _bitrateDeseado = ControlBitrate.Siguiente(
                         _bitrateDeseado, cola.Reader.Count, 8);
+
+                    // Y el ritmo, por su cuenta y con otra senal. La cola dice
+                    // que algo va lento; el RTT dice que es la RED.
+                    _fpsDeseado = ControlFps.Siguiente(_fpsDeseado, _rttMs);
+
+                    // El host tambien pregunta. Hasta ahora solo contestaba, asi
+                    // que el RTT lo conocia el visor y aqui se controlaba a
+                    // ciegas.
+                    await EscribirAsync(llamada, new RemotePacket
+                    {
+                        ProtocolVersion = RemoteSessionProtocol.Version,
+                        SessionId = opciones.SesionId,
+                        Ping = new Ping { SentAtUs = Ahora() }
+                    }, cancellationToken);
 
                     siguienteAviso += TimeSpan.FromSeconds(2);
                 }
@@ -631,6 +653,7 @@ public static class RelaySession
             $"Hardware {(codificador.Capabilities.Hardware ? "TRUE" : "FALSE")}  " +
             $"Resolution {captura.Width}x{captura.Height}");
 
+        var siguienteFrame = Stopwatch.GetTimestamp();
         var avisadoDeCeguera = 0;
         // El bitrate vigente. Arranca en el configurado y de ahi lo mueve el
         // controlador segun lo que aguante la red.
@@ -646,6 +669,21 @@ public static class RelaySession
         {
             while (reloj.Elapsed < duracion && !cancellationToken.IsCancellationRequested)
             {
+                // EL RITMO. No se pide un frame antes de que toque.
+                //
+                // Antes se capturaba tan deprisa como DXGI entregara -- 57/s en
+                // una PC de planta -- y el codificador solo aceptaba 20, asi que
+                // el 38 % se adquiria y se tiraba. Ese trabajo no producia nada:
+                // el frame que se acaba codificando es el mismo, porque DXGI
+                // acumula los cambios y entrega la pantalla mas reciente cuando
+                // por fin se la pides.
+                //
+                // NO es lo que fallo en NVIDIA. Alli se esperaba al NeedInput
+                // DENTRO de Encode, o sea bloqueando cuando el codificador estaba
+                // saturado. Esto es dormir contra el reloj de pared, sin mirar el
+                // estado del codificador.
+                Marcar(ref siguienteFrame, cancellationToken);
+
                 // Cada medio segundo, no cada frame: OpenInputDesktop es una
                 // llamada al sistema y a 60 FPS serian 60 por segundo para
                 // detectar algo que pasa dos veces al dia.
@@ -881,6 +919,28 @@ public static class RelaySession
     /// diseno hay UNA sesion por proceso, y el agente lanza un RemoteHost nuevo
     /// para cada una.
     /// </summary>
+    /// <summary>
+    /// Duerme hasta que toque el siguiente frame.
+    ///
+    /// Si se va TARDE no se acumula deuda: se reengancha al reloj actual. Sin
+    /// eso, una racha lenta dejaria el objetivo tan atrasado que despues
+    /// capturaria a rafagas para "recuperar" frames que ya no le interesan a
+    /// nadie.
+    /// </summary>
+    private static void Marcar(ref long siguiente, CancellationToken cancellationToken)
+    {
+        var intervalo = Stopwatch.Frequency / Math.Clamp(_fpsDeseado, ControlFps.Minimo, ControlFps.Maximo);
+        var falta = siguiente - Stopwatch.GetTimestamp();
+
+        if (falta > 0)
+            cancellationToken.WaitHandle.WaitOne((int)(falta * 1000 / Stopwatch.Frequency));
+
+        siguiente = Math.Max(siguiente + intervalo, Stopwatch.GetTimestamp());
+    }
+
+    private static long Ahora()
+        => Stopwatch.GetTimestamp() * 1_000_000L / Stopwatch.Frequency;
+
     private static InputInjector? _entrada;
 
     /// <summary>
@@ -1034,6 +1094,13 @@ public static class RelaySession
 
                 switch (paquete.PayloadCase)
                 {
+                    case RemotePacket.PayloadOneofCase.Pong:
+                        // NUESTRO reloj de ida y vuelta. Restar marcas de dos PCs
+                        // distintas da un numero inventado: sus relojes
+                        // monotonicos no son comparables.
+                        _rttMs = (Ahora() - paquete.Pong.SentAtUs) / 1000.0;
+                        break;
+
                     case RemotePacket.PayloadOneofCase.Ping:
                         // Se devuelve la marca TAL CUAL. El RTT lo calcula quien
                         // pregunto, con su propio reloj: restar tiempos de dos

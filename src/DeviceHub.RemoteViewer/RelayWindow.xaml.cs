@@ -424,6 +424,19 @@ public partial class RelayWindow : Window
 
                         break;
 
+                    case RemotePacket.PayloadOneofCase.Ping:
+                        // Se devuelve la marca TAL CUAL. El RTT lo calcula quien
+                        // pregunto, con su reloj. Hasta la Fase 13 el visor no
+                        // contestaba, asi que el host no podia medir la red.
+                        Encolar(new RemotePacket
+                        {
+                            ProtocolVersion = RemoteSessionProtocol.Version,
+                            SessionId = _sesion,
+                            Pong = new Pong { SentAtUs = paquete.Ping.SentAtUs }
+                        });
+
+                        break;
+
                     case RemotePacket.PayloadOneofCase.Pong:
                         _rttUs = NowUs() - paquete.Pong.SentAtUs;
                         break;
