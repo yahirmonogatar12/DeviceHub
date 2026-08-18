@@ -322,9 +322,26 @@ public partial class RelayWindow : Window
 
                         // Version nueva SI es flujo nuevo: el decodificador viejo
                         // lleva el SPS anterior dentro.
-                        presentador?.Dispose();
-                        presentador = null;
                         decoder?.Dispose();
+
+                        // EL PRESENTADOR SE CONSERVA si la geometria no cambio.
+                        //
+                        // Antes se tiraba siempre, y con el el swapchain. Un
+                        // swapchain nuevo sobre el MISMO HWND no lo compone el
+                        // DWM hasta que la ventana recibe un WM_SIZE: al bloquear
+                        // la PC se seguia viendo el escritorio anterior y la
+                        // pantalla de bloqueo no aparecia hasta redimensionar el
+                        // visor a mano.
+                        //
+                        // Y saltar de escritorio no cambia la resolucion, que es
+                        // justo el caso en que esto ocurria.
+                        if (presentador is not null
+                            && (presentador.Width != (int)config.Width
+                                || presentador.Height != (int)config.Height))
+                        {
+                            presentador.Dispose();
+                            presentador = null;
+                        }
 
                         decoder = new H264Decoder(device, (int)config.Width, (int)config.Height);
 

@@ -259,7 +259,11 @@ public static class RelaySession
                         $"{reloj.Elapsed:mm\\:ss}  capturados {cuenta.Capturados}  codificados {cuenta.Codificados}  " +
                         $"frames enviados {cuenta.Enviados}  chunks {cuenta.Trozos}  " +
                         $"{cuenta.Bytes * 8 / reloj.Elapsed.TotalSeconds / 1_000_000:0.00} Mbps  " +
-                        $"keyframes {cuenta.Claves}  config {cuenta.ConfigVersion}  cola {cola.Reader.Count}");
+                        $"keyframes {cuenta.Claves}  config {cuenta.ConfigVersion}  cola {cola.Reader.Count}  " +
+                        // Aplicados y rechazados de SendInput. Es lo que dice si
+                        // la entrada llega de verdad al otro lado o se la traga
+                        // el escritorio equivocado.
+                        $"entrada {_entrada?.Applied ?? 0}/{_entrada?.Rejected ?? 0}");
 
                     siguienteAviso += TimeSpan.FromSeconds(2);
                 }
@@ -307,6 +311,32 @@ public static class RelaySession
 
             using var escritorio = new InputDesktop();
             escritorio.SeguirActivo();
+
+            // HILO DE ENTRADA APARTE, y esta vez con motivo medido.
+            //
+            // SetThreadDesktop falla si el hilo tiene ventanas, y D3D11 y Media
+            // Foundation crean ventanas ocultas en cuanto se codifica el primer
+            // frame. O sea que el hilo de captura NO PUEDE saltar a Winlogon una
+            // vez ha empezado a trabajar: el video seguia viendose -- DXGI
+            // entrega lo que haya en la salida -- pero SendInput disparaba contra
+            // el escritorio viejo. Se veia la pantalla de bloqueo y no se podia
+            // pulsar nada.
+            //
+            // Este hilo no toca la GPU jamas, asi que no tiene ventanas y si
+            // puede atarse. Tiene su PROPIO InputDesktop: el intento de la 1.4.1
+            // fallo porque dos hilos abrian y CERRABAN handles del mismo, y el
+            // CloseDesktop de uno tiraba el escritorio bajo los pies del otro.
+            using var pararEntrada = new CancellationTokenSource();
+            using var enlazado = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken, pararEntrada.Token);
+
+            var hiloEntrada = new Thread(() => Teclear(opciones, enlazado.Token))
+            {
+                IsBackground = true,
+                Name = "devicehub-entrada"
+            };
+
+            hiloEntrada.Start();
 
             var reloj = Stopwatch.StartNew();
             var duracion = opciones.Seconds > 0 ? TimeSpan.FromSeconds(opciones.Seconds) : TimeSpan.MaxValue;
@@ -370,6 +400,62 @@ public static class RelaySession
         finally
         {
             salida.Complete();
+        }
+    }
+
+    /// <summary>
+    /// Aplica la entrada del tecnico, y nada mas.
+    ///
+    /// Hilo propio porque es el UNICO que puede seguir al escritorio activo: no
+    /// crea ventanas, asi que SetThreadDesktop no le falla. Cada 20 ms en vez de
+    /// los 100 del bucle de captura, que ademas con la pantalla quieta se pasa el
+    /// rato bloqueado en AcquireNextFrame.
+    /// </summary>
+    private static void Teclear(RelayOptions opciones, CancellationToken cancellationToken)
+    {
+        try
+        {
+            InputDesktop.UsarEstacionInteractiva();
+
+            using var escritorio = new InputDesktop();
+            var ultimoAviso = string.Empty;
+
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                var salto = escritorio.SeguirActivo();
+
+                // Se avisa UNA vez por estado, no cada 20 ms: en un bucle asi, un
+                // log por vuelta convierte el visor de eventos en el cuello de
+                // botella de la sesion.
+                var aviso = salto switch
+                {
+                    Salto.Cambiado => $"La entrada salto a {escritorio.Name}",
+
+                    Salto.NoSePudoAtar =>
+                        $"NO se pudo atar la entrada a {escritorio.NombrePedido} " +
+                        $"(error {escritorio.UltimoError}). El raton y el teclado van al escritorio viejo.",
+
+                    _ => ultimoAviso
+                };
+
+                if (aviso != ultimoAviso)
+                {
+                    opciones.Escribir(aviso);
+                    ultimoAviso = aviso;
+                }
+
+                while (Pendientes.TryDequeue(out var evento))
+                    _entrada?.Apply(evento);
+
+                cancellationToken.WaitHandle.WaitOne(20);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            opciones.Escribir($"El hilo de entrada murio: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -447,9 +533,13 @@ public static class RelaySession
                 {
                     siguienteRevision = reloj.Elapsed + TimeSpan.FromMilliseconds(500);
 
-                    if (escritorio.SeguirActivo())
+                    // Solo para decidir si hay que rehacer la duplicacion. Que
+                    // este hilo no consiga ATARSE al escritorio nuevo da igual:
+                    // de inyectar la entrada se encarga el hilo de entrada, que
+                    // si puede.
+                    if (escritorio.SeguirActivo() == Salto.Cambiado)
                     {
-                        opciones.Escribir($"La entrada salto a {escritorio.Name}; se rehace la captura");
+                        opciones.Escribir($"El escritorio activo es {escritorio.Name}; se rehace la captura");
                         return;
                     }
 
@@ -497,12 +587,6 @@ public static class RelaySession
                         }));
                     }
                 }
-
-                // La entrada del tecnico, aplicada AQUI: este hilo es el que esta
-                // atado al escritorio activo. Se drena entera para que la cola no
-                // crezca y para no repartir un arrastre entre dos vueltas.
-                while (Pendientes.TryDequeue(out var evento))
-                    _entrada?.Apply(evento);
 
                 // El CURSOR, antes de decidir si hay imagen nueva. Mover el
                 // raton no cambia el escritorio, asi que este frame se descarta
