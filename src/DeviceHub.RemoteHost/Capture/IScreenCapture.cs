@@ -73,4 +73,14 @@ public interface IScreenCapture : IDisposable
     /// No es reentrante: hay que disponer el frame anterior antes de pedir otro.
     /// </summary>
     Task<VideoFrame?> CaptureAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// El puntero, si cambio desde la ultima llamada. Fase 11.
+    ///
+    /// Va aparte del frame porque mover el raton NO cambia el escritorio: ese
+    /// frame se descarta, y con el se iria el unico aviso de que el cursor se
+    /// movio. Ademas son dos numeros y pueden salir a 60-120 por segundo contra
+    /// los 20-30 de la imagen.
+    /// </summary>
+    CursorState? TomarCursor();
 }

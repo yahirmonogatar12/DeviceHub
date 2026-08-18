@@ -257,7 +257,7 @@ public partial class RelayWindow : Window
                 {
                     MaxProtocolVersion = RemoteSessionProtocol.Version,
                     Codecs = { VideoCodec.H264 },
-                    SupportsCursor = false,
+                    SupportsCursor = true,
                     SupportsInput = true
                 }
             }
@@ -419,6 +419,10 @@ public partial class RelayWindow : Window
                         RecibirPantallas(paquete.Displays);
                         break;
 
+                    case RemotePacket.PayloadOneofCase.Cursor:
+                        RecibirCursor(paquete.Cursor);
+                        break;
+
                     case RemotePacket.PayloadOneofCase.ClipboardFiles:
                         RecibirArchivosCopiados(paquete.ClipboardFiles);
                         break;
@@ -470,7 +474,7 @@ public partial class RelayWindow : Window
                         $"entrada {_entradaEnviada}   " +
                         (_grabacion is null ? string.Empty : $"grabando {_grabados} frames   ") +
                         $"incompletos {montador.Dropped}   invalidos {montador.Rejected}   tardios {montador.Stale}   " +
-                        $"IDR {idr}   cambios de config {cambiosConfig}   " +
+                        $"IDR {idr}   cursor {_cursoresRecibidos}   cambios de config {cambiosConfig}   " +
                         $"RAM {proceso.PrivateMemorySize64 / 1024 / 1024} MB (inicio {ramInicio / 1024 / 1024})   " +
                         $"{reloj.Elapsed:hh\\:mm\\:ss}" +
                         (_cierre is null ? string.Empty : $"\n{_cierre}"));
@@ -673,6 +677,53 @@ public partial class RelayWindow : Window
 
         if (respuesta == MessageBoxResult.OK)
             Enviar(new HostAction { Kind = HostAction.Types.Kind.HostActionReboot });
+    }
+
+    // ------------------------------------------------------------ cursor (11)
+
+    /// <summary>Ultima forma pintada. El host manda un id creciente para no tener
+    /// que reconstruir el cursor de Windows cuando repite la misma.</summary>
+    private ulong _formaCursor;
+
+    private long _cursoresRecibidos;
+
+    /// <summary>
+    /// El cursor de la PC REMOTA sobre el video.
+    ///
+    /// Hasta esta fase el puntero que se veia era el LOCAL: Desktop Duplication
+    /// no compone el cursor en la imagen, asi que el escritorio remoto llegaba
+    /// sin raton y coincidian porque el tecnico movia el suyo. Se notaba en que
+    /// la forma no cambiaba nunca -- ni barra de texto, ni reloj de ocupado.
+    ///
+    /// ponytail: se usa la FORMA y la visibilidad, no la posicion. Dibujar un
+    /// segundo puntero donde diga el host exigiria componerlo dentro del
+    /// swapchain -- por el airspace del HwndHost, ningun XAML puede ir encima --
+    /// y eso es un quad texturizado en D3D. Mientras el tecnico conduce, su
+    /// propio cursor ya esta en el sitio correcto; lo que hoy NO se ve es a
+    /// alguien moviendo el raton fisico al otro lado.
+    /// </summary>
+    private void RecibirCursor(CursorUpdate aviso)
+    {
+        _cursoresRecibidos++;
+
+        var forma = aviso.Shape;
+
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (forma is null || forma.ShapeId == _formaCursor)
+            {
+                Video.UsarCursor(IntPtr.Zero, aviso.Visible);
+                return;
+            }
+
+            _formaCursor = forma.ShapeId;
+
+            var cursor = CursorRemoto.Crear(
+                forma.Bgra.ToByteArray(), (int)forma.Width, (int)forma.Height,
+                (int)forma.HotspotX, (int)forma.HotspotY);
+
+            Video.UsarCursor(cursor, aviso.Visible);
+        });
     }
 
     // ---------------------------------------------------------------- archivos

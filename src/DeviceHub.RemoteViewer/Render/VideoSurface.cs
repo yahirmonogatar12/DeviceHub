@@ -62,8 +62,43 @@ public sealed class VideoSurface : HwndHost
     /// Windows enruta los mensajes del raton a la ventana de debajo en vez de a
     /// esta. Se responde HTCLIENT para quedarselos.
     /// </summary>
+    /// <summary>
+    /// El cursor que se ensena sobre el video: el de la PC REMOTA. Fase 11.
+    ///
+    /// Se responde a WM_SETCURSOR porque la clase "static" pone la flecha por su
+    /// cuenta en cada movimiento; poner el cursor una vez y marcharse no dura ni
+    /// un pixel.
+    /// </summary>
+    private IntPtr _cursor;
+    private bool _cursorVisible = true;
+
+    public void UsarCursor(IntPtr nuevo, bool visible)
+    {
+        _cursorVisible = visible;
+
+        if (nuevo == IntPtr.Zero || nuevo == _cursor)
+            return;
+
+        var anterior = _cursor;
+        _cursor = nuevo;
+
+        // El anterior se destruye DESPUES de cambiar el campo: destruirlo antes
+        // deja un instante en el que WM_SETCURSOR usaria un handle muerto.
+        if (anterior != IntPtr.Zero)
+            DestroyIcon(anterior);
+    }
+
     protected override IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        if (msg == WmSetCursor && _cursor != IntPtr.Zero)
+        {
+            // Zero oculta el puntero, que es lo correcto cuando la aplicacion de
+            // alla lo escondio -- un juego, un visor a pantalla completa.
+            SetCursor(_cursorVisible ? _cursor : IntPtr.Zero);
+            handled = true;
+            return 1;
+        }
+
         if (msg == WmNcHitTest)
         {
             handled = true;
@@ -96,6 +131,14 @@ public sealed class VideoSurface : HwndHost
     }
 
     private const int WmNcHitTest = 0x0084;
+    private const int WmSetCursor = 0x0020;
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetCursor(IntPtr cursor);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DestroyIcon(IntPtr icono);
     private const int HtClient = 1;
     private const int WmMouseFirst = 0x0200;
     private const int WmMouseLast = 0x020E;
@@ -117,6 +160,12 @@ public sealed class VideoSurface : HwndHost
 
     protected override void DestroyWindowCore(HandleRef hwnd)
     {
+        if (_cursor != IntPtr.Zero)
+        {
+            DestroyIcon(_cursor);
+            _cursor = IntPtr.Zero;
+        }
+
         _listo.Reset();
         _hwnd = IntPtr.Zero;
         DestroyWindow(hwnd.Handle);

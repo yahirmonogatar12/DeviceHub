@@ -100,7 +100,7 @@ public static class RelaySession
                     {
                         MaxProtocolVersion = RemoteSessionProtocol.Version,
                         Codecs = { VideoCodec.H264 },
-                        SupportsCursor = false,
+                        SupportsCursor = true,
                         SupportsInput = true
                     }
                 }
@@ -452,6 +452,47 @@ public static class RelaySession
                 // crezca y para no repartir un arrastre entre dos vueltas.
                 while (Pendientes.TryDequeue(out var evento))
                     _entrada?.Apply(evento);
+
+                // El CURSOR, antes de decidir si hay imagen nueva. Mover el
+                // raton no cambia el escritorio, asi que este frame se descarta
+                // dos lineas mas abajo -- y con el se iria el unico aviso de que
+                // el puntero se movio.
+                //
+                // Va suelto y no dentro del video a proposito: son dos numeros y
+                // pueden salir a 60-120 por segundo contra los 20-30 de la
+                // imagen. Es lo que hace que el control se SIENTA inmediato
+                // aunque la pantalla no lo sea.
+                if (captura.TomarCursor() is { } puntero)
+                {
+                    var aviso = new CursorUpdate
+                    {
+                        X = puntero.X,
+                        Y = puntero.Y,
+                        Visible = puntero.Visible
+                    };
+
+                    // La forma solo viaja cuando cambio. Reenviarla en cada
+                    // movimiento serian kilobytes por cada pixel recorrido.
+                    if (puntero.Bgra is not null)
+                    {
+                        aviso.Shape = new CursorShape
+                        {
+                            ShapeId = puntero.FormaId,
+                            Width = (uint)puntero.Ancho,
+                            Height = (uint)puntero.Alto,
+                            HotspotX = (uint)puntero.HotspotX,
+                            HotspotY = (uint)puntero.HotspotY,
+                            Bgra = Google.Protobuf.ByteString.CopyFrom(puntero.Bgra)
+                        };
+                    }
+
+                    salida.TryWrite(new Enviable(null, null, new RemotePacket
+                    {
+                        ProtocolVersion = RemoteSessionProtocol.Version,
+                        SessionId = opciones.SesionId,
+                        Cursor = aviso
+                    }));
+                }
 
                 IReadOnlyList<EncodedFrame> producidos;
 

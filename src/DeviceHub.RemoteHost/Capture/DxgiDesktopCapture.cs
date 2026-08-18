@@ -34,6 +34,10 @@ public sealed class DxgiDesktopCapture : IScreenCapture
     private IDXGIOutput1 _output = null!;
     private IDXGIOutputDuplication _duplication = null!;
 
+    private readonly CursorTracker _cursor = new();
+
+    public CursorState? TomarCursor() => _cursor.Tomar();
+
     private bool _frameOutstanding;
     private ulong _frameId;
 
@@ -156,6 +160,12 @@ public sealed class DxgiDesktopCapture : IScreenCapture
 
         if (result.Failure)
             throw Fail(result, "AcquireNextFrame fallo");
+
+        // El PUNTERO viaja en la misma llamada, y hasta la Fase 11 se tiraba.
+        // Desktop Duplication NO compone el cursor en la imagen: lo entrega
+        // aparte, asi que sin leer esto el escritorio remoto llega literalmente
+        // sin raton.
+        _cursor.Anotar(info, duplication, Width, Height, 0, 0);
 
         // A partir de aqui el frame esta adquirido: cualquier salida tiene que
         // liberarlo o quedaria retenido y el siguiente Acquire fallaria.

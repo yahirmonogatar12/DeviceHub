@@ -46,6 +46,10 @@ public sealed class VirtualDesktopCapture : IScreenCapture
     /// <summary>Un duplicador por monitor, con su esquina dentro del lienzo.</summary>
     private (IDXGIOutput1 Salida, IDXGIOutputDuplication Duplicador, int X, int Y)[] _monitores = [];
 
+    private readonly CursorTracker _cursor = new();
+
+    public CursorState? TomarCursor() => _cursor.Tomar();
+
     private bool _frameVivo;
     private ulong _frameId;
 
@@ -114,6 +118,10 @@ public sealed class VirtualDesktopCapture : IScreenCapture
 
             try
             {
+                // El puntero se anota aunque este monitor no haya cambiado de
+                // imagen: la esquina lo coloca dentro del lienzo compuesto.
+                _cursor.Anotar(info, monitor.Duplicador, Width, Height, monitor.X, monitor.Y);
+
                 if (info.LastPresentTime == 0)
                     continue;   // solo se movio el puntero; la imagen es la de antes
 
