@@ -112,6 +112,110 @@ public sealed class H264Encoder : IVideoEncoder
     private const int MaxRenegotiations = 3;
     private int _renegotiationsSinFruto;
 
+    /// <summary>MFSampleExtension_ForceKeyFrame.</summary>
+    private static readonly Guid ForceKeyFrame =
+        new("089e57c7-47d3-4a26-bf9c-4b64fafb5d1e");
+
+    /// <summary>CODECAPI_AVEncCommonMeanBitRate.</summary>
+    private static readonly Guid MeanBitRate =
+        new("f7222374-2144-4815-b550-a37f8e12ee52");
+
+    private bool _forzarKeyframe;
+
+    public long KeyframesForzados { get; private set; }
+    public long BitratesAplicados { get; private set; }
+
+    /// <summary>
+    /// El proximo frame sale como IDR. Lo pide el visor cuando pierde la
+    /// sincronia, y hasta la Fase 13 su peticion se registraba y se tiraba.
+    ///
+    /// SOLO desde el hilo de captura, como todo lo que toca el MFT.
+    /// </summary>
+    public void ForzarKeyframe() => _forzarKeyframe = true;
+
+    /// <summary>
+    /// Cambia el bitrate objetivo SIN rehacer el codificador.
+    ///
+    /// Recrearlo seria lo facil y esta descartado: estrena SPS, o sea
+    /// config_version nueva, o sea que el visor tira decodificador y presentador.
+    /// Hacer eso cada vez que la red respira convertiria la adaptacion en el
+    /// problema que viene a resolver.
+    ///
+    /// Devuelve false si el codificador no expone ICodecAPI. No es un fallo: se
+    /// sigue con el bitrate fijo, que es lo que habia.
+    /// </summary>
+    public bool CambiarBitrate(int bitsPorSegundo)
+    {
+        // Vortice no cubre ICodecAPI, asi que se declara aqui y solo esa.
+        // Es el precedente de la Fase 2: interop puntual para la API que falta,
+        // nunca migrar toda la capa a otra biblioteca por una funcion.
+        object? crudo = null;
+
+        try
+        {
+            crudo = System.Runtime.InteropServices.Marshal
+                .GetObjectForIUnknown(_transform.NativePointer);
+
+            if (crudo is not ICodecAPI codec)
+                return false;
+
+            var api = MeanBitRate;
+            object valor = bitsPorSegundo;
+
+            if (codec.SetValue(ref api, ref valor) < 0)
+                return false;
+
+            BitratesAplicados++;
+            return true;
+        }
+        catch (Exception)
+        {
+            // Un codificador que no admite cambiar el bitrate en caliente no es
+            // un fallo de sesion: se sigue con el fijo, que es lo que habia.
+            return false;
+        }
+        finally
+        {
+            if (crudo is not null)
+                System.Runtime.InteropServices.Marshal.ReleaseComObject(crudo);
+        }
+    }
+
+    /// <summary>
+    /// ICodecAPI, declarada a mano porque Vortice no la trae.
+    ///
+    /// El ORDEN de los metodos es el de la vtable y no se puede tocar: aunque
+    /// solo se use SetValue, los seis de delante tienen que estar declarados o
+    /// la llamada acabaria en el metodo equivocado. Por eso estan y por eso no
+    /// se borran "porque no se usan".
+    /// </summary>
+    [System.Runtime.InteropServices.ComImport]
+    [System.Runtime.InteropServices.Guid("901db4c7-31ce-41a2-85dc-8fa0bf41b8da")]
+    [System.Runtime.InteropServices.InterfaceType(
+        System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
+    private interface ICodecAPI
+    {
+        [System.Runtime.InteropServices.PreserveSig] int IsSupported(ref Guid api);
+        [System.Runtime.InteropServices.PreserveSig] int IsModifiable(ref Guid api);
+
+        [System.Runtime.InteropServices.PreserveSig]
+        int GetParameterRange(ref Guid api, out IntPtr minimo, out IntPtr maximo, out IntPtr paso);
+
+        [System.Runtime.InteropServices.PreserveSig]
+        int GetParameterValues(ref Guid api, out IntPtr valores, out int cuantos);
+
+        [System.Runtime.InteropServices.PreserveSig]
+        int GetDefaultValue(ref Guid api, out IntPtr valor);
+
+        [System.Runtime.InteropServices.PreserveSig]
+        int GetValue(ref Guid api, out IntPtr valor);
+
+        [System.Runtime.InteropServices.PreserveSig]
+        int SetValue(ref Guid api,
+            [System.Runtime.InteropServices.MarshalAs(
+                System.Runtime.InteropServices.UnmanagedType.Struct)] ref object valor);
+    }
+
     public IReadOnlyList<EncodedFrame> Encode(VideoFrame frame, CancellationToken cancellationToken)
     {
         var salidas = new List<EncodedFrame>(1);
@@ -160,6 +264,27 @@ public sealed class H264Encoder : IVideoEncoder
         sample.AddBuffer(buffer);
         sample.SampleTime = timestampUs * 10;      // microsegundos -> unidades de 100 ns
         sample.SampleDuration = _frameDurationHns;
+
+        // Fase 13. Un IDR bajo demanda se pide POR MUESTRA, con un atributo, y no
+        // por ICodecAPI: es una linea en vez de una interfaz COM entera, y el
+        // codificador que lo ignore simplemente tardara un GOP mas -- que es
+        // exactamente lo que pasaba antes, cuando el KeyframeRequest llegaba y
+        // nadie hacia nada con el.
+        if (_forzarKeyframe)
+        {
+            _forzarKeyframe = false;
+
+            try
+            {
+                sample.Set(ForceKeyFrame, 1u);
+                KeyframesForzados++;
+            }
+            catch (SharpGenException)
+            {
+                // Codificador que no admite el atributo. No es motivo para tirar
+                // el frame: sale como frame normal.
+            }
+        }
 
         _transform.ProcessInput(0, sample, 0);
         Submitted++;

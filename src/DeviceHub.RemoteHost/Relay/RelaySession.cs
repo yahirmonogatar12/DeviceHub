@@ -237,6 +237,15 @@ public static class RelaySession
     /// </summary>
     private static int _pantalla;
 
+    /// <summary>
+    /// Fase 13. Los dos los PIDE el hilo de red y los APLICA el de captura, que
+    /// es el unico dueno del MFT. Tocar el codificador desde fuera de su hilo es
+    /// la familia de cuelgues que costo dos fases entender.
+    /// </summary>
+    private static volatile bool _keyframePedido;
+
+    private static int _bitrateDeseado;
+
     private sealed class Contadores
     {
         public long Capturados, Codificados, Claves, Enviados, Trozos, Bytes;
@@ -335,6 +344,12 @@ public static class RelaySession
                         // la entrada llega de verdad al otro lado o se la traga
                         // el escritorio equivocado.
                         $"entrada {_entrada?.Applied ?? 0}/{_entrada?.Rejected ?? 0}");
+
+                    // El bitrate se DECIDE aqui, donde se ve la cola, y se
+                    // APLICA en el hilo de captura. Cada 2 s y no por frame: un
+                    // controlador que reacciona a cada hipo produce vaiven.
+                    _bitrateDeseado = ControlBitrate.Siguiente(
+                        _bitrateDeseado, cola.Reader.Count, 8);
 
                     siguienteAviso += TimeSpan.FromSeconds(2);
                 }
@@ -617,6 +632,13 @@ public static class RelaySession
             $"Resolution {captura.Width}x{captura.Height}");
 
         var avisadoDeCeguera = 0;
+        // El bitrate vigente. Arranca en el configurado y de ahi lo mueve el
+        // controlador segun lo que aguante la red.
+        var bitrateActual = opciones.Bitrate;
+
+        if (_bitrateDeseado == 0)
+            _bitrateDeseado = opciones.Bitrate;
+
         var version = ++cuenta.ConfigVersion;
         var configEnviada = false;
         var siguienteRevision = reloj.Elapsed;
@@ -749,6 +771,38 @@ public static class RelaySession
                         SessionId = opciones.SesionId,
                         Cursor = aviso
                     }));
+                }
+
+                // Lo que el hilo de red pidio, aplicado AQUI, que es donde vive
+                // el codificador.
+                if (_keyframePedido)
+                {
+                    _keyframePedido = false;
+                    codificador.ForzarKeyframe();
+
+                    // Y la config DELANTE del IDR. Si el visor perdio el SPS, un
+                    // keyframe suelto no le sirve de nada: es la regla que la
+                    // Fase 2 dejo escrita y que hasta ahora no tenia quien la
+                    // ejecutara.
+                    configEnviada = false;
+                }
+
+                if (_bitrateDeseado != bitrateActual && _bitrateDeseado > 0)
+                {
+                    if (codificador.CambiarBitrate(_bitrateDeseado))
+                    {
+                        opciones.Escribir(
+                            $"Bitrate {bitrateActual / 1000} -> {_bitrateDeseado / 1000} kbps");
+
+                        bitrateActual = _bitrateDeseado;
+                    }
+                    else
+                    {
+                        // El codificador no deja cambiarlo en caliente. Se deja
+                        // de intentar en vez de repetirlo cada 2 s para siempre.
+                        opciones.Escribir("Este codificador no admite cambiar el bitrate en caliente");
+                        bitrateActual = _bitrateDeseado;
+                    }
                 }
 
                 IReadOnlyList<EncodedFrame> producidos;
@@ -1141,8 +1195,10 @@ public static class RelaySession
                         break;
 
                     case RemotePacket.PayloadOneofCase.KeyframeRequest:
-                        // La Fase 13 forzara un IDR con ICodecAPI. Aqui basta con
-                        // el que el codificador genera por su cuenta.
+                        // Se anota y lo atiende el hilo de captura. Hasta la Fase
+                        // 13 esto se registraba y se tiraba: el visor pedia
+                        // ayuda y nadie contestaba.
+                        _keyframePedido = true;
                         opciones.Escribir("El viewer pidio un keyframe.");
                         break;
                 }
