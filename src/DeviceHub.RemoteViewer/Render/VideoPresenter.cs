@@ -26,8 +26,8 @@ public sealed class VideoPresenter : IDisposable
     private readonly IDXGISwapChain1 _swapChain;
     private readonly ID3D11VideoDevice _videoDevice;
     private readonly ID3D11VideoContext _videoContext;
-    private readonly ID3D11VideoProcessorEnumerator _enumerator;
-    private readonly ID3D11VideoProcessor _processor;
+    private ID3D11VideoProcessorEnumerator _enumerator;
+    private ID3D11VideoProcessor _processor;
 
     /// <summary>
     /// Crea el dispositivo que comparten decodificador y presentador.
@@ -106,10 +106,59 @@ public sealed class VideoPresenter : IDisposable
 
         _processor = _videoDevice.CreateVideoProcessor(_enumerator, 0);
 
-        // Recorte al trozo visible. H.264 codifica en macrobloques de 16, asi que
-        // 1080 de alto viaja como 1088 y las 8 filas de mas son relleno: sin este
-        // recorte se pintan, y se ven.
-        if (visibleX != 0 || visibleY != 0 || width != anchoCodificado || height != altoCodificado)
+        Recortar(visibleX, visibleY, width, height, anchoCodificado, altoCodificado);
+
+    }
+
+    public int Width { get; private set; }
+    public int Height { get; private set; }
+
+    /// <summary>
+    /// Cambia de resolucion SIN tirar el swapchain.
+    ///
+    /// Es la diferencia entre que se vea y que no. Un swapchain NUEVO sobre el
+    /// mismo HWND no lo compone el DWM hasta que la ventana recibe un WM_SIZE, y
+    /// al cambiar de monitor el tamano de la ventana no tiene por que cambiar:
+    /// resultado, imagen congelada hasta que alguien la redimensiona a mano.
+    ///
+    /// ResizeBuffers conserva el swapchain y con el su asociacion con la
+    /// ventana, asi que lo unico que se rehace es el procesador de video -- que
+    /// SI depende del tamano de entrada.
+    /// </summary>
+    public void Reconfigurar(
+        int anchoCodificado, int altoCodificado, int visibleX, int visibleY, int width, int height)
+    {
+        _processor.Dispose();
+        _enumerator.Dispose();
+
+        Width = width;
+        Height = height;
+
+        _swapChain.ResizeBuffers(2, (uint)width, (uint)height, Format.B8G8R8A8_UNorm, SwapChainFlags.None);
+
+        _enumerator = _videoDevice.CreateVideoProcessorEnumerator(new VideoProcessorContentDescription
+        {
+            InputFrameFormat = VideoFrameFormat.Progressive,
+            InputWidth = (uint)anchoCodificado,
+            InputHeight = (uint)altoCodificado,
+            OutputWidth = (uint)width,
+            OutputHeight = (uint)height,
+            Usage = VideoUsage.PlaybackNormal
+        });
+
+        _processor = _videoDevice.CreateVideoProcessor(_enumerator, 0);
+
+        Recortar(visibleX, visibleY, width, height, anchoCodificado, altoCodificado);
+    }
+
+    /// <summary>
+    /// Recorte al trozo visible. H.264 codifica en macrobloques de 16, asi que
+    /// 1080 de alto viaja como 1088 y las 8 filas de mas son relleno: sin este
+    /// recorte se pintan, y se ven.
+    /// </summary>
+    private void Recortar(int visibleX, int visibleY, int width, int height, int ancho, int alto)
+    {
+        if (visibleX != 0 || visibleY != 0 || width != ancho || height != alto)
         {
             _videoContext.VideoProcessorSetStreamSourceRect(
                 _processor, 0, true, new RawRect(visibleX, visibleY, visibleX + width, visibleY + height));
@@ -121,9 +170,6 @@ public sealed class VideoPresenter : IDisposable
         _videoContext.VideoProcessorSetStreamColorSpace(_processor, 0, new VideoProcessorColorSpace { Nominal_Range = 1 });
         _videoContext.VideoProcessorSetOutputColorSpace(_processor, new VideoProcessorColorSpace { RGB_Range = 0 });
     }
-
-    public int Width { get; }
-    public int Height { get; }
 
     /// <summary>
     /// Pinta un frame NV12 y lo presenta. `subresource` es la rebanada del array

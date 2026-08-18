@@ -688,6 +688,7 @@ public static class RelaySession
             $"Resolution {captura.Width}x{captura.Height}");
 
         var siguienteFrame = Stopwatch.GetTimestamp();
+        var siguienteLista = TimeSpan.Zero;
         var avisadoDeCeguera = 0;
         // El bitrate vigente. Arranca en el configurado y de ahi lo mueve el
         // controlador segun lo que aguante la red.
@@ -767,6 +768,25 @@ public static class RelaySession
                     {
                         opciones.Escribir($"El tecnico pidio la pantalla {_pantalla}; se rehace la captura");
                         return;
+                    }
+
+                    // La lista de pantallas se REPITE, no se manda solo al
+                    // empezar. El visor puede conectar despues que el host --
+                    // pasa siempre que el agente tarda en arrancarlo -- y
+                    // entonces se perdia el unico mensaje y el desplegable se
+                    // quedaba vacio. "A veces aparece y a veces no" era eso.
+                    //
+                    // Es el mismo motivo por el que el relay repite VideoConfig.
+                    if (reloj.Elapsed >= siguienteLista)
+                    {
+                        siguienteLista = reloj.Elapsed + TimeSpan.FromSeconds(3);
+
+                        salida.TryWrite(new Enviable(null, null, new RemotePacket
+                        {
+                            ProtocolVersion = RemoteSessionProtocol.Version,
+                            SessionId = opciones.SesionId,
+                            Displays = ListaDePantallas(pantallas, pedida)
+                        }));
                     }
 
                     // El portapapeles, en la MISMA cadencia de medio segundo: no

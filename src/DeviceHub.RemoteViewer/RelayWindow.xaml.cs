@@ -324,24 +324,19 @@ public partial class RelayWindow : Window
                         // lleva el SPS anterior dentro.
                         decoder?.Dispose();
 
-                        // EL PRESENTADOR SE CONSERVA si la geometria no cambio.
+                        // EL PRESENTADOR NO SE TIRA NUNCA, ni aunque cambie la
+                        // resolucion.
                         //
-                        // Antes se tiraba siempre, y con el el swapchain. Un
-                        // swapchain nuevo sobre el MISMO HWND no lo compone el
-                        // DWM hasta que la ventana recibe un WM_SIZE: al bloquear
-                        // la PC se seguia viendo el escritorio anterior y la
-                        // pantalla de bloqueo no aparecia hasta redimensionar el
-                        // visor a mano.
+                        // Un swapchain NUEVO sobre el mismo HWND no lo compone el
+                        // DWM hasta que la ventana recibe un WM_SIZE. Al bloquear
+                        // la PC eso dejaba la pantalla anterior congelada; al
+                        // cambiar de monitor pasa lo mismo y encima el tamano de
+                        // la ventana no tiene por que cambiar, asi que el WM_SIZE
+                        // no llega nunca y la imagen se queda clavada para
+                        // siempre.
                         //
-                        // Y saltar de escritorio no cambia la resolucion, que es
-                        // justo el caso en que esto ocurria.
-                        if (presentador is not null
-                            && (presentador.Width != (int)config.Width
-                                || presentador.Height != (int)config.Height))
-                        {
-                            presentador.Dispose();
-                            presentador = null;
-                        }
+                        // Se reconfigura mas abajo, cuando ya se conoce la
+                        // apertura real del flujo nuevo.
 
                         decoder = new H264Decoder(device, (int)config.Width, (int)config.Height);
 
@@ -384,10 +379,26 @@ public partial class RelayWindow : Window
                             {
                                 decodificados++;
 
-                                presentador ??= new VideoPresenter(
-                                    device, hwnd, decoder.Width, decoder.Height,
-                                    decoder.Aperture.X, decoder.Aperture.Y,
-                                    decoder.Aperture.Width, decoder.Aperture.Height);
+                                if (presentador is null)
+                                {
+                                    presentador = new VideoPresenter(
+                                        device, hwnd, decoder.Width, decoder.Height,
+                                        decoder.Aperture.X, decoder.Aperture.Y,
+                                        decoder.Aperture.Width, decoder.Aperture.Height);
+                                }
+                                else if (presentador.Width != decoder.Aperture.Width
+                                         || presentador.Height != decoder.Aperture.Height)
+                                {
+                                    // Cambio de monitor o de resolucion. Se
+                                    // redimensionan los buffers y se rehace el
+                                    // procesador de video, pero el swapchain -- y
+                                    // con el su vinculo con la ventana -- sigue
+                                    // siendo el mismo.
+                                    presentador.Reconfigurar(
+                                        decoder.Width, decoder.Height,
+                                        decoder.Aperture.X, decoder.Aperture.Y,
+                                        decoder.Aperture.Width, decoder.Aperture.Height);
+                                }
 
                                 // La captura la pide la interfaz y la atiende el
                                 // presentador: el frame solo existe convertido a
