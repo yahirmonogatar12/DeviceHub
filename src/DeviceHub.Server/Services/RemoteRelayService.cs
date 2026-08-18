@@ -388,6 +388,7 @@ public sealed class RemoteRelayGrpcService(
             RemotePacket.PayloadOneofCase.VideoChunk or
             RemotePacket.PayloadOneofCase.Cursor or
             RemotePacket.PayloadOneofCase.Displays or
+            RemotePacket.PayloadOneofCase.HostStatus or
             RemotePacket.PayloadOneofCase.FileList => papel == RemoteRole.Host,
 
             RemotePacket.PayloadOneofCase.Input or

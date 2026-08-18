@@ -77,7 +77,20 @@ message RemotePacket {
     FileChunk           file_chunk        = 28;
     FileAck             file_ack          = 29;
     ClipboardFiles      clipboard_files   = 30;
+    HostStatus          host_status       = 31;
   }
+}
+
+// Lo que el host tiene que contar y hoy solo acaba en el log del agente.
+//
+// Existe porque diagnosticar una sesion remota exigia entrar en la PC de planta
+// a leer el visor de eventos -- y quien esta mirando el problema es el tecnico,
+// que tiene el visor delante y no puede ver nada de esto. Fallos de captura,
+// cambios de escritorio, respaldos que entran: todo eso pasaba en silencio.
+//
+// NO lleva secretos y no sustituye al log: es la copia que ve quien mira.
+message HostStatus {
+  string text = 1;
 }
 
 // Fase 25. Archivos en el portapapeles (CF_HDROP), en los dos sentidos.

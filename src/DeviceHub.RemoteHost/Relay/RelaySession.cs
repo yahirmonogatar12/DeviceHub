@@ -295,6 +295,13 @@ public static class RelaySession
 
         var cuenta = new Contadores();
 
+        _avisar = texto => cola.Writer.TryWrite(new Enviable(null, null, new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = opciones.SesionId,
+            HostStatus = new HostStatus { Text = texto }
+        }));
+
         var hilo = new Thread(() => Capturar(cola.Writer, cuenta, opciones, cancellationToken))
         {
             IsBackground = true,
@@ -505,7 +512,7 @@ public static class RelaySession
                 // fallo normal y recuperable terminaba la sesion entera.
                 fallosSeguidos++;
 
-                opciones.Escribir(
+                Avisar(opciones,
                     $"Fallo al capturar (intento {fallosSeguidos}): {fallo.GetType().Name}: {fallo.Message}");
 
                 // SI LO QUE FALLO FUE UN CAMBIO DE PANTALLA, SE VUELVE ATRAS.
@@ -520,7 +527,7 @@ public static class RelaySession
                 // que la eleccion nueva no se pudo.
                 if (fallosSeguidos >= 2 && _pantalla != pantallaBuena)
                 {
-                    opciones.Escribir(
+                    Avisar(opciones,
                         $"No se pudo capturar la pantalla {_pantalla}; se vuelve a la {pantallaBuena}");
 
                     _pantalla = pantallaBuena;
@@ -638,7 +645,7 @@ public static class RelaySession
         // Lo que DXGI enumero, tal cual, en el log del agente. Si el visor
         // ensena el desplegable vacio, esta linea dice si el problema es que
         // aqui no se ven o que el mensaje no llego.
-        opciones.Escribir(pantallas.Count == 0
+        Avisar(opciones, pantallas.Count == 0
             ? $"DXGI no enumero NINGUNA pantalla. {Pantallas.Diagnostico()}"
             : $"Pantallas: {string.Join(" | ", pantallas.Select(p => $"{p.Id}:{p.Nombre} {p.Ancho}x{p.Alto} @{p.X},{p.Y} [{p.Adaptador}]"))}");
 
@@ -972,6 +979,21 @@ public static class RelaySession
         siguiente = Math.Max(siguiente + intervalo, Stopwatch.GetTimestamp());
     }
 
+    /// <summary>
+    /// Cuenta algo AL TECNICO, no solo al log de la maquina.
+    ///
+    /// Lo importante va por los dos sitios: el log queda para despues y esto se
+    /// ve ahora. Llevabamos un dia entero diagnosticando a ciegas porque todo lo
+    /// que el host sabia se quedaba en un visor de eventos que nadie iba a abrir.
+    /// </summary>
+    private static Action<string>? _avisar;
+
+    private static void Avisar(RelayOptions opciones, string texto)
+    {
+        opciones.Escribir(texto);
+        _avisar?.Invoke(texto);
+    }
+
     private static long Ahora()
         => Stopwatch.GetTimestamp() * 1_000_000L / Stopwatch.Frequency;
 
@@ -1024,7 +1046,7 @@ public static class RelaySession
             // Que DXGI no pueda NO es el final: en el escritorio seguro es lo
             // esperado. Se dice cual fue el motivo -- si el respaldo tambien
             // falla, hacen falta los dos errores para saber que pasa.
-            opciones.Escribir($"DXGI no puede capturar aqui ({ex.Message}); se pasa al respaldo GDI");
+            Avisar(opciones, $"DXGI no puede capturar aqui ({ex.Message}); se pasa al respaldo GDI");
 
             var gdi = new GdiDesktopCapture();
 

@@ -304,6 +304,10 @@ public partial class RelayWindow : Window
                         cambiosConfig++;
                         config = paquete.VideoConfig;
 
+                        // El cambio se completo: se limpia el "Cambiando a..."
+                        // que si no se queda pegado aunque ya no sea verdad.
+                        Nota($"{config.Width}x{config.Height}");
+
                         // La resolucion remota puede cambiar a media sesion, asi
                         // que el tamano del lienzo se recalcula aqui y no una vez
                         // al arrancar.
@@ -454,6 +458,13 @@ public partial class RelayWindow : Window
 
                     case RemotePacket.PayloadOneofCase.Clipboard:
                         RecibirPortapapeles(paquete.Clipboard.Text);
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.HostStatus:
+                        // Lo que pasa en la PC controlada, en la barra del
+                        // tecnico. Antes solo acababa en el visor de eventos de
+                        // esa maquina, o sea en ningun sitio util.
+                        Nota(paquete.HostStatus.Text);
                         break;
 
                     case RemotePacket.PayloadOneofCase.Displays:
