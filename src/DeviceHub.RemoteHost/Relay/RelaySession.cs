@@ -309,23 +309,15 @@ public static class RelaySession
             // servicio puede arrancar en una que no es la interactiva.
             InputDesktop.UsarEstacionInteractiva();
 
-            using var escritorio = new InputDesktop();
-            escritorio.SeguirActivo();
-
-            // HILO DE ENTRADA APARTE, y esta vez con motivo medido.
+            // HILO DE ENTRADA APARTE, y con motivo medido.
             //
             // SetThreadDesktop falla si el hilo tiene ventanas, y D3D11 y Media
             // Foundation crean ventanas ocultas en cuanto se codifica el primer
-            // frame. O sea que el hilo de captura NO PUEDE saltar a Winlogon una
-            // vez ha empezado a trabajar: el video seguia viendose -- DXGI
-            // entrega lo que haya en la salida -- pero SendInput disparaba contra
-            // el escritorio viejo. Se veia la pantalla de bloqueo y no se podia
-            // pulsar nada.
+            // frame. Este hilo no toca la GPU jamas, asi que si puede atarse.
             //
-            // Este hilo no toca la GPU jamas, asi que no tiene ventanas y si
-            // puede atarse. Tiene su PROPIO InputDesktop: el intento de la 1.4.1
-            // fallo porque dos hilos abrian y CERRABAN handles del mismo, y el
-            // CloseDesktop de uno tiraba el escritorio bajo los pies del otro.
+            // Tiene su PROPIO InputDesktop: el intento de la 1.4.1 fallo porque
+            // dos hilos abrian y CERRABAN handles del mismo, y el CloseDesktop de
+            // uno tiraba el escritorio bajo los pies del otro.
             using var pararEntrada = new CancellationTokenSource();
             using var enlazado = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken, pararEntrada.Token);
@@ -347,47 +339,71 @@ public static class RelaySession
 
             while (reloj.Elapsed < duracion && !cancellationToken.IsCancellationRequested)
             {
-                try
-                {
-                    Escritorio(salida, cuenta, opciones, escritorio, reloj, duracion, cancellationToken);
-                    fallosSeguidos = 0;
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    // AQUI SE PERDIA LA SESION AL BLOQUEAR LA PC.
-                    //
-                    // Este catch estaba FUERA del bucle: un solo fallo mataba el
-                    // hilo de captura entero y la pantalla se quedaba congelada.
-                    // Y al saltar a Winlogon el primer intento falla a menudo --
-                    // DuplicateOutput no puede con un escritorio cuya transicion
-                    // sigue en curso -- asi que bloquear la PC era exactamente el
-                    // caso que lo disparaba.
-                    //
-                    // Ahora se reintenta y, sobre todo, se DICE cual fue el error:
-                    // sin esta linea no habia forma de saber si el escritorio
-                    // seguro se negaba, tardaba o ni se intentaba.
-                    fallosSeguidos++;
+                // UN HILO NUEVO POR ESCRITORIO.
+                //
+                // Aqui esta la razon de que la pantalla de bloqueo se viera "a
+                // veces si y a veces no". SetThreadDesktop solo funciona en un
+                // hilo SIN ventanas, y este las tiene en cuanto codifica un
+                // frame: o sea que un hilo que ya ha capturado no puede mudarse a
+                // Winlogon nunca mas. Lo unico que rehacia la captura era que
+                // Windows tuviera a bien mandar un ACCESS_LOST, y eso llega o no
+                // llega segun el momento. Esa era la moneda al aire.
+                //
+                // Un hilo recien creado es virgen: se ata PRIMERO al escritorio
+                // activo y crea el dispositivo D3D despues, ya dentro de el. Es
+                // lo mismo que hacen RustDesk y AnyDesk lanzando un proceso por
+                // escritorio, a escala de hilo y sin romper la sesion del relay.
+                Exception? fallo = null;
 
-                    opciones.Escribir(
-                        $"Fallo al capturar {escritorio.Name} (intento {fallosSeguidos}): " +
-                        $"{ex.GetType().Name}: {ex.Message}");
-
-                    if (fallosSeguidos >= 10)
+                var hilo = new Thread(() =>
+                {
+                    try
                     {
-                        cuenta.Fallo = ex;
-                        break;
-                    }
+                        using var escritorio = new InputDesktop();
+                        escritorio.SeguirActivo();
 
-                    // Medio segundo: lo que tarda Windows en terminar de montar
-                    // el escritorio nuevo. Reintentar en bucle cerrado solo
-                    // conseguiria diez fallos en diez milisegundos.
-                    if (cancellationToken.WaitHandle.WaitOne(500))
-                        break;
+                        Escritorio(salida, cuenta, opciones, escritorio, reloj, duracion, cancellationToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
+                    catch (Exception ex)
+                    {
+                        fallo = ex;
+                    }
+                })
+                {
+                    IsBackground = true,
+                    Name = "devicehub-captura"
+                };
+
+                hilo.Start();
+                hilo.Join();
+
+                if (fallo is null)
+                {
+                    fallosSeguidos = 0;
+                    continue;
                 }
+
+                // Al saltar a Winlogon el primer DuplicateOutput falla a menudo
+                // porque la transicion del escritorio sigue en curso. Antes ese
+                // fallo normal y recuperable terminaba la sesion entera.
+                fallosSeguidos++;
+
+                opciones.Escribir(
+                    $"Fallo al capturar (intento {fallosSeguidos}): {fallo.GetType().Name}: {fallo.Message}");
+
+                if (fallosSeguidos >= 10)
+                {
+                    cuenta.Fallo = fallo;
+                    break;
+                }
+
+                // Medio segundo: lo que tarda Windows en terminar de montar el
+                // escritorio nuevo.
+                if (cancellationToken.WaitHandle.WaitOne(500))
+                    break;
             }
         }
         catch (OperationCanceledException)
@@ -533,13 +549,23 @@ public static class RelaySession
                 {
                     siguienteRevision = reloj.Elapsed + TimeSpan.FromMilliseconds(500);
 
-                    // Solo para decidir si hay que rehacer la duplicacion. Que
-                    // este hilo no consiga ATARSE al escritorio nuevo da igual:
-                    // de inyectar la entrada se encarga el hilo de entrada, que
-                    // si puede.
-                    if (escritorio.SeguirActivo() == Salto.Cambiado)
+                    // Se sale TAMBIEN si no se pudo atar: eso significa que el
+                    // escritorio cambio y este hilo ya no puede seguirlo -- tiene
+                    // ventanas de D3D. Salir es lo correcto, porque fuera hay un
+                    // hilo nuevo esperando para nacer en el escritorio bueno.
+                    //
+                    // Tratarlo como "no ha pasado nada" es lo que dejaba la
+                    // captura clavada en el escritorio viejo.
+                    var salto = escritorio.SeguirActivo();
+
+                    if (salto is Salto.Cambiado or Salto.NoSePudoAtar)
                     {
-                        opciones.Escribir($"El escritorio activo es {escritorio.Name}; se rehace la captura");
+                        opciones.Escribir(
+                            salto == Salto.Cambiado
+                                ? $"El escritorio activo es {escritorio.Name}; se rehace la captura"
+                                : $"El escritorio cambio a {escritorio.NombrePedido} y este hilo no puede " +
+                                  "seguirlo; se rehace la captura en uno nuevo");
+
                         return;
                     }
 
