@@ -62,7 +62,7 @@ public sealed class InputDesktop : IDisposable
     /// </summary>
     public static string NombreDeEntrada()
     {
-        var entrada = OpenInputDesktop(0, false, DesktopGenericAll);
+        var entrada = OpenInputDesktop(0, false, ParaMirar);
 
         if (entrada == IntPtr.Zero)
         {
@@ -106,7 +106,14 @@ public sealed class InputDesktop : IDisposable
     /// </summary>
     public Salto SeguirActivo()
     {
-        var entrada = OpenInputDesktop(0, false, DesktopGenericAll);
+        var entrada = OpenInputDesktop(0, false, ParaEscribir);
+
+        // Sin permiso de escritura se intenta al menos el de lectura: la captura
+        // podra seguir al escritorio aunque la entrada no llegue. Media sesion es
+        // mejor que ninguna, y el contador de rechazados de SendInput dira que
+        // falta la otra mitad.
+        if (entrada == IntPtr.Zero)
+            entrada = OpenInputDesktop(0, false, ParaMirar);
 
         if (entrada == IntPtr.Zero)
         {
@@ -193,19 +200,35 @@ public sealed class InputDesktop : IDisposable
     // ------------------------------------------------------------------ interop
 
     /// <summary>
-    /// GENERIC_READ, no GENERIC_ALL.
+    /// Para MIRAR: leer el nombre del escritorio de entrada, y nada mas.
     ///
-    /// Es la diferencia con libwebrtc, y no es cosmetica: la lista de control de
-    /// acceso del escritorio de Winlogon NO concede todos los derechos ni
-    /// siquiera a SYSTEM, asi que pedir GENERIC_ALL devuelve NULL y el codigo se
-    /// queda pensando que "no hay escritorio de entrada". El resultado era que la
-    /// captura no se rehacia jamas: pantalla congelada al bloquear, y congelada
-    /// al desbloquear, mientras el raton seguia llegando.
+    /// GENERIC_READ y no GENERIC_ALL. La lista de control de acceso del
+    /// escritorio de Winlogon no concede todos los derechos ni siquiera a
+    /// SYSTEM, asi que pedir GENERIC_ALL devuelve NULL -- y el codigo lo leia
+    /// como "no hay escritorio de entrada" en vez de "no me dejan mirar". La
+    /// captura no se rehacia jamas: congelada al bloquear y al desbloquear.
     ///
-    /// Chrome Remote Desktop pide GENERIC_READ en OpenInputDesktop y con eso le
-    /// basta hasta para SetThreadDesktop.
+    /// Es lo que pide Chrome Remote Desktop en OpenInputDesktop.
     /// </summary>
-    private const uint DesktopGenericAll = 0x80000000;
+    private const uint ParaMirar = 0x80000000;
+
+    /// <summary>
+    /// Para ESCRIBIR: atar el hilo y meterle entrada con SendInput.
+    ///
+    /// GENERIC_READ aqui NO vale, y confundir los dos usos fue una regresion
+    /// que dejo la sesion sin control: el permiso de lectura sobre un escritorio
+    /// no incluye DESKTOP_WRITEOBJECTS, y sin ese derecho SendInput no entra.
+    ///
+    /// Se piden los tres derechos concretos en vez de GENERIC_ALL porque
+    /// GENERIC_ALL sobre un escritorio son NUEVE, y Winlogon no los da todos.
+    /// Pedir de mas es como se pierde el permiso entero.
+    /// </summary>
+    private const uint ParaEscribir =
+        DesktopReadObjects | DesktopWriteObjects | DesktopSwitchDesktop;
+
+    private const uint DesktopReadObjects = 0x0001;
+    private const uint DesktopWriteObjects = 0x0080;
+    private const uint DesktopSwitchDesktop = 0x0100;
     private const uint WinstaAllAccess = 0x0000037F;
     private const int UoiName = 2;
 

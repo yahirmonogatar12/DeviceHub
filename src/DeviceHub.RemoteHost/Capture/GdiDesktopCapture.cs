@@ -358,19 +358,9 @@ public sealed class GdiDesktopCapture : IScreenCapture
     private const int SmCyScreen = 1;
     private const uint SrcCopy = 0x00CC0020;
     private const uint CaptureBlt = 0x40000000;
-    /// <summary>
-    /// GENERIC_READ, no GENERIC_ALL.
-    ///
-    /// Es la diferencia con libwebrtc, y no es cosmetica: la lista de control de
-    /// acceso del escritorio de Winlogon NO concede todos los derechos ni
-    /// siquiera a SYSTEM, asi que pedir GENERIC_ALL devuelve NULL y el codigo se
-    /// queda pensando que "no hay escritorio de entrada". El resultado era que la
-    /// captura no se rehacia jamas: pantalla congelada al bloquear, y congelada
-    /// al desbloquear, mientras el raton seguia llegando.
-    ///
-    /// Chrome Remote Desktop pide GENERIC_READ en OpenInputDesktop y con eso le
-    /// basta hasta para SetThreadDesktop.
-    /// </summary>
+    /// <summary>Solo mirar: este capturador lee la pantalla, no inyecta nada.
+    /// GENERIC_READ es lo que concede el escritorio de Winlogon, y es lo que
+    /// pide Chrome Remote Desktop para lo mismo.</summary>
     private const uint DesktopGenericAll = 0x80000000;
     private const int UoiName = 2;
 
