@@ -445,6 +445,9 @@ public static class RelaySession
             // lo normal; lo que no puede es no recuperarse nunca.
             var fallosSeguidos = 0;
 
+            // La ultima pantalla que se pudo capturar de verdad.
+            var pantallaBuena = _pantalla;
+
             while (reloj.Elapsed < duracion && !cancellationToken.IsCancellationRequested)
             {
                 // UN HILO NUEVO POR ESCRITORIO.
@@ -490,6 +493,9 @@ public static class RelaySession
 
                 if (fallo is null)
                 {
+                    // Esta pantalla si se pudo capturar: es a la que se vuelve si
+                    // la proxima eleccion sale mal.
+                    pantallaBuena = _pantalla;
                     fallosSeguidos = 0;
                     continue;
                 }
@@ -501,6 +507,26 @@ public static class RelaySession
 
                 opciones.Escribir(
                     $"Fallo al capturar (intento {fallosSeguidos}): {fallo.GetType().Name}: {fallo.Message}");
+
+                // SI LO QUE FALLO FUE UN CAMBIO DE PANTALLA, SE VUELVE ATRAS.
+                //
+                // Insistir 60 veces sobre una eleccion imposible deja al tecnico
+                // dos minutos con la imagen congelada y sin saber por que. El
+                // caso real: "todas a la vez" son 3840x1080, y un codificador que
+                // no traga esa resolucion lanza en cada intento.
+                //
+                // Volver a la pantalla que SI funcionaba es informacion, ademas
+                // de un arreglo: la imagen reaparece donde estaba, y eso dice
+                // que la eleccion nueva no se pudo.
+                if (fallosSeguidos >= 2 && _pantalla != pantallaBuena)
+                {
+                    opciones.Escribir(
+                        $"No se pudo capturar la pantalla {_pantalla}; se vuelve a la {pantallaBuena}");
+
+                    _pantalla = pantallaBuena;
+                    fallosSeguidos = 0;
+                    continue;
+                }
 
                 // Un minuto largo de reintentos, no cinco segundos. Rendirse
                 // pronto convierte un escritorio que tarda en montarse en una
