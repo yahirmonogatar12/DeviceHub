@@ -155,14 +155,31 @@ builder.Services.AddSingleton<AuditRepository>();
 builder.Services.AddSingleton<RateLimiter>();
 
 // Unico punto donde se elige el motor remoto. La Fase 18 cambia esta linea.
-// LA UNICA LINEA QUE ELIGE MOTOR DE CONTROL REMOTO. Fase 8.
+// EL UNICO SITIO QUE ELIGE MOTOR DE CONTROL REMOTO. Fase 8.
 //
-// RustDeskProvider      lanza el cliente de RustDesk contra su device_id
-// DeviceHubRemoteProvider  lanza el visor propio contra el relay
+//   rustdesk   lanza el cliente de RustDesk contra su device_id
+//   devicehub  lanza el visor propio contra el relay de este servidor
 //
-// Cambiar de motor en toda la planta es cambiar el tipo de aqui. Ni el
-// contrato, ni la base de datos, ni el dashboard nombran ningun producto.
-builder.Services.AddSingleton<IRemoteProvider, RustDeskProvider>();
+// Por configuracion y no por tipo fijo: cambiar de motor es una decision de
+// despliegue -- puede ser distinta por planta -- y obligar a recompilar el
+// servidor para eso convierte una eleccion en un release.
+//
+// Un valor desconocido NO se ignora en silencio: se cae al arrancar. Descubrir
+// por que el boton no hace lo que crees, con la planta esperando, es mucho peor
+// que un servicio que no levanta y dice el motivo.
+builder.Services.AddSingleton<IRemoteProvider>(_ =>
+{
+    var elegido = builder.Configuration["DeviceHub:RemoteProvider"] ?? "rustdesk";
+
+    return elegido.Trim().ToLowerInvariant() switch
+    {
+        "rustdesk" => new RustDeskProvider(),
+        "devicehub" => new DeviceHubRemoteProvider(),
+
+        _ => throw new InvalidOperationException(
+            $"DeviceHub:RemoteProvider = '{elegido}' no existe. Los valores son 'rustdesk' o 'devicehub'.")
+    };
+});
 builder.Services.AddSingleton<UserRepository>();
 builder.Services.AddSingleton<ConnectionRegistry>();
 builder.Services.AddSingleton<RemoteSessionRegistry>();
