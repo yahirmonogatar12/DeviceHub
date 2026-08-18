@@ -504,11 +504,7 @@ public static class RelaySession
         // escritorio virtual; una sola entrega la textura del duplicador sin
         // copiar nada. La entrada funciona igual con las dos: InputInjector
         // recibe la esquina de lo capturado y traduce a coordenadas virtuales.
-        using IScreenCapture captura = pedida == Pantallas.Todas
-            ? new VirtualDesktopCapture(opciones.Adapter)
-            : new DxgiDesktopCapture(
-                elegida?.AdapterIndex ?? opciones.Adapter,
-                elegida?.OutputIndex ?? opciones.Output);
+        using IScreenCapture captura = Abrir(pedida, elegida, opciones);
 
         // La lista viaja al empezar y en cada cambio de pantalla: es cuando el
         // visor necesita repintar su selector, y cuesta un mensaje.
@@ -739,6 +735,44 @@ public static class RelaySession
     /// para cada una.
     /// </summary>
     private static InputInjector? _entrada;
+
+    /// <summary>
+    /// Abre la captura, con GDI de respaldo cuando DXGI se niega.
+    ///
+    /// DXGI ata el dispositivo D3D al escritorio al CREARLO, asi que en el
+    /// escritorio seguro -- la pantalla de bloqueo, el login, UAC -- no esta
+    /// disponible y no hay forma de convencerlo desde dentro del proceso. GDI no
+    /// ata nada: se re-atacha el hilo y BitBlt captura lo que haya.
+    ///
+    /// Es la misma pareja que usa Chrome Remote Desktop, ruta rapida y respaldo.
+    /// El respaldo copia por CPU y sube a la GPU -- caro -- pero solo se usa
+    /// mientras alguien escribe una contrasena en una pantalla quieta.
+    /// </summary>
+    private static IScreenCapture Abrir(int pedida, Pantalla? elegida, RelayOptions opciones)
+    {
+        try
+        {
+            return pedida == Pantallas.Todas
+                ? new VirtualDesktopCapture(opciones.Adapter)
+                : new DxgiDesktopCapture(
+                    elegida?.AdapterIndex ?? opciones.Adapter,
+                    elegida?.OutputIndex ?? opciones.Output);
+        }
+        catch (ScreenCaptureUnavailableException ex)
+        {
+            // Que DXGI no pueda NO es el final: en el escritorio seguro es lo
+            // esperado. Se dice cual fue el motivo -- si el respaldo tambien
+            // falla, hacen falta los dos errores para saber que pasa.
+            opciones.Escribir($"DXGI no puede capturar aqui ({ex.Message}); se pasa al respaldo GDI");
+
+            var gdi = new GdiDesktopCapture();
+
+            opciones.Escribir(
+                $"Respaldo GDI activo sobre {gdi.Output}  {gdi.Width}x{gdi.Height}");
+
+            return gdi;
+        }
+    }
 
     /// <summary>Subidas en curso. Una por sesion, y la sesion es el proceso.</summary>
     private static readonly Files.FileService _archivos = new();
