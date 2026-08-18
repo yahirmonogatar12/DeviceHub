@@ -399,7 +399,14 @@ public sealed partial class MainViewModel : ObservableObject
                 Resolution = resolution
             }, CancellationToken.None);
 
-            StatusMessage = "Conflicto resuelto";
+            // La fila local, al dia. El stream traera lo mismo cuando el agente
+            // vuelva a conectar, pero hasta entonces el aviso seguiria en rojo.
+            SelectedMachine.ConflictoResuelto();
+            RefreshCounts();
+
+            StatusMessage = resolution == ResolveConflictRequest.Types.Resolution.IssueNewIdentity
+                ? "Identidad nueva emitida. Esa PC necesita un recovery code para volver."
+                : "Hardware aprobado. El agente entra solo en su proximo intento, hasta un minuto.";
         }
         catch (Exception ex)
         {

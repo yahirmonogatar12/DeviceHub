@@ -197,6 +197,15 @@ public sealed class VideoPresenter : IDisposable
         // pantalla se pintaria encima de la primera en la esquina.
         _videoContext.VideoProcessorSetStreamDestRect(procesador, 0, true, destino);
 
+        // Y QUE NO TOQUE NADA MAS.
+        //
+        // VideoProcessorBlt escribe la superficie de salida ENTERA: lo que queda
+        // fuera del rectangulo del stream lo rellena con el color de fondo. Sin
+        // acotar el objetivo, cada pantalla borraba a la otra al pintarse y solo
+        // se veia la ultima -- que es exactamente el sintoma de "con las dos
+        // pantallas no se ve la primera".
+        _videoContext.VideoProcessorSetOutputTargetRect(procesador, true, destino);
+
         // Justo al reves que en el host: entra NV12 de rango limitado y sale RGB
         // de rango completo. Sin declararlo, los negros salen grises.
         _videoContext.VideoProcessorSetStreamFrameFormat(procesador, 0, VideoFrameFormat.Progressive);
