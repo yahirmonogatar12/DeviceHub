@@ -51,6 +51,38 @@ public sealed class InputDesktop : IDisposable
     private string _nombre = string.Empty;
 
     public string Name => _nombre;
+
+    /// <summary>
+    /// El nombre del escritorio que recibe la entrada AHORA, sin atarse a el.
+    ///
+    /// Hace falta separado de SeguirActivo porque la decision de que capturador
+    /// usar hay que tomarla ANTES de crear nada, y ademas hay que poder tomarla
+    /// aunque atarse falle -- que en Winlogon es lo normal para un hilo que ya
+    /// tiene ventanas.
+    /// </summary>
+    public static string NombreDeEntrada()
+    {
+        var entrada = OpenInputDesktop(0, false, DesktopGenericAll);
+
+        if (entrada == IntPtr.Zero)
+            return string.Empty;
+
+        try
+        {
+            return NombreDe(entrada);
+        }
+        finally
+        {
+            CloseDesktop(entrada);
+        }
+    }
+
+    /// <summary>
+    /// El escritorio normal del usuario. Cualquier otro -- Winlogon,
+    /// Screen-saver, o uno creado por una aplicacion -- es un escritorio que
+    /// DXGI no va a poder duplicar.
+    /// </summary>
+    public const string Normal = "Default";
     public long Switches { get; private set; }
 
     /// <summary>

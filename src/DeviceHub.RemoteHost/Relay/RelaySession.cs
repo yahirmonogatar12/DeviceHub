@@ -504,6 +504,10 @@ public static class RelaySession
         // escritorio virtual; una sola entrega la textura del duplicador sin
         // copiar nada. La entrada funciona igual con las dos: InputInjector
         // recibe la esquina de lo capturado y traduce a coordenadas virtuales.
+        // El escritorio con el que se abrio ESTA captura. Todo lo que venga
+        // despues se compara contra el.
+        var escritorioCapturado = InputDesktop.NombreDeEntrada();
+
         using IScreenCapture captura = Abrir(pedida, elegida, opciones);
 
         // La lista viaja al empezar y en cada cambio de pantalla: es cuando el
@@ -552,22 +556,27 @@ public static class RelaySession
                 {
                     siguienteRevision = reloj.Elapsed + TimeSpan.FromMilliseconds(500);
 
-                    // Se sale TAMBIEN si no se pudo atar: eso significa que el
-                    // escritorio cambio y este hilo ya no puede seguirlo -- tiene
-                    // ventanas de D3D. Salir es lo correcto, porque fuera hay un
-                    // hilo nuevo esperando para nacer en el escritorio bueno.
+                    // SE COMPARA EL NOMBRE, no el resultado de intentar atarse.
                     //
-                    // Tratarlo como "no ha pasado nada" es lo que dejaba la
-                    // captura clavada en el escritorio viejo.
-                    var salto = escritorio.SeguirActivo();
+                    // Esto es lo que fallaba: la decision colgaba de SeguirActivo,
+                    // y ese metodo devuelve "no cambio" tanto cuando de verdad no
+                    // cambio como cuando no pudo ni ABRIR el escritorio. Con la
+                    // PC bloqueada, la captura se quedaba clavada entregando el
+                    // ultimo frame del escritorio viejo -- DXGI no da error, sigue
+                    // devolviendo lo de antes -- y el bucle no se enteraba nunca.
+                    // Se veia el fondo congelado, el raton llegaba, y al
+                    // desbloquear seguia congelado.
+                    //
+                    // Leer el nombre no exige atarse a nada y funciona igual en
+                    // Winlogon, asi que cubre la ida Y la vuelta.
+                    var entrada = InputDesktop.NombreDeEntrada();
 
-                    if (salto is Salto.Cambiado or Salto.NoSePudoAtar)
+                    if (entrada.Length > 0
+                        && !entrada.Equals(escritorioCapturado, StringComparison.OrdinalIgnoreCase))
                     {
                         opciones.Escribir(
-                            salto == Salto.Cambiado
-                                ? $"El escritorio activo es {escritorio.Name}; se rehace la captura"
-                                : $"El escritorio cambio a {escritorio.NombrePedido} y este hilo no puede " +
-                                  "seguirlo; se rehace la captura en uno nuevo");
+                            $"El escritorio de entrada paso de {escritorioCapturado} a {entrada}; " +
+                            "se rehace la captura");
 
                         return;
                     }
@@ -750,6 +759,26 @@ public static class RelaySession
     /// </summary>
     private static IScreenCapture Abrir(int pedida, Pantalla? elegida, RelayOptions opciones)
     {
+        // SE DECIDE POR EL NOMBRE DEL ESCRITORIO, no esperando a que DXGI falle.
+        //
+        // Esperar al fallo no sirve: en Winlogon la duplicacion NO da error, se
+        // queda entregando el ultimo frame del escritorio anterior. El visor
+        // ensenaba el fondo de escritorio congelado mientras la PC pedia la
+        // contrasena, y el respaldo no llegaba a entrar nunca porque nada habia
+        // fallado formalmente.
+        var escritorio = InputDesktop.NombreDeEntrada();
+
+        if (!string.IsNullOrEmpty(escritorio)
+            && !escritorio.Equals(InputDesktop.Normal, StringComparison.OrdinalIgnoreCase))
+        {
+            opciones.Escribir($"El escritorio de entrada es {escritorio}; se captura con el respaldo GDI");
+
+            var seguro = new GdiDesktopCapture();
+            opciones.Escribir($"Respaldo GDI activo sobre {seguro.Output}  {seguro.Width}x{seguro.Height}");
+
+            return seguro;
+        }
+
         try
         {
             return pedida == Pantallas.Todas
