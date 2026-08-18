@@ -82,46 +82,48 @@ public static class RelaySession
 
         try
         {
-            using var canal = Conectar(opciones);
-            var cliente = new RemoteRelayService.RemoteRelayServiceClient(canal);
+            // BUCLE DE RECONEXION DEL HOST. Fase 14.
+            //
+            // El visor ya volvia solo; este no, y sin host no hay nada al otro
+            // lado -- el tecnico se quedaba con una ventana viva y una pantalla
+            // muerta. En una planta con wifi regular es lo que mas se nota.
+            //
+            // Se vuelve a la MISMA sesion con el token de reconexion, sin gastar
+            // un ticket nuevo: el ticket es de un solo uso y ya se consumio.
+            var corte = DateTimeOffset.UtcNow;
+            var espera = TimeSpan.FromMilliseconds(250);
+            var codigo = 4;
 
-            using var llamada = cliente.HostChannel();
-
-            await EscribirAsync(llamada, new RemotePacket
+            while (!cancellationToken.IsCancellationRequested)
             {
-                ProtocolVersion = RemoteSessionProtocol.Version,
-                SessionId = opciones.SesionId,
-                Hello = new Hello
+                try
                 {
-                    MachineId = opciones.MachineId,
-                    Role = RemoteRole.Host,
-                    Ticket = ticket,
-                    Capabilities = new RemoteCapabilities
-                    {
-                        MaxProtocolVersion = RemoteSessionProtocol.Version,
-                        Codecs = { VideoCodec.H264 },
-                        SupportsCursor = true,
-                        SupportsInput = true
-                    }
+                    corte = DateTimeOffset.UtcNow;
+                    codigo = await SesionAsync(opciones, ticket, cancellationToken);
+                    break;
                 }
-            }, CancellationToken.None);
+                catch (RpcException ex) when (PuedeVolver(corte, cancellationToken))
+                {
+                    // Una sesion que aguanto un rato empieza de cero: si no, un
+                    // microcorte a los diez minutos arrancaria esperando los 5 s
+                    // a los que llego el corte anterior.
+                    if (DateTimeOffset.UtcNow - corte > TimeSpan.FromSeconds(10))
+                        espera = TimeSpan.FromMilliseconds(250);
 
-            using var cancelacion = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var entrante = LeerAsync(llamada, opciones, cancelacion);
+                    opciones.Escribir(
+                        $"Conexion con el relay perdida ({ex.StatusCode}). " +
+                        $"Volviendo a la sesion en {espera.TotalSeconds:0.0} s...");
 
-            var codigo = await EmitirAsync(llamada, opciones, cancelacion.Token);
+                    // Espera CANCELABLE: con Thread.Sleep, un STOP del agente se
+                    // quedaria esperando a que terminara la siesta.
+                    if (cancellationToken.WaitHandle.WaitOne(espera))
+                        break;
 
-            await EscribirAsync(llamada, new RemotePacket
-            {
-                ProtocolVersion = RemoteSessionProtocol.Version,
-                SessionId = opciones.SesionId,
-                Close = new SessionClose { Reason = SessionCloseReason.Normal, Detail = "fin de la sesion" }
-            }, CancellationToken.None);
-
-            await llamada.RequestStream.CompleteAsync();
-            await cancelacion.CancelAsync();
-
-            try { await entrante; } catch (Exception) { /* cerrando */ }
+                    espera = espera < TimeSpan.FromSeconds(5)
+                        ? espera + espera
+                        : TimeSpan.FromSeconds(5);
+                }
+            }
 
             return codigo;
         }
@@ -144,6 +146,75 @@ public static class RelaySession
         {
             MediaFactory.MFShutdown();
         }
+    }
+
+    /// <summary>
+    /// Se reintenta durante un minuto con el RELOJ DE AQUI, no con el
+    /// `reconnect_until` del servidor: esa marca viene de otra maquina y si
+    /// llegara mal -- o no llegara -- la comparacion diria que la gracia ya paso
+    /// y no se reintentaria nunca. Quien manda de verdad es el relay rechazando
+    /// el token.
+    ///
+    /// Sin token no se vuelve: o la sesion se cerro en orden, o el relay ya la
+    /// dio por muerta. Insistir solo alargaria un proceso que ya no pinta nada.
+    /// </summary>
+    private static bool PuedeVolver(DateTimeOffset desde, CancellationToken cancellationToken)
+        => _tokenReconexion is { Length: > 0 }
+           && !cancellationToken.IsCancellationRequested
+           && DateTimeOffset.UtcNow - desde < TimeSpan.FromMinutes(1);
+
+    /// <summary>UNA conexion, de principio a fin. Si el cable se corta, lanza y
+    /// el bucle de arriba decide si vuelve.</summary>
+    private static async Task<int> SesionAsync(
+        RelayOptions opciones, string ticket, CancellationToken cancellationToken)
+    {
+        using var canal = Conectar(opciones);
+        var cliente = new RemoteRelayService.RemoteRelayServiceClient(canal);
+
+        using var llamada = cliente.HostChannel();
+
+        // Exclusivos: arranque con ticket, vuelta con token. Mandar los dos es
+        // un error de protocolo y el relay lo rechaza.
+        var volviendo = _tokenReconexion is { Length: > 0 };
+
+        await EscribirAsync(llamada, new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = opciones.SesionId,
+            Hello = new Hello
+            {
+                MachineId = opciones.MachineId,
+                Role = RemoteRole.Host,
+                Ticket = volviendo ? string.Empty : ticket,
+                ReconnectToken = volviendo ? _tokenReconexion! : string.Empty,
+                Capabilities = new RemoteCapabilities
+                {
+                    MaxProtocolVersion = RemoteSessionProtocol.Version,
+                    Codecs = { VideoCodec.H264 },
+                    SupportsCursor = true,
+                    SupportsInput = true
+                }
+            }
+        }, CancellationToken.None);
+
+        using var cancelacion = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var entrante = LeerAsync(llamada, opciones, cancelacion);
+
+        var codigo = await EmitirAsync(llamada, opciones, cancelacion.Token);
+
+        await EscribirAsync(llamada, new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = opciones.SesionId,
+            Close = new SessionClose { Reason = SessionCloseReason.Normal, Detail = "fin de la sesion" }
+        }, CancellationToken.None);
+
+        await llamada.RequestStream.CompleteAsync();
+        await cancelacion.CancelAsync();
+
+        try { await entrante; } catch (Exception) { /* cerrando */ }
+
+        return codigo;
     }
 
     /// <summary>
@@ -924,6 +995,12 @@ public static class RelaySession
 
                     case RemotePacket.PayloadOneofCase.Close:
                         opciones.Escribir($"El relay cerro la sesion: {paquete.Close.Reason} {paquete.Close.Detail}");
+
+                        // Se suelta el token: esto es un cierre en orden, no un
+                        // corte. Sin esto el host volveria a llamar a una puerta
+                        // que acaban de cerrarle en la cara.
+                        _tokenReconexion = null;
+
                         await cancelacion.CancelAsync();
                         return;
 
