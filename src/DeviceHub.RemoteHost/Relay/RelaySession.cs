@@ -394,15 +394,22 @@ public static class RelaySession
                 opciones.Escribir(
                     $"Fallo al capturar (intento {fallosSeguidos}): {fallo.GetType().Name}: {fallo.Message}");
 
-                if (fallosSeguidos >= 10)
+                // Un minuto largo de reintentos, no cinco segundos. Rendirse
+                // pronto convierte un escritorio que tarda en montarse en una
+                // sesion muerta, y quedarse con la ultima imagen congelada es
+                // mejor que cerrarle la sesion al tecnico.
+                if (fallosSeguidos >= 60)
                 {
                     cuenta.Fallo = fallo;
                     break;
                 }
 
-                // Medio segundo: lo que tarda Windows en terminar de montar el
-                // escritorio nuevo.
-                if (cancellationToken.WaitHandle.WaitOne(500))
+                // Medio segundo al principio y hasta dos: los primeros fallos son
+                // la transicion del escritorio, que va rapido; a partir de ahi es
+                // algo que no se va a arreglar insistiendo mas deprisa.
+                var espera = Math.Min(500 * fallosSeguidos, 2000);
+
+                if (cancellationToken.WaitHandle.WaitOne(espera))
                     break;
             }
         }
