@@ -52,6 +52,11 @@ public sealed class VirtualDesktopCapture : IScreenCapture
 
     private bool _frameVivo;
     private ulong _frameId;
+    private bool _avisadoDelDesajuste;
+
+    /// <summary>Ultimo desajuste entre lo que entrega un monitor y el lienzo. Se
+    /// cuenta una vez, no en cada frame.</summary>
+    public string? Desajuste { get; private set; }
 
     /// <summary>
     /// Solo se componen las salidas de UN adaptador. Desktop Duplication exige
@@ -129,6 +134,39 @@ public sealed class VirtualDesktopCapture : IScreenCapture
                     Dropped += info.AccumulatedFrames - 1;
 
                 using var textura = recurso.QueryInterface<ID3D11Texture2D>();
+                var medida = textura.Description;
+
+                // QUE QUEPA, antes de copiar.
+                //
+                // Aqui estaba el E_INVALIDARG que tumbaba la sesion: el lienzo se
+                // dimensiona al abrir, con los tamanos que los monitores tenian
+                // ENTONCES. Si uno cambia de resolucion despues -- o si la
+                // duplicacion entrega una textura de otro tamano durante una
+                // transicion -- la copia se sale del lienzo y D3D lo rechaza por
+                // parametro invalido.
+                //
+                // La excepcion mataba el hilo de captura, el bucle de fuera lo
+                // rehacia, y vuelta a empezar: 47 versiones de configuracion en
+                // un minuto, cada una tirando el decodificador del visor.
+                //
+                // Saltarse ESE monitor deja el resto de la imagen viva. Rehacer
+                // la captura entera por un monitor que no cuadra es cambiar un
+                // problema pequeno por uno grande.
+                if (monitor.X + medida.Width > Width || monitor.Y + medida.Height > Height)
+                {
+                    if (!_avisadoDelDesajuste)
+                    {
+                        _avisadoDelDesajuste = true;
+                        Desajuste =
+                            $"{monitor.Salida.Description.DeviceName} entrega {medida.Width}x{medida.Height} " +
+                            $"en @{monitor.X},{monitor.Y} y el lienzo mide {Width}x{Height}: " +
+                            "se rehace la composicion";
+                    }
+
+                    // El lienzo ya no vale: se rehace con los tamanos de ahora.
+                    Reabrir();
+                    return null;
+                }
 
                 // GPU -> GPU, a su esquina del lienzo. La region de origen es
                 // null: se copia el monitor entero.
@@ -258,6 +296,7 @@ public sealed class VirtualDesktopCapture : IScreenCapture
     private void Reabrir()
     {
         ResolutionChanges++;
+        _avisadoDelDesajuste = false;
         Cerrar();
         Abrir();
     }

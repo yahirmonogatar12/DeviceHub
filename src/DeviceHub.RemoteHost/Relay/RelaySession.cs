@@ -888,6 +888,9 @@ public static class RelaySession
                     }
                 }
 
+                if (captura is VirtualDesktopCapture compuesta && compuesta.Desajuste is { } desajuste)
+                    Avisar(opciones, desajuste);
+
                 IReadOnlyList<EncodedFrame> producidos;
 
                 // El frame DXGI se suelta ANTES de esperar por nada. Encolar
