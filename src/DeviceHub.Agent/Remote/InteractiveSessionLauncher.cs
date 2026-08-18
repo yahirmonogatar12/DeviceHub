@@ -43,8 +43,16 @@ public sealed class InteractiveSessionLauncher(
     /// reinstalar nada. Sin el habria que volver a versiones viejas, que es
     /// exactamente como se llego a la conclusion equivocada.
     /// </summary>
+    /// <summary>
+    /// APAGADO por defecto. Se intento encender en 1.7.0 y la pantalla de
+    /// bloqueo sigue sin funcionar; lo que si consiguio fue romper el control
+    /// del escritorio normal en tres versiones seguidas mientras se buscaba.
+    ///
+    /// Una funcion que no funciona no puede venir encendida estropeando las que
+    /// si. Se enciende a mano en la maquina donde se este investigando.
+    /// </summary>
     private readonly bool _escritorioSeguro =
-        configuracion.GetValue("DeviceHub:SecureDesktop", true);
+        configuracion.GetValue("DeviceHub:SecureDesktop", false);
 
     private readonly Lock _puerta = new();
     private Sesion? _actual;

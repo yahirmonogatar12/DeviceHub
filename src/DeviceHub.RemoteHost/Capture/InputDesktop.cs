@@ -127,9 +127,6 @@ public sealed class InputDesktop : IDisposable
 
         var entrada = OpenInputDesktop(0, false, ParaEscribir);
 
-        if (entrada == IntPtr.Zero)
-            entrada = OpenInputDesktop(0, false, ComoAntes);
-
         // Ultimo recurso: solo mirar. La captura podra seguir al escritorio
         // aunque la entrada no llegue. Media sesion es mejor que ninguna, y el
         // contador de rechazados de SendInput dira que falta la otra mitad.
@@ -239,26 +236,15 @@ public sealed class InputDesktop : IDisposable
     /// <summary>
     /// Para ESCRIBIR: atar el hilo y meterle entrada con SendInput.
     ///
-    /// GENERIC_READ aqui NO vale, y confundir los dos usos fue una regresion
-    /// que dejo la sesion sin control: el permiso de lectura sobre un escritorio
-    /// no incluye DESKTOP_WRITEOBJECTS, y sin ese derecho SendInput no entra.
+    /// VUELVE A SER GENERIC_ALL, que es lo que habia antes de que yo lo tocara y
+    /// lo unico con lo que se ha visto controlar de verdad una PC.
     ///
-    /// Se piden los tres derechos concretos en vez de GENERIC_ALL porque
-    /// GENERIC_ALL sobre un escritorio son NUEVE, y Winlogon no los da todos.
-    /// Pedir de mas es como se pierde el permiso entero.
+    /// Lo intente afinar dos veces para que Winlogon lo concediera, y las dos
+    /// rompi el control del escritorio NORMAL, que es lo que la gente usa todos
+    /// los dias. La leccion no es cual es la mascara buena -- sigo sin saberlo --
+    /// sino que esto no se toca sin poder medirlo en la maquina de destino.
     /// </summary>
-    private const uint ParaEscribir = DesktopReadObjects | DesktopWriteObjects;
-
-    private const uint DesktopReadObjects = 0x0001;
-    private const uint DesktopWriteObjects = 0x0080;
-
-    /// <summary>
-    /// Lo que se pedia antes de todo esto y funcionaba para controlar el
-    /// escritorio normal. Se conserva como segundo intento: si la peticion
-    /// minima fallara por algun motivo que no he previsto, no se puede acabar
-    /// peor que como se estaba.
-    /// </summary>
-    private const uint ComoAntes = 0x10000000;
+    private const uint ParaEscribir = 0x10000000;
     private const uint WinstaAllAccess = 0x0000037F;
     private const int UoiName = 2;
 
