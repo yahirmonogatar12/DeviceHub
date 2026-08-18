@@ -311,8 +311,54 @@ public static class RelaySession
             var reloj = Stopwatch.StartNew();
             var duracion = opciones.Seconds > 0 ? TimeSpan.FromSeconds(opciones.Seconds) : TimeSpan.MaxValue;
 
+            // Fallos SEGUIDOS, no totales. Uno suelto al saltar de escritorio es
+            // lo normal; lo que no puede es no recuperarse nunca.
+            var fallosSeguidos = 0;
+
             while (reloj.Elapsed < duracion && !cancellationToken.IsCancellationRequested)
-                Escritorio(salida, cuenta, opciones, escritorio, reloj, duracion, cancellationToken);
+            {
+                try
+                {
+                    Escritorio(salida, cuenta, opciones, escritorio, reloj, duracion, cancellationToken);
+                    fallosSeguidos = 0;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    // AQUI SE PERDIA LA SESION AL BLOQUEAR LA PC.
+                    //
+                    // Este catch estaba FUERA del bucle: un solo fallo mataba el
+                    // hilo de captura entero y la pantalla se quedaba congelada.
+                    // Y al saltar a Winlogon el primer intento falla a menudo --
+                    // DuplicateOutput no puede con un escritorio cuya transicion
+                    // sigue en curso -- asi que bloquear la PC era exactamente el
+                    // caso que lo disparaba.
+                    //
+                    // Ahora se reintenta y, sobre todo, se DICE cual fue el error:
+                    // sin esta linea no habia forma de saber si el escritorio
+                    // seguro se negaba, tardaba o ni se intentaba.
+                    fallosSeguidos++;
+
+                    opciones.Escribir(
+                        $"Fallo al capturar {escritorio.Name} (intento {fallosSeguidos}): " +
+                        $"{ex.GetType().Name}: {ex.Message}");
+
+                    if (fallosSeguidos >= 10)
+                    {
+                        cuenta.Fallo = ex;
+                        break;
+                    }
+
+                    // Medio segundo: lo que tarda Windows en terminar de montar
+                    // el escritorio nuevo. Reintentar en bucle cerrado solo
+                    // conseguiria diez fallos en diez milisegundos.
+                    if (cancellationToken.WaitHandle.WaitOne(500))
+                        break;
+                }
+            }
         }
         catch (OperationCanceledException)
         {
