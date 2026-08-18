@@ -160,14 +160,17 @@ public sealed class DeviceHubClient : IDisposable
     /// El dashboard sigue sin saber que motor hay detras: solo aporta datos de
     /// conexion, y quien decide que hacer con ellos es el proveedor del servidor.
     /// </summary>
-    public Task<RemoteSessionReply> StartRemoteSessionAsync(string machineId, CancellationToken ct)
+    /// <summary>`motor` vacio = el que tenga configurado el servidor.</summary>
+    public Task<RemoteSessionReply> StartRemoteSessionAsync(
+        string machineId, string motor, CancellationToken ct)
         => _client.StartRemoteSessionAsync(
             new RemoteSessionRequest
             {
                 MachineId = machineId,
                 ViewerMachineId = Environment.MachineName,
                 ServerAddress = ServerAddress,
-                ServerPin = _settings.ServerPin
+                ServerPin = _settings.ServerPin,
+                Provider = motor
             },
             _auth, cancellationToken: ct).ResponseAsync;
 

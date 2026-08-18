@@ -155,31 +155,20 @@ builder.Services.AddSingleton<AuditRepository>();
 builder.Services.AddSingleton<RateLimiter>();
 
 // Unico punto donde se elige el motor remoto. La Fase 18 cambia esta linea.
-// EL UNICO SITIO QUE ELIGE MOTOR DE CONTROL REMOTO. Fase 8.
+// LOS MOTORES DE CONTROL REMOTO. Fase 8.
 //
-//   rustdesk   lanza el cliente de RustDesk contra su device_id
-//   devicehub  lanza el visor propio contra el relay de este servidor
+// Se registran los DOS y el dashboard ofrece un boton por cada uno; cual manda
+// cuando nadie elige lo dice DeviceHub:RemoteProvider en appsettings.json.
 //
-// Por configuracion y no por tipo fijo: cambiar de motor es una decision de
+// Por configuracion y no por tipo fijo: el motor por defecto es una decision de
 // despliegue -- puede ser distinta por planta -- y obligar a recompilar el
 // servidor para eso convierte una eleccion en un release.
-//
-// Un valor desconocido NO se ignora en silencio: se cae al arrancar. Descubrir
-// por que el boton no hace lo que crees, con la planta esperando, es mucho peor
-// que un servicio que no levanta y dice el motivo.
-builder.Services.AddSingleton<IRemoteProvider>(_ =>
-{
-    var elegido = builder.Configuration["DeviceHub:RemoteProvider"] ?? "rustdesk";
+builder.Services.AddSingleton<IRemoteProvider, RustDeskProvider>();
+builder.Services.AddSingleton<IRemoteProvider, DeviceHubRemoteProvider>();
 
-    return elegido.Trim().ToLowerInvariant() switch
-    {
-        "rustdesk" => new RustDeskProvider(),
-        "devicehub" => new DeviceHubRemoteProvider(),
-
-        _ => throw new InvalidOperationException(
-            $"DeviceHub:RemoteProvider = '{elegido}' no existe. Los valores son 'rustdesk' o 'devicehub'.")
-    };
-});
+builder.Services.AddSingleton(sp => new RemoteProviderCatalog(
+    sp.GetRequiredService<IEnumerable<IRemoteProvider>>(),
+    builder.Configuration["DeviceHub:RemoteProvider"] ?? "rustdesk"));
 builder.Services.AddSingleton<UserRepository>();
 builder.Services.AddSingleton<ConnectionRegistry>();
 builder.Services.AddSingleton<RemoteSessionRegistry>();

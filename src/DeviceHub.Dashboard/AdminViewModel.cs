@@ -158,16 +158,18 @@ public sealed partial class MainViewModel
 
 
     /// <summary>
-    /// UN SOLO camino, sea cual sea el motor. Fase 8.
+    /// UN SOLO camino, aunque haya dos botones. Fase 8.
     ///
-    /// Antes habia dos botones y dos flujos, y el de aqui montaba a mano los
-    /// argumentos del visor propio: el dashboard sabia que motor habia detras,
-    /// que es exactamente lo que IRemoteProvider existe para evitar. Ahora el
-    /// servidor devuelve QUE ejecutar y, si hace falta, que escribirle por
-    /// stdin; aqui no se nombra ningun producto.
+    /// La frontera no era cuantos botones hay: era que el dashboard no montara
+    /// los argumentos de cada motor a mano, como hacia antes. `motor` es un
+    /// NOMBRE opaco que viaja al servidor; de ahi vuelve QUE ejecutar y, si hace
+    /// falta, que escribirle por stdin. Aqui no se sabe que hace ninguno de los
+    /// dos, solo se ofrece elegir.
+    ///
+    /// Vacio = el que el servidor tenga configurado.
     /// </summary>
     [RelayCommand]
-    private async Task RemoteControlAsync()
+    private async Task RemoteControlAsync(string? motor)
     {
         if (SelectedMachine is null)
             return;
@@ -177,7 +179,8 @@ public sealed partial class MainViewModel
         try
         {
             CommandFeedback = "Abriendo sesion remota...";
-            session = await _client.StartRemoteSessionAsync(SelectedMachine.MachineId, CancellationToken.None);
+            session = await _client.StartRemoteSessionAsync(
+                SelectedMachine.MachineId, motor ?? string.Empty, CancellationToken.None);
 
             var ejecutable = ResolverCliente(session.LaunchTarget)
                 ?? throw new FileNotFoundException(

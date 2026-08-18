@@ -29,7 +29,7 @@ public sealed class AdminGrpcService(
     TerminalRepository terminal,
     AuditRepository audit,
     RateLimiter limiter,
-    IRemoteProvider remote,
+    RemoteProviderCatalog motores,
     UserRepository users,
     MachineBroadcaster broadcaster,
     ConnectionRegistry registry,
@@ -812,6 +812,18 @@ public sealed class AdminGrpcService(
         if (!Roles.Satisfies(user.FindFirst(ClaimTypes.Role)?.Value, Roles.Technician))
             await DenyAsync(context, AuditActions.RemoteStart, machine,
                 "El control remoto requiere rol technician o superior");
+
+        // El motor que pidio el tecnico, o el configurado si no pidio ninguno.
+        IRemoteProvider remote;
+
+        try
+        {
+            remote = motores.Resolver(request.Provider);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
 
         // Solo los motores que NO arrancan el otro extremo dependen de que haya
         // un producto de terceros instalado alli con su propio identificador. El

@@ -458,6 +458,13 @@ message RemoteSessionRequest {
   string viewer_machine_id = 2;
   string server_address = 3;
   string server_pin = 4;
+
+  // Que motor usar. Vacio = el configurado en el servidor.
+  //
+  // El dashboard manda un NOMBRE opaco, no una eleccion de comportamiento: sigue
+  // sin saber que hace cada motor ni como se lanza. Poder elegir es del tecnico;
+  // saber lanzarlo, del servidor.
+  string provider = 5;
 }
 
 message SendCommandRequest {

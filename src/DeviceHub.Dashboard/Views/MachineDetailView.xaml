@@ -48,13 +48,20 @@
 
                 <!-- Acciones -->
                 <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
-                    <!-- UN solo boton. Que motor hay detras lo decide el
-                         servidor: el dashboard no lo sabe ni tiene por que.
-                         Tampoco se oculta ya segun RemoteAvailable, que es una
-                         senal del detector de RustDesk: el motor propio no
-                         necesita nada instalado en la maquina. -->
-                    <Button Content="&#x1F5A5;  Controlar PC" Style="{StaticResource BtnPrimary}"
-                            Margin="0,0,8,0" Command="{Binding RemoteControlCommand}" />
+                    <!-- Dos motores, dos botones. Lo unico que el dashboard
+                         sabe de ellos es su NOMBRE: como se lanza cada uno vive
+                         en el servidor, que es la frontera que importa.
+
+                         RustDesk se oculta si esa PC no lo tiene instalado;
+                         el motor propio no necesita nada alli. -->
+                    <Button Content="&#x1F5A5;  Controlar (DeviceHub)" Style="{StaticResource BtnPrimary}"
+                            Margin="0,0,8,0" Command="{Binding RemoteControlCommand}"
+                            CommandParameter="devicehub" />
+
+                    <Button Content="&#x1F5A5;  Controlar (RustDesk)" Style="{StaticResource BtnGhost}"
+                            Margin="0,0,8,0" Command="{Binding RemoteControlCommand}"
+                            CommandParameter="rustdesk"
+                            Visibility="{Binding SelectedMachine.RemoteAvailable, Converter={StaticResource BoolToVis}}" />
                     <Button Content="Cerrar remoto" Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
                             Command="{Binding EndRemoteSessionCommand}" />
 
