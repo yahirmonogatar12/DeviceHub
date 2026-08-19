@@ -836,9 +836,10 @@ public partial class RelayWindow : Window
         foreach (var otro in MenuEscala.Items.OfType<MenuItem>())
             otro.IsChecked = ReferenceEquals(otro, elegido);
 
-        // El titulo del menu dice que hay elegido sin abrirlo, que es lo que
-        // hacia el desplegable y lo unico que se echaba de menos al quitarlo.
-        MenuEscala.Header = elegido.Header;
+        // La cabecera es el icono, asi que lo elegido se dice en el ToolTip. Es
+        // lo unico que se echaba de menos al quitar el desplegable, y AnyDesk lo
+        // resuelve igual: el icono no cambia, la marca esta dentro.
+        MenuEscala.ToolTip = $"Vista: {elegido.Header}";
 
         Ajustar();
     }
@@ -1460,8 +1461,10 @@ public partial class RelayWindow : Window
 
             MenuPantallas.IsEnabled = opciones.Count > 1;
 
-            MenuPantallas.Header = opciones
-                .FirstOrDefault(o => o.Corto.Id == actual).Corto?.Etiqueta ?? "Pantalla";
+            MenuPantallas.ToolTip = opciones
+                .FirstOrDefault(o => o.Corto.Id == actual).Largo is { Length: > 0 } vigente
+                ? $"Pantalla: {vigente}"
+                : "Pantalla remota";
         });
     }
 
@@ -1473,7 +1476,7 @@ public partial class RelayWindow : Window
         foreach (var otro in MenuPantallas.Items.OfType<MenuItem>())
             otro.IsChecked = ReferenceEquals(otro, elegido);
 
-        MenuPantallas.Header = monitor.Etiqueta;
+        MenuPantallas.ToolTip = $"Pantalla: {elegido.Header}";
 
         // El host rehace duplicador y codificador, asi que detras de esto vienen
         // una config nueva y un IDR. Las cifras de la barra no se reinician a

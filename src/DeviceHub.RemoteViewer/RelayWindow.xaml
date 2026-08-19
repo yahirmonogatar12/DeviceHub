@@ -24,6 +24,86 @@
         <SolidColorBrush x:Key="LetraTenue" Color="#8C8C8C" />
         <SolidColorBrush x:Key="Acento"    Color="#EF443B" />
 
+
+        <!-- LOS ICONOS SON DIBUJOS, NO UNA FUENTE.
+
+             La tentacion era Segoe MDL2 Assets, que es lo que usa Windows: una
+             letra por icono y listo. Pero un punto de codigo equivocado no da
+             error, da un cuadrito vacio, y eso solo se descubre ejecutando en la
+             PC donde este esa version de la fuente. Con geometrias no hay nada
+             que adivinar: lo que se dibuja es lo que se ve, en cualquier Windows
+             y sin depender de que una fuente este instalada.
+
+             Todos en una caja de 16x16 para que encajen igual en la barra y en
+             el hueco del icono de un menu, que mide justo eso. -->
+        <GeometryGroup x:Key="IcoCamara">
+            <RectangleGeometry Rect="1,4.5,14,8.5" RadiusX="1.5" RadiusY="1.5" />
+            <RectangleGeometry Rect="5.2,2.6,5.6,2.2" RadiusX="0.8" RadiusY="0.8" />
+            <EllipseGeometry Center="8,8.8" RadiusX="2.5" RadiusY="2.5" />
+        </GeometryGroup>
+
+        <EllipseGeometry x:Key="IcoPunto" Center="8,8" RadiusX="4.3" RadiusY="4.3" />
+
+        <GeometryGroup x:Key="IcoMonitor">
+            <RectangleGeometry Rect="1.5,3,13,8.5" RadiusX="1" RadiusY="1" />
+            <LineGeometry StartPoint="8,11.5" EndPoint="8,13.8" />
+            <LineGeometry StartPoint="5.5,13.8" EndPoint="10.5,13.8" />
+        </GeometryGroup>
+
+        <!-- Las cuatro esquinas, que es el icono de encajar de toda la vida. -->
+        <PathGeometry x:Key="IcoEncajar"
+                      Figures="M2,5.5 L2,2 L5.5,2 M10.5,2 L14,2 L14,5.5 M14,10.5 L14,14 L10.5,14 M5.5,14 L2,14 L2,10.5" />
+
+        <PathGeometry x:Key="IcoCarpeta"
+                      Figures="M1.5,12.5 L1.5,4 L6.2,4 L7.7,5.8 L14.5,5.8 L14.5,12.5 Z" />
+
+        <GeometryGroup x:Key="IcoBarras">
+            <RectangleGeometry Rect="2,9,2.6,5" />
+            <RectangleGeometry Rect="6.7,6,2.6,8" />
+            <RectangleGeometry Rect="11.4,2.5,2.6,11.5" />
+        </GeometryGroup>
+
+        <PathGeometry x:Key="IcoRayo" Figures="M9.2,1.5 L4,9 L7.4,9 L6.8,14.5 L12,7 L8.6,7 Z" />
+
+        <GeometryGroup x:Key="IcoCandado">
+            <RectangleGeometry Rect="3.5,7,9,7" RadiusX="1" RadiusY="1" />
+            <PathGeometry Figures="M5.6,7 L5.6,4.8 A2.4,2.4 0 0 1 10.4,4.8 L10.4,7" />
+        </GeometryGroup>
+
+        <GeometryGroup x:Key="IcoTeclas">
+            <RectangleGeometry Rect="1.5,4,13,8" RadiusX="1" RadiusY="1" />
+            <LineGeometry StartPoint="4.2,9.6" EndPoint="11.8,9.6" />
+            <LineGeometry StartPoint="4.2,6.8" EndPoint="4.3,6.8" />
+            <LineGeometry StartPoint="6.7,6.8" EndPoint="6.8,6.8" />
+            <LineGeometry StartPoint="9.2,6.8" EndPoint="9.3,6.8" />
+            <LineGeometry StartPoint="11.7,6.8" EndPoint="11.8,6.8" />
+        </GeometryGroup>
+
+        <PathGeometry x:Key="IcoReiniciar"
+                      Figures="M13,8 A5,5 0 1 1 11.2,4.2 M11.2,1.4 L11.2,4.6 L8,4.6" />
+
+        <!-- El trazo fino y la punta redonda son lo que los hace parecer iconos y
+             no diagramas. El color se queda fijo: al pasar el raton cambia el
+             FONDO del boton, como en AnyDesk, no el icono. -->
+        <Style x:Key="Icono" TargetType="Path">
+            <Setter Property="Stroke" Value="{StaticResource Letra}" />
+            <Setter Property="StrokeThickness" Value="1.3" />
+            <Setter Property="StrokeStartLineCap" Value="Round" />
+            <Setter Property="StrokeEndLineCap" Value="Round" />
+            <Setter Property="StrokeLineJoin" Value="Round" />
+            <Setter Property="Width" Value="16" />
+            <Setter Property="Height" Value="16" />
+            <Setter Property="Stretch" Value="None" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+        </Style>
+
+        <!-- Los macizos: barras, punto y rayo se rellenan en vez de perfilarse.
+             Perfilados a este tamano se ven sucios. -->
+        <Style x:Key="IconoMacizo" TargetType="Path" BasedOn="{StaticResource Icono}">
+            <Setter Property="Stroke" Value="{x:Null}" />
+            <Setter Property="Fill" Value="{StaticResource Letra}" />
+        </Style>
+
         <!-- Focusable=False en TODOS: si un boton se queda el foco, la barra
              espaciadora lo vuelve a pulsar en vez de viajar a la PC remota. -->
         <Style TargetType="Button">
@@ -112,44 +192,99 @@
                            Foreground="{StaticResource LetraTenue}" Text="" />
 
                 <StackPanel Orientation="Horizontal">
-                    <Button x:Name="BotonCaptura" Content="Captura" Click="Capturar"
-                            ToolTip="Guarda una imagen del escritorio remoto" />
-                    <Button x:Name="BotonGrabar" Content="Grabar" Click="AlternarGrabacion"
-                            ToolTip="Graba la sesion en H.264, sin recodificar" />
+                    <Button x:Name="BotonCaptura" Click="Capturar"
+                            ToolTip="Crear captura de pantalla">
+                        <Path Style="{StaticResource Icono}" Data="{StaticResource IcoCamara}" />
+                    </Button>
 
-                    <Border Width="1" Background="{StaticResource Linea}" Margin="6,4" />
+                    <Button x:Name="BotonGrabar" Click="AlternarGrabacion"
+                            ToolTip="Grabar la sesion">
+                        <Path x:Name="IconoGrabar" Style="{StaticResource IconoMacizo}"
+                              Data="{StaticResource IcoPunto}" />
+                    </Button>
+
+                    <Border Width="1" Background="{StaticResource Linea}" Margin="6,5" />
 
                     <Menu Background="Transparent" VerticalAlignment="Center">
-                        <MenuItem x:Name="MenuEscala" Header="Adaptar">
-                            <MenuItem Header="Adaptar"  Tag="0"   IsCheckable="True" IsChecked="True" Click="ElegirEscala" />
-                            <MenuItem Header="Original" Tag="1"   IsCheckable="True" Click="ElegirEscala" />
-                            <MenuItem Header="50 %"     Tag="0.5" IsCheckable="True" Click="ElegirEscala" />
-                            <MenuItem Header="150 %"    Tag="1.5" IsCheckable="True" Click="ElegirEscala" />
-                            <MenuItem Header="200 %"    Tag="2"   IsCheckable="True" Click="ElegirEscala" />
+                        <!-- Dos botones y no uno, igual que AnyDesk: el monitor
+                             elige QUE se ve y las esquinas COMO se ve. Juntarlos
+                             haria un menu de once entradas de dos temas
+                             distintos. -->
+                        <MenuItem x:Name="MenuPantallas" IsEnabled="False" ToolTip="Pantalla remota">
+                            <MenuItem.Header>
+                                <Path Style="{StaticResource Icono}" Data="{StaticResource IcoMonitor}" />
+                            </MenuItem.Header>
                         </MenuItem>
 
-                        <MenuItem x:Name="MenuPantallas" Header="Pantalla" IsEnabled="False" />
+                        <MenuItem x:Name="MenuEscala" ToolTip="Vista">
+                            <MenuItem.Header>
+                                <Path Style="{StaticResource Icono}" Data="{StaticResource IcoEncajar}" />
+                            </MenuItem.Header>
+
+                            <MenuItem IsHitTestVisible="False" Focusable="False">
+                                <MenuItem.Header>
+                                    <TextBlock Text="Vista" Foreground="{StaticResource LetraTenue}" FontSize="11" />
+                                </MenuItem.Header>
+                            </MenuItem>
+                            <MenuItem Header="Ajustado" Tag="0" IsCheckable="True" IsChecked="True" Click="ElegirEscala" />
+                            <MenuItem Header="Tamano original" Tag="1" IsCheckable="True" Click="ElegirEscala" />
+                            <MenuItem Header="50 %" Tag="0.5" IsCheckable="True" Click="ElegirEscala" />
+                            <MenuItem Header="150 %" Tag="1.5" IsCheckable="True" Click="ElegirEscala" />
+                            <MenuItem Header="200 %" Tag="2" IsCheckable="True" Click="ElegirEscala" />
+                        </MenuItem>
                     </Menu>
 
-                    <Border Width="1" Background="{StaticResource Linea}" Margin="6,4" />
+                    <Border Width="1" Background="{StaticResource Linea}" Margin="6,5" />
 
-                    <Button x:Name="BotonArchivos" Content="Archivos" Click="AlternarArchivos"
-                            ToolTip="Transferencia de archivos con la PC remota" />
-                    <Button x:Name="BotonDatos" Content="Datos" Click="AlternarDatos"
-                            ToolTip="Medidas de la sesion (Ctrl + Mayus + F12)" />
+                    <Button x:Name="BotonArchivos" Click="AlternarArchivos"
+                            ToolTip="Transferencia de archivos">
+                        <Path Style="{StaticResource Icono}" Data="{StaticResource IcoCarpeta}" />
+                    </Button>
+
+                    <Button x:Name="BotonDatos" Click="AlternarDatos"
+                            ToolTip="Medidas de la sesion (Ctrl + Mayus + F12)">
+                        <Path Style="{StaticResource IconoMacizo}" Data="{StaticResource IcoBarras}" />
+                    </Button>
 
                     <Menu Background="Transparent" VerticalAlignment="Center">
-                        <MenuItem Header="Acciones">
-                            <MenuItem Header="Ctrl + Alt + Supr" Click="EnviarCtrlAltSupr" />
-                            <MenuItem Header="Bloquear la PC remota" Click="BloquearRemota" />
+                        <MenuItem ToolTip="Acciones">
+                            <MenuItem.Header>
+                                <Path Style="{StaticResource IconoMacizo}" Data="{StaticResource IcoRayo}" />
+                            </MenuItem.Header>
+
+                            <MenuItem IsHitTestVisible="False" Focusable="False">
+                                <MenuItem.Header>
+                                    <TextBlock Text="Acciones" Foreground="{StaticResource LetraTenue}" FontSize="11" />
+                                </MenuItem.Header>
+                            </MenuItem>
+
+                            <MenuItem Header="Ctrl + Alt + Supr" Click="EnviarCtrlAltSupr">
+                                <MenuItem.Icon>
+                                    <Path Style="{StaticResource Icono}" Data="{StaticResource IcoTeclas}" />
+                                </MenuItem.Icon>
+                            </MenuItem>
+
+                            <MenuItem Header="Bloquear la PC remota" Click="BloquearRemota">
+                                <MenuItem.Icon>
+                                    <Path Style="{StaticResource Icono}" Data="{StaticResource IcoCandado}" />
+                                </MenuItem.Icon>
+                            </MenuItem>
+
                             <MenuItem x:Name="MenuCongelar" Header="Congelar entrada local"
                                       IsCheckable="True" Click="CongelarEntrada" />
+
                             <!-- Se puede apagar, y hace falta que se pueda: con esto
                                  puesto, Alt+Tab ya no saca al tecnico del visor. -->
                             <MenuItem x:Name="MenuTeclas" Header="Enviar Windows y Alt+Tab a la PC remota"
                                       IsCheckable="True" IsChecked="True" Click="AlternarTeclas" />
+
                             <Separator />
-                            <MenuItem Header="Reiniciar la PC remota..." Click="ReiniciarRemota" />
+
+                            <MenuItem Header="Reiniciar la PC remota..." Click="ReiniciarRemota">
+                                <MenuItem.Icon>
+                                    <Path Style="{StaticResource Icono}" Data="{StaticResource IcoReiniciar}" />
+                                </MenuItem.Icon>
+                            </MenuItem>
                         </MenuItem>
                     </Menu>
                 </StackPanel>
