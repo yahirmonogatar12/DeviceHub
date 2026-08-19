@@ -282,6 +282,11 @@ public partial class RelayWindow : Window
         var proceso = Process.GetCurrentProcess();
         var ramInicio = proceso.PrivateMemorySize64;
 
+        // Trozos por pantalla. Con varios flujos, "chunks 534" no dice si los
+        // dos estan llegando o si uno se quedo mudo, que es exactamente la
+        // diferencia entre un problema de red y uno de captura.
+        var porPantalla = new Dictionary<uint, long>();
+
         var decodificaciones = new List<long>();
         long chunks = 0, reconstruidos = 0, decodificados = 0, pintados = 0;
         long cambiosConfig = 0, idr = 0;
@@ -384,6 +389,7 @@ public partial class RelayWindow : Window
                         chunks++;
 
                         var pantalla = paquete.VideoChunk.DisplayId;
+                        porPantalla[pantalla] = porPantalla.GetValueOrDefault(pantalla) + 1;
 
                         if (!decodificadores.TryGetValue(pantalla, out var decoder)
                             || !configs.TryGetValue(pantalla, out var config))
@@ -539,7 +545,7 @@ public partial class RelayWindow : Window
                     Mostrar(
                         $"sesion {_sesion}   {Resumen(configs)}   " +
                         $"RTT {(_rttUs < 0 ? "-" : $"{_rttUs / 1000.0:0.0} ms")}\n" +
-                        $"chunks {chunks}   frames {reconstruidos}   decodificados {decodificados}   pintados {pintados}   " +
+                        $"chunks {chunks}{PorPantalla(porPantalla)}   frames {reconstruidos}   decodificados {decodificados}   pintados {pintados}   " +
                         $"render {pintados / segundos:0.00} FPS   " +
                         $"decode p50 {Percentil(ordenadas, 0.50):0.00} ms   p95 {Percentil(ordenadas, 0.95):0.00} ms\n" +
                         // La entrada enviada va en la barra a proposito: cuando
@@ -1638,6 +1644,12 @@ public partial class RelayWindow : Window
             ? $"{primera.Width}x{primera.Height} v{primera.ConfigVersion}"
             : $"{configs.Count} pantallas {primera.CanvasWidth}x{primera.CanvasHeight}";
     }
+
+    /// <summary>Desglose por pantalla, solo cuando hay mas de una.</summary>
+    private static string PorPantalla(Dictionary<uint, long> cuenta)
+        => cuenta.Count <= 1
+            ? string.Empty
+            : $" ({string.Join(" ", cuenta.OrderBy(x => x.Key).Select(x => $"p{x.Key}:{x.Value}"))})";
 
     private static double Percentil(List<long> ordenadas, double p)
     {

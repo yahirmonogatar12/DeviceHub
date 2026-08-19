@@ -1218,6 +1218,16 @@ public static class RelaySession
         if (flujos.Count == 0)
             throw new ScreenCaptureUnavailableException("No se pudo abrir ninguna de las pantallas.");
 
+        // Con varias pantallas NADIE espera: se sondean todas en el mismo hilo,
+        // asi que una quieta se llevaria 100 ms de cada vuelta y dejaria a las
+        // demas a 5 FPS aunque fueran las unicas moviendose. El freno del ritmo
+        // ya evita el bucle ocupado.
+        foreach (var flujo in flujos)
+        {
+            if (flujo.Captura is DxgiDesktopCapture dxgi)
+                dxgi.EsperaMs = 0;
+        }
+
         return flujos;
     }
 

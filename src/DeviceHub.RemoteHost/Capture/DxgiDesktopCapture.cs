@@ -25,6 +25,17 @@ public sealed class DxgiDesktopCapture : IScreenCapture
     /// </summary>
     private const int AcquireTimeoutMs = 100;
 
+    /// <summary>
+    /// Cuanto espera AcquireNextFrame. 0 = no espera.
+    ///
+    /// Con UNA pantalla conviene esperar: el driver despierta al llegar una
+    /// presentacion y bloquear ahi no cuesta CPU. Con VARIAS es al reves --
+    /// se sondean en el mismo hilo, asi que una pantalla quieta se lleva 100 ms
+    /// de cada vuelta y deja a las demas a 5 FPS aunque sean las unicas que se
+    /// mueven. El freno del ritmo ya evita el bucle ocupado.
+    /// </summary>
+    public int EsperaMs { get; set; } = AcquireTimeoutMs;
+
     private readonly int _adapterIndex;
     private readonly int _outputIndex;
     private readonly long _startedAtTicks = Stopwatch.GetTimestamp();
@@ -140,7 +151,7 @@ public sealed class DxgiDesktopCapture : IScreenCapture
                 "hay que llamar a VideoFrame.Dispose() antes de pedir el siguiente.");
 
         var duplication = _duplication;
-        var result = duplication.AcquireNextFrame(AcquireTimeoutMs, out var info, out var resource);
+        var result = duplication.AcquireNextFrame((uint)EsperaMs, out var info, out var resource);
 
         if (result == Vortice.DXGI.ResultCode.WaitTimeout)
         {
