@@ -587,6 +587,7 @@ public static class RelaySession
 
             using var escritorio = new InputDesktop();
             var ultimoAviso = string.Empty;
+            var avisadoSinInyector = false;
 
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -611,8 +612,21 @@ public static class RelaySession
 
                 if (aviso != ultimoAviso)
                 {
-                    opciones.Escribir(aviso);
+                    // AL TECNICO tambien. "Veo la pantalla pero no puedo mover
+                    // nada" tiene su explicacion escrita aqui desde hace dos
+                    // versiones, y estaba yendo a un log que nadie abre.
+                    Avisar(opciones, aviso);
                     ultimoAviso = aviso;
+                }
+
+                // Sin inyector no se aplica nada, y hasta ahora eso pasaba en
+                // silencio: la cola se vaciaba y los eventos se perdian. Es la
+                // diferencia entre "la entrada no llega" y "la entrada llega y no
+                // hay quien la aplique".
+                if (_entrada is null && !Pendientes.IsEmpty && !avisadoSinInyector)
+                {
+                    avisadoSinInyector = true;
+                    Avisar(opciones, "Llega entrada pero la captura todavia no publico el inyector.");
                 }
 
                 while (Pendientes.TryDequeue(out var evento))
