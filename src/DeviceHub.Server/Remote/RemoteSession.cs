@@ -267,6 +267,7 @@ public sealed class RemoteSession(string id)
                     }
                 }
 
+                await PedirIdrSiHaceFaltaAsync(cancellationToken);
                 break;
 
             default:
@@ -298,11 +299,48 @@ public sealed class RemoteSession(string id)
             _pendienteDePantallas = null;
         }
 
+        // El IDR primero: un viewer que acaba de entrar no tiene con que
+        // descodificar nada, y la lista de pantallas puede esperar un mensaje.
+        await PedirIdrSiHaceFaltaAsync(cancellationToken);
+
         if (destino is null || pantallas is null)
             return;
 
         await destino.SendControlAsync(new RemotePacket { Displays = pantallas }, cancellationToken);
     }
+
+    /// <summary>
+    /// Le pide al host un IDR de las pantallas cuya cola se acaba de vaciar.
+    ///
+    /// EL RELAY PIDE, no solo el visor. Cuando la congestion tira la cola, el
+    /// visor no se entera de nada -- para el simplemente dejan de llegar frames
+    /// -- asi que quien tiene que pedirlo es quien descarto. Es lo que hace
+    /// RustDesk desde su cliente al desbordar la suya: force_push que devuelve
+    /// algo, refresh_video inmediato.
+    /// </summary>
+    private async ValueTask PedirIdrSiHaceFaltaAsync(CancellationToken cancellationToken)
+    {
+        if (Host is not { } host || Viewer is not { } viewer)
+            return;
+
+        foreach (var pantalla in viewer.PantallasQuePidenIdr())
+        {
+            IdrRequested++;
+
+            await host.SendControlAsync(new RemotePacket
+            {
+                KeyframeRequest = new KeyframeRequest
+                {
+                    Reason = KeyframeReason.Congestion,
+                    DisplayId = pantalla
+                }
+            }, cancellationToken);
+        }
+    }
+
+    /// <summary>Cuantos IDR ha pedido el relay por su cuenta. Si esto sube sin
+    /// parar, el problema no es el codificador: es que no cabe.</summary>
+    public long IdrRequested { get; private set; }
 
     /// <summary>Lo que manda la PC del tecnico: entrada y peticiones.</summary>
     public ValueTask FromViewerAsync(RemotePacket paquete, CancellationToken cancellationToken)

@@ -61,6 +61,30 @@ public sealed class VideoRelayQueue
     /// <summary>Frames llegados antes de que hubiera VideoConfig.</summary>
     public long DiscardedNoConfig { get; private set; }
 
+    /// <summary>
+    /// Hay que PEDIRLE UN IDR AL HOST, y hasta entonces esta pantalla no manda
+    /// nada.
+    ///
+    /// Faltaba, y era el agujero mas caro del relay: al entrar en
+    /// AwaitingKeyframe se descarta todo lo que no sea IDR, pero nadie le decia
+    /// al host que emitiera uno. Habia que esperar a que el codificador lo
+    /// sacara por su cuenta -- y el GOP no se configura en ningun sitio, asi que
+    /// eso podian ser segundos de imagen congelada por cada atasco.
+    /// </summary>
+    private bool _pedirIdr;
+
+    /// <summary>Devuelve si hay peticion pendiente y la consume. La consume
+    /// para que no se pida un IDR por frame mientras dura el atasco.</summary>
+    public bool TomarPeticionDeIdr()
+    {
+        lock (_puerta)
+        {
+            var pedir = _pedirIdr;
+            _pedirIdr = false;
+            return pedir;
+        }
+    }
+
     public int HighWater { get; private set; }
     public int Depth { get { lock (_puerta) return _cola.Count; } }
 
@@ -92,6 +116,7 @@ public sealed class VideoRelayQueue
 
             AwaitingKeyframe = true;
             ConfigPending = true;
+            _pedirIdr = true;
         }
     }
 
@@ -124,6 +149,7 @@ public sealed class VideoRelayQueue
 
                 AwaitingKeyframe = true;
                 ConfigPending = true;
+                _pedirIdr = true;
             }
 
             if (AwaitingKeyframe && !frame.KeyFrame)

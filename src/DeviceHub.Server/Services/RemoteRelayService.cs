@@ -396,7 +396,11 @@ public sealed class RemoteRelayGrpcService(
             RemotePacket.PayloadOneofCase.SelectDisplay or
             RemotePacket.PayloadOneofCase.FileListRequest or
             RemotePacket.PayloadOneofCase.FileDownload or
-            RemotePacket.PayloadOneofCase.KeyframeRequest => papel == RemoteRole.Viewer,
+            RemotePacket.PayloadOneofCase.KeyframeRequest or
+
+            // El acuse de frame. Va del visor al host y es lo que impide que el
+            // host se adelante: sin reenviarlo, el freno no existe.
+            RemotePacket.PayloadOneofCase.VideoAck => papel == RemoteRole.Viewer,
 
             RemotePacket.PayloadOneofCase.Ping or
             RemotePacket.PayloadOneofCase.Pong or

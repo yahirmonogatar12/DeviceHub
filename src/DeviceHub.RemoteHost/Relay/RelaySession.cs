@@ -248,6 +248,33 @@ public static class RelaySession
     /// </summary>
     private static volatile bool _keyframePedido;
 
+    /// <summary>
+    /// Pantallas para las que se pidio un IDR. Por pantalla y no una bandera
+    /// global: con dos monitores, una perdida en uno no justifica gastar el
+    /// frame mas caro que existe en el otro -- y menos cuando lo que la causo
+    /// fue que la red no daba abasto.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, byte> _keyframePorPantalla = new();
+
+    /// <summary>
+    /// EL VISOR CONFIRMA FRAMES.
+    ///
+    /// Arranca en false y se enciende con el primer VideoAck que llegue. Un
+    /// visor viejo no manda ninguno, y quedarse esperandolo dejaria la sesion a
+    /// un frame por segundo: el freno se enciende solo cuando el otro extremo
+    /// demuestra que sabe soltarlo.
+    /// </summary>
+    private static volatile bool _visorAcusa;
+
+    /// <summary>Entrega un acuse a la bomba de su pantalla. Lo pone Escritorio,
+    /// igual que _avisar.</summary>
+    private static Action<uint, ulong>? _acusar;
+
+    /// <summary>Cuanto se espera un acuse antes de seguir sin el. RustDesk usa
+    /// 3 s; aqui menos, porque su espera se corta en cuanto llegan todos y esta
+    /// solo salta cuando el acuse se perdio de verdad.</summary>
+    private const int EsperaDeAcuseMs = 1000;
+
     private static int _bitrateDeseado;
 
     /// <summary>Frames por segundo a los que capturar. Lo decide el hilo de red
@@ -262,6 +289,10 @@ public static class RelaySession
     {
         public long Capturados, Codificados, Claves, Enviados, Trozos, Bytes;
         public long DescartesEncoder, DescartesCaptura;
+
+        /// <summary>Frames que salieron y nadie confirmo en EsperaDeAcuseMs. Si
+        /// esto sube, el visor no esta siguiendo el ritmo.</summary>
+        public long AcusesPerdidos;
         public uint ConfigVersion;
 
         /// <summary>La misma cuenta, en un campo que Interlocked puede tocar: al
@@ -325,6 +356,7 @@ public static class RelaySession
 
         var reloj = Stopwatch.StartNew();
         var siguienteAviso = TimeSpan.FromSeconds(2);
+        var acusesAlMirar = 0L;
 
         try
         {
@@ -368,6 +400,7 @@ public static class RelaySession
                         $"frames enviados {cuenta.Enviados}  chunks {cuenta.Trozos}  " +
                         $"{cuenta.Bytes * 8 / reloj.Elapsed.TotalSeconds / 1_000_000:0.00} Mbps  " +
                         $"keyframes {cuenta.Claves}  config {cuenta.ConfigVersion}  cola {cola.Reader.Count}  " +
+                        $"acuses {(_visorAcusa ? "si" : "no")}/{cuenta.AcusesPerdidos} perdidos  " +
                         // Aplicados y rechazados de SendInput. Es lo que dice si
                         // la entrada llega de verdad al otro lado o se la traga
                         // el escritorio equivocado.
@@ -376,8 +409,19 @@ public static class RelaySession
                     // El bitrate se DECIDE aqui, donde se ve la cola, y se
                     // APLICA en el hilo de captura. Cada 2 s y no por frame: un
                     // controlador que reacciona a cada hipo produce vaiven.
-                    _bitrateDeseado = ControlBitrate.Siguiente(
-                        _bitrateDeseado, cola.Reader.Count, 8);
+                    // CON EL FRENO PUESTO, LA COLA YA NO DICE NADA.
+                    //
+                    // Antes se llenaba cuando la red no daba abasto y esa era la
+                    // senal. Ahora la captura se para en el acuse, asi que la
+                    // cola vive vacia y el bitrate subiria hasta el maximo
+                    // aunque no cupiera. Un acuse perdido pasa a contar como
+                    // cola llena, que es exactamente lo que significa.
+                    var acusesPerdidos = Interlocked.Read(ref cuenta.AcusesPerdidos);
+                    var ocupacion = acusesPerdidos > acusesAlMirar ? 8 : cola.Reader.Count;
+
+                    acusesAlMirar = acusesPerdidos;
+
+                    _bitrateDeseado = ControlBitrate.Siguiente(_bitrateDeseado, ocupacion, 8);
 
                     // Y el ritmo, por su cuenta y con otra senal. La cola dice
                     // que algo va lento; el RTT dice que es la RED.
@@ -727,6 +771,18 @@ public static class RelaySession
 
         _entrada = new InputInjector(lienzo.Ancho, lienzo.Alto, lienzo.X, lienzo.Y);
 
+        // El hilo de red entrega los acuses por aqui. No toca los flujos
+        // directamente por lo mismo de siempre: cada bomba es la unica dueña de
+        // lo suyo, y esto solo abre un semaforo.
+        _acusar = (pantalla, frame) =>
+        {
+            foreach (var flujo in flujos)
+            {
+                if (flujo.DisplayId == (int)pantalla)
+                    flujo.Confirmar(frame);
+            }
+        };
+
         opciones.Escribir(
             $"Identidad {System.Security.Principal.WindowsIdentity.GetCurrent().Name}  " +
             $"Escritorio {escritorio.Name}  Flujos {flujos.Count}  " +
@@ -875,6 +931,23 @@ public static class RelaySession
                         flujo.KeyframePedido = true;
                 }
 
+                if (!_keyframePorPantalla.IsEmpty)
+                {
+                    // Se vacia entera aunque alguna pantalla ya no exista: una
+                    // peticion para un monitor que se desconecto no puede
+                    // quedarse ahi para siempre.
+                    var pedidas = _keyframePorPantalla.Keys.ToArray();
+
+                    foreach (var quienPide in pedidas)
+                        _keyframePorPantalla.TryRemove(quienPide, out _);
+
+                    foreach (var flujo in flujos)
+                    {
+                        if (Array.IndexOf(pedidas, flujo.DisplayId) >= 0)
+                            flujo.KeyframePedido = true;
+                    }
+                }
+
                 if (_bitrateDeseado > 0)
                 {
                     // Repartido: dos pantallas a 6 Mbps cada una son 12 por el
@@ -897,6 +970,8 @@ public static class RelaySession
         }
         finally
         {
+            _acusar = null;
+
             // Primero se paran las bombas y se espera: disponer una captura
             // mientras su hilo esta dentro de AcquireNextFrame es como se cuelga
             // DXGI sin dejar rastro.
@@ -1089,8 +1164,34 @@ public static class RelaySession
                     foreach (var trozo in grupo.Chunks)
                         trozo.DisplayId = (uint)flujo.DisplayId;
 
+                    // EL EMISOR NO SE ADELANTA AL RECEPTOR.
+                    //
+                    // Se arma el freno ANTES de escribir, no despues: el acuse
+                    // puede llegar mientras la escritura esta en curso, y
+                    // rearmarlo despues lo borraria y nos dejaria esperando un
+                    // acuse que ya vino.
+                    var frenar = _visorAcusa;
+
+                    if (frenar)
+                    {
+                        Volatile.Write(ref flujo.EnVuelo, (long)numero);
+                        flujo.Acuse.Reset();
+                    }
+
                     salida.WriteAsync(new Enviable(config, grupo), cancellationToken)
                         .AsTask().GetAwaiter().GetResult();
+
+                    // Y aqui se espera. Parece que frena y hace lo contrario:
+                    // sin esto caben doce frames entre la cola del host y la del
+                    // relay -- 600 ms de escritorio viejo a 20 FPS -- y un frame
+                    // que espera turno ya llega tarde.
+                    //
+                    // Es el VideoFrameController de RustDesk: alli el bucle de
+                    // captura no coge el siguiente hasta que TODOS los clientes
+                    // confirman el anterior, y por eso su latencia esta acotada
+                    // por construccion en vez de por ajuste.
+                    if (frenar && !flujo.Acuse.Wait(EsperaDeAcuseMs, cancellationToken))
+                        Interlocked.Increment(ref cuenta.AcusesPerdidos);
                 }
             }
         }
@@ -1226,8 +1327,24 @@ public static class RelaySession
 
         public int BitrateDeseado;
 
+        /// <summary>Se abre cuando el visor confirma el frame en vuelo.</summary>
+        public readonly ManualResetEventSlim Acuse = new(false);
+
+        /// <summary>Frame mandado y sin confirmar. 0 = ninguno.</summary>
+        public long EnVuelo;
+
+        /// <summary>Un acuse ATRASADO no abre el freno del frame actual: si el
+        /// del 100 llega cuando ya se espera el 102, abrirlo seria adelantarse
+        /// justo lo que este freno existe para impedir.</summary>
+        public void Confirmar(ulong frame)
+        {
+            if ((long)frame >= Volatile.Read(ref EnVuelo))
+                Acuse.Set();
+        }
+
         public void Dispose()
         {
+            Acuse.Dispose();
             Codificador.Dispose();
             Captura.Dispose();
         }
@@ -1708,11 +1825,21 @@ public static class RelaySession
                         break;
 
                     case RemotePacket.PayloadOneofCase.KeyframeRequest:
-                        // Se anota y lo atiende el hilo de captura. Hasta la Fase
-                        // 13 esto se registraba y se tiraba: el visor pedia
-                        // ayuda y nadie contestaba.
-                        _keyframePedido = true;
-                        opciones.Escribir("El viewer pidio un keyframe.");
+                        // Se anota y lo atiende la bomba de esa pantalla. Hasta
+                        // la Fase 13 esto se registraba y se tiraba; hasta hoy
+                        // nadie lo mandaba nunca.
+                        _keyframePorPantalla[(int)paquete.KeyframeRequest.DisplayId] = 0;
+
+                        opciones.Escribir(
+                            $"Piden keyframe de la pantalla {paquete.KeyframeRequest.DisplayId} " +
+                            $"({paquete.KeyframeRequest.Reason}).");
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.VideoAck:
+                        // El primero enciende el freno para toda la sesion.
+                        _visorAcusa = true;
+
+                        _acusar?.Invoke(paquete.VideoAck.DisplayId, paquete.VideoAck.FrameId);
                         break;
                 }
             }

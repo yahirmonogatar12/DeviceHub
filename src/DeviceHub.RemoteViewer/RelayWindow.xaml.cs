@@ -381,6 +381,11 @@ public partial class RelayWindow : Window
         // diferencia entre un problema de red y uno de captura.
         var porPantalla = new Dictionary<uint, long>();
 
+        // Cuantos frames llevaba abandonados cada reensamblador la ultima vez
+        // que se miro. Lo que dispara la peticion de IDR es que ESTE numero
+        // suba, no su valor.
+        var perdidasVistas = new Dictionary<uint, long>();
+
         var decodificaciones = new List<long>();
         long chunks = 0, reconstruidos = 0, decodificados = 0, pintados = 0;
         long cambiosConfig = 0, idr = 0;
@@ -511,8 +516,30 @@ public partial class RelayWindow : Window
                             montadores[pantalla] = montador;
                         }
 
-                        if (!montador.TryAdd(paquete.VideoChunk, out var completo))
+                        var completado = montador.TryAdd(paquete.VideoChunk, out var completo);
+
+                        // SE PIDE UN IDR AL PERDER. Esto faltaba ENTERO: el
+                        // mensaje existe desde la Fase 4, el host lo atiende y
+                        // el relay lo deja pasar, y no habia una sola linea que
+                        // construyera uno. Un frame perdido dejaba la imagen
+                        // rota hasta que el codificador emitiera un IDR por su
+                        // cuenta -- y el GOP no se configura en ningun sitio.
+                        var perdidos = montador.Dropped + montador.Rejected;
+
+                        if (perdidos != perdidasVistas.GetValueOrDefault(pantalla))
+                        {
+                            perdidasVistas[pantalla] = perdidos;
+                            PedirKeyframe(pantalla, montador.LastGoodFrameId, KeyframeReason.LostChunk);
+                        }
+
+                        if (!completado)
                             break;
+
+                        // EL ACUSE, en cuanto el frame esta entero y ANTES de
+                        // descodificarlo. Es lo que le permite al host capturar
+                        // el siguiente mientras este se pinta: acusar despues
+                        // sumaria el tiempo de descodificado a cada vuelta.
+                        Acusar(pantalla, completo!.FrameId);
 
                         reconstruidos++;
 
@@ -662,7 +689,7 @@ public partial class RelayWindow : Window
                         // La entrada enviada va en la barra a proposito: cuando
                         // el video se ve pero no se puede controlar, esta cifra
                         // dice de un vistazo cual de las dos mitades falla.
-                        $"entrada {_entradaEnviada}   " +
+                        $"entrada {_entradaEnviada}   acuses {_acuses}   IDR pedidos {_idrPedidos}   " +
                         (_grabacion is null ? string.Empty : $"grabando {_grabados} frames   ") +
                         $"incompletos {montadores.Values.Sum(m => m.Dropped)}   " +
                         $"invalidos {montadores.Values.Sum(m => m.Rejected)}   " +
@@ -1652,6 +1679,67 @@ public partial class RelayWindow : Window
             SessionId = _sesion,
             HostAction = accion
         });
+
+    /// <summary>
+    /// Confirma un frame. El host no captura el siguiente de esa pantalla hasta
+    /// recibir esto.
+    ///
+    /// No pasa por Encolar a proposito: ahi se cuenta la ENTRADA, y meter un
+    /// acuse por frame convertiria esa cifra -- que sirve para saber si el
+    /// teclado y el raton estan viajando -- en ruido.
+    /// </summary>
+    private void Acusar(uint pantalla, ulong frame)
+    {
+        var ok = _salida.Writer.TryWrite(new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = _sesion,
+            VideoAck = new VideoAck { FrameId = frame, DisplayId = pantalla }
+        });
+
+        if (ok)
+            _acuses++;
+    }
+
+    private long _acuses;
+    private long _idrPedidos;
+
+    /// <summary>Cuando se pidio el ultimo IDR de cada pantalla.</summary>
+    private readonly Dictionary<uint, long> _ultimaPeticionIdr = [];
+
+    /// <summary>
+    /// Pide un fotograma clave, COMO MUCHO UNO POR SEGUNDO Y PANTALLA.
+    ///
+    /// El limite no es prudencia: una perdida suele venir de que la red no da
+    /// abasto, y un IDR es el frame mas caro que existe. Pedir uno por cada
+    /// frame perdido convierte un atasco en una tormenta de keyframes que lo
+    /// empeora. RustDesk limita el suyo igual, por cuenta y por tiempo.
+    /// </summary>
+    private void PedirKeyframe(uint pantalla, ulong ultimoBueno, KeyframeReason motivo)
+    {
+        var ahora = Stopwatch.GetTimestamp();
+
+        if (_ultimaPeticionIdr.TryGetValue(pantalla, out var previa)
+            && ahora - previa < Stopwatch.Frequency)
+        {
+            return;
+        }
+
+        _ultimaPeticionIdr[pantalla] = ahora;
+        _idrPedidos++;
+
+        _salida.Writer.TryWrite(new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = _sesion,
+            KeyframeRequest = new KeyframeRequest
+            {
+                Reason = motivo,
+                LastGoodFrameId = ultimoBueno,
+                DisplayId = pantalla
+            }
+        });
+    }
 
     private void Encolar(RemotePacket paquete)
     {

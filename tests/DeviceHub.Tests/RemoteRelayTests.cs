@@ -656,4 +656,62 @@ public class RemoteRelayTests
         Assert.Equal(0, foto.StaleConfig);
         Assert.Equal(0, foto.DiscardedWaitingIdr);
     }
+
+    // -- Peticion de fotograma clave ------------------------------------------
+
+    [Fact]
+    public void A_congested_queue_asks_the_host_for_a_keyframe()
+    {
+        // EL AGUJERO QUE ESTO TAPA. Al desbordar, la cola entra en
+        // AwaitingKeyframe y a partir de ahi descarta todo lo que no sea IDR.
+        // Nadie se lo pedia al host, asi que habia que esperar a que el
+        // codificador emitiera uno por su cuenta -- y el GOP no se configura en
+        // ningun sitio. Eso son segundos de imagen congelada por cada atasco.
+        var cola = new VideoRelayQueue(capacidad: 2);
+        cola.SetConfig(Config());
+
+        // Una configuracion nueva NO pide nada, y es a proposito: el host manda
+        // VideoConfig con su IDR pegado detras, asi que pedirlo aqui seria pedir
+        // lo que ya viene de camino.
+        Assert.False(cola.TomarPeticionDeIdr());
+
+        Assert.True(cola.TryEnqueue(Frame(1, clave: true)));
+        Assert.True(cola.TryEnqueue(Frame(2, clave: false)));
+
+        Assert.False(cola.TomarPeticionDeIdr());   // mientras cabe, no se pide
+
+        // La tercera desborda: se tira la cola entera y hay que reabrir la
+        // cadena.
+        cola.TryEnqueue(Frame(3, clave: false));
+
+        Assert.True(cola.AwaitingKeyframe);
+        Assert.True(cola.TomarPeticionDeIdr());
+        Assert.False(cola.TomarPeticionDeIdr());   // se consume, no se repite
+    }
+
+    [Fact]
+    public void The_relay_asks_per_display_and_only_once()
+    {
+        using var conexion = Viewer();
+
+        var cero = Config(version: 1);
+        var uno = Config(version: 2);
+        uno.DisplayId = 1;
+
+        conexion.SetVideoConfig(cero);
+        conexion.SetVideoConfig(uno);
+
+        Assert.Empty(conexion.PantallasQuePidenIdr());
+
+        // Un viewer que entra -- o que vuelve tras un corte -- no tiene contexto
+        // de NINGUNA pantalla, asi que piden todas.
+        conexion.RequireKeyframe();
+
+        Assert.Equal([0u, 1u], conexion.PantallasQuePidenIdr().Order());
+
+        // Y no vuelven a pedir sin motivo nuevo. Pedir un IDR por frame durante
+        // un atasco es lo que convierte la congestion en una tormenta de
+        // keyframes.
+        Assert.Empty(conexion.PantallasQuePidenIdr());
+    }
 }

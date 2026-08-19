@@ -85,6 +85,21 @@ public sealed class RelayConnection : IDisposable
     /// <summary>Todas las colas vivas, para sumar sus contadores.</summary>
     public IEnumerable<VideoRelayQueue> Colas => _video.Values;
 
+    /// <summary>Pantallas cuya cola se quedo esperando un IDR. Consume la
+    /// peticion: quien lo llama tiene que mandarla.</summary>
+    public List<uint> PantallasQuePidenIdr()
+    {
+        List<uint>? pendientes = null;
+
+        foreach (var (pantalla, cola) in _video)
+        {
+            if (cola.TomarPeticionDeIdr())
+                (pendientes ??= []).Add(pantalla);
+        }
+
+        return pendientes ?? [];
+    }
+
     public long PacketsWritten { get; private set; }
     public long BytesWritten { get; private set; }
     public long ControlSent { get; private set; }

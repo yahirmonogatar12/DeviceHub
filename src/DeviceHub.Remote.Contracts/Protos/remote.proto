@@ -78,6 +78,7 @@ message RemotePacket {
     FileAck             file_ack          = 29;
     ClipboardFiles      clipboard_files   = 30;
     HostStatus          host_status       = 31;
+    VideoAck            video_ack         = 32;
   }
 }
 
@@ -453,6 +454,10 @@ message KeyframeRequest {
 
   // Ultimo frame que se reensamblo entero. Sirve para medir cuanto se perdio.
   uint64 last_good_frame_id = 2;
+
+  // De QUE pantalla. Con varios monitores, una perdida en uno no justifica
+  // gastar un IDR del otro -- y menos cuando lo que la causo fue congestion.
+  uint32 display_id = 3;
 }
 
 enum KeyframeReason {
@@ -461,6 +466,11 @@ enum KeyframeReason {
   KEYFRAME_REASON_RECONNECT = 2;
   KEYFRAME_REASON_CONFIG_MISMATCH = 3;
   KEYFRAME_REASON_VIEWER_REQUEST = 4;
+
+  // El relay tiro su cola por congestion. A partir de ahi descarta todo lo que
+  // no sea IDR, asi que sin pedirlo la pantalla se queda congelada hasta que el
+  // codificador emita uno por su cuenta.
+  KEYFRAME_REASON_CONGESTION = 5;
 }
 
 // ---------------------------------------------------------------------------
@@ -551,6 +561,23 @@ message KeyEvent {
 // ---------------------------------------------------------------------------
 // Control de sesion
 // ---------------------------------------------------------------------------
+
+// EL FRENO QUE IMPIDE QUE EL EMISOR SE ADELANTE AL RECEPTOR.
+//
+// El visor confirma cada frame que reensambla y el host no captura el
+// siguiente de esa pantalla hasta tenerlo. Suena a que frena, y hace justo lo
+// contrario: sin esto, entre la cola del host y la del relay caben doce frames,
+// que a 20 FPS son 600 ms de escritorio viejo esperando turno. Un frame que
+// espera su turno ya llega tarde.
+//
+// Es lo que hace RustDesk con su VideoFrameController: la latencia queda
+// acotada por construccion en vez de por ajuste.
+message VideoAck {
+  uint64 frame_id = 1;
+
+  // Cada pantalla lleva su propio freno: la lenta no puede frenar a la otra.
+  uint32 display_id = 2;
+}
 
 message Ping {
   int64 sent_at_us = 1;
