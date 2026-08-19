@@ -136,7 +136,12 @@
             </DockPanel>
         </Border>
 
+        <!-- ScrollChanged ADEMAS de SizeChanged, y no por gusto: las barras de
+             desplazamiento entran y salen solas, y al hacerlo cambian el hueco
+             util sin que el ScrollViewer cambie de tamano. SizeChanged no se
+             entera de eso; ScrollChanged si. -->
         <ScrollViewer x:Name="Lienzo" Background="#0B1F55" SizeChanged="Ajustar"
+                      ScrollChanged="Ajustar"
                       HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
             <!-- Un minimo, no un tamano: sin el, el ScrollViewer mide 0x0 y el
                  HWND del video no llega a crearse. El tamano real lo pone

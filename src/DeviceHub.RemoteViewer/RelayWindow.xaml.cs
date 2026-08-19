@@ -363,7 +363,18 @@ public partial class RelayWindow : Window
                         var ancho = (int)(nueva.CanvasWidth > 0 ? nueva.CanvasWidth : nueva.Width);
                         var alto = (int)(nueva.CanvasHeight > 0 ? nueva.CanvasHeight : nueva.Height);
 
-                        _ = Dispatcher.BeginInvoke(() =>
+                        // PRIORIDAD Loaded, no la normal.
+                        //
+                        // Cambiar de una pantalla al escritorio entero cambia la
+                        // forma del video (16:9 -> 2.96:1). Con prioridad normal
+                        // esto corria ANTES del pase de medida de WPF, asi que
+                        // Ajustar leia el hueco de la forma anterior -- con la
+                        // barra de desplazamiento todavia puesta -- y dejaba el
+                        // video de un tamano que ya no correspondia. Se quedaba
+                        // asi hasta el siguiente cambio de configuracion, que es
+                        // justo lo que conseguia el rodeo de "abrir la segunda
+                        // pantalla y luego todas a la vez".
+                        _ = Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, () =>
                         {
                             _videoAncho = ancho;
                             _videoAlto = alto;
@@ -740,6 +751,8 @@ public partial class RelayWindow : Window
 
     private void Ajustar(object sender, SizeChangedEventArgs e) => Ajustar();
 
+    private void Ajustar(object sender, ScrollChangedEventArgs e) => Ajustar();
+
     /// <summary>
     /// El tamano del video lo decide el LIENZO, no el swapchain: DXGI se creo con
     /// Scaling.Stretch a la resolucion remota, asi que escalar es solo cambiar el
@@ -757,7 +770,16 @@ public partial class RelayWindow : Window
         if (ancho <= 0 || alto <= 0)
             return;
 
-        (Video.Width, Video.Height) = Escalado.Encajar(_videoAncho, _videoAlto, ancho, alto, _escala);
+        var (nuevoAncho, nuevoAlto) = Escalado.Encajar(_videoAncho, _videoAlto, ancho, alto, _escala);
+
+        // Solo si CAMBIA. Reasignar el mismo valor no dispara otra medida de WPF,
+        // pero esto es lo que garantiza que la pareja Ajustar/ScrollChanged pare:
+        // se recalcula hasta que el hueco y el video se ponen de acuerdo, y en la
+        // vuelta siguiente ya no hay nada que tocar.
+        if (Math.Abs(Video.Width - nuevoAncho) < 0.5 && Math.Abs(Video.Height - nuevoAlto) < 0.5)
+            return;
+
+        (Video.Width, Video.Height) = (nuevoAncho, nuevoAlto);
     }
 
     private void AlternarDatos(object sender, RoutedEventArgs e)
@@ -1306,7 +1328,7 @@ public partial class RelayWindow : Window
         {
             monitores.Add(new Monitor(
                 d.Id,
-                $"{d.Name.Replace(@"\\.\", string.Empty)}  {d.Width}x{d.Height}" +
+                $"{d.Name.Replace(@"\\.\", string.Empty)}  {d.Width}x{d.Height} @{d.X},{d.Y}" +
                 (d.Primary ? "  (principal)" : string.Empty)));
         }
 
