@@ -278,7 +278,25 @@ public partial class RelayWindow : Window
 
         VideoPresenter? presentador = null;
 
-        var montador = new VideoFrameAssembler();
+        // Y UN REENSAMBLADOR POR PANTALLA, por el mismo motivo y con mas
+        // consecuencias.
+        //
+        // El reensamblador monta UN frame a la vez y descarta como atrasado todo
+        // id menor o igual al ultimo completado. Con dos hilos de captura
+        // escribiendo en el mismo canal, los trozos llegan entrelazados:
+        //
+        //   p0/frame100 chunk0 | p1/frame101 chunk0 | p0/frame100 chunk1 | ...
+        //
+        // Compartido, el chunk0 del 101 abandona el 100 a medias y el chunk1 del
+        // 100 llega ya como atrasado. La pantalla con frames de varios trozos --
+        // la que mas se mueve, o la que acaba de mandar su IDR -- pierde
+        // practicamente todo, y eso se ve como una imagen que carga una vez y se
+        // queda quieta.
+        //
+        // Es la separacion que RustDesk tiene de serie: cada display lleva su
+        // manejador y su estado, y nada de una pantalla toca el de la otra.
+        var montadores = new Dictionary<uint, VideoFrameAssembler>();
+
         var proceso = Process.GetCurrentProcess();
         var ramInicio = proceso.PrivateMemorySize64;
 
@@ -337,7 +355,7 @@ public partial class RelayWindow : Window
                         // que no hayamos previsto -- dejaria la imagen congelada
                         // sin un solo error. Una config nueva ES un flujo nuevo:
                         // no hay nada del anterior que conservar.
-                        montador = new VideoFrameAssembler();
+                        montadores[pantalla] = new VideoFrameAssembler();
 
                         // El LIENZO, que con varias pantallas no es el tamano de
                         // ninguna. El host lo manda para que aqui se reserve el
@@ -400,6 +418,12 @@ public partial class RelayWindow : Window
                         if (paquete.VideoChunk.ConfigVersion != config.ConfigVersion)
                             break;
 
+                        if (!montadores.TryGetValue(pantalla, out var montador))
+                        {
+                            montador = new VideoFrameAssembler();
+                            montadores[pantalla] = montador;
+                        }
+
                         if (!montador.TryAdd(paquete.VideoChunk, out var completo))
                             break;
 
@@ -408,7 +432,7 @@ public partial class RelayWindow : Window
                         if (completo!.KeyFrame)
                             idr++;
 
-                        Grabar(completo, config);
+                        Grabar(pantalla, completo, config);
 
                         var antes = Stopwatch.GetTimestamp();
                         var salidas = decoder.Decode(completo.Payload, 0, completo.Payload.Length, completo.CaptureTimestampUs);
@@ -553,7 +577,9 @@ public partial class RelayWindow : Window
                         // dice de un vistazo cual de las dos mitades falla.
                         $"entrada {_entradaEnviada}   " +
                         (_grabacion is null ? string.Empty : $"grabando {_grabados} frames   ") +
-                        $"incompletos {montador.Dropped}   invalidos {montador.Rejected}   tardios {montador.Stale}   " +
+                        $"incompletos {montadores.Values.Sum(m => m.Dropped)}   " +
+                        $"invalidos {montadores.Values.Sum(m => m.Rejected)}   " +
+                        $"tardios {montadores.Values.Sum(m => m.Stale)}   " +
                         $"IDR {idr}   cursor {_cursoresRecibidos}   cambios de config {cambiosConfig}   " +
                         $"RAM {proceso.PrivateMemorySize64 / 1024 / 1024} MB (inicio {ramInicio / 1024 / 1024})   " +
                         $"{reloj.Elapsed:hh\\:mm\\:ss}" +
@@ -604,6 +630,7 @@ public partial class RelayWindow : Window
 
     private FileStream? _grabacion;
     private bool _esperandoIdr;
+    private uint _pantallaGrabada;
     private long _grabados;
 
     private static string Carpeta(Environment.SpecialFolder donde)
@@ -640,7 +667,7 @@ public partial class RelayWindow : Window
     /// Empieza siempre en un IDR. Arrancar en mitad de un GOP produce un archivo
     /// que abre en verde y se va corrigiendo, y no hay forma de arreglarlo luego.
     /// </summary>
-    private void Grabar(AssembledFrame frame, VideoConfig? config)
+    private void Grabar(uint pantalla, AssembledFrame frame, VideoConfig? config)
     {
         if (!_quiereGrabar)
         {
@@ -648,10 +675,18 @@ public partial class RelayWindow : Window
             return;
         }
 
+        // UNA SOLA PANTALLA POR ARCHIVO. Un .h264 es un flujo, no un contenedor:
+        // dos pantallas intercaladas en el mismo archivo no dan dos videos, dan
+        // uno roto. Se graba la primera que entregue un frame.
+        if (_grabacion is not null && pantalla != _pantallaGrabada)
+            return;
+
         if (_grabacion is null)
         {
             if (config is null)
                 return;
+
+            _pantallaGrabada = pantalla;
 
             var ruta = NombreArchivo(".h264");
             Directory.CreateDirectory(Path.GetDirectoryName(ruta)!);

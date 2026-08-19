@@ -60,8 +60,30 @@ public sealed class RelayConnection : IDisposable
     public string SessionId { get; }
     public RemoteRole Role { get; }
 
-    /// <summary>Solo el viewer recibe video; en el host esta y se queda vacia.</summary>
-    public VideoRelayQueue Video { get; } = new();
+    /// <summary>
+    /// UNA COLA POR PANTALLA. Solo el viewer recibe video; en el host se queda
+    /// vacia.
+    ///
+    /// Compartir una sola cola entre monitores no era una simplificacion, era un
+    /// filtro: la cola guarda UNA VideoConfig, y `TryEnqueue` tira como
+    /// `StaleConfig` todo frame cuya version no sea la suya. Con dos pantallas,
+    /// cada VideoConfig sustituia a la de la otra -- y ademas vaciaba la cola y
+    /// rearmaba AwaitingKeyframe -- asi que la pantalla que no hubiera mandado la
+    /// ultima configuracion perdia el 100 % de sus frames AQUI, en el servidor,
+    /// sin salir nunca al cable.
+    ///
+    /// El host mandaba bien. El visor habria pintado bien. Se congelaba en medio.
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<uint, VideoRelayQueue> _video = new();
+
+    private VideoRelayQueue Cola(uint pantalla) => _video.GetOrAdd(pantalla, _ => new VideoRelayQueue());
+
+    /// <summary>La cola de la pantalla principal. Es lo que mira un extremo de un
+    /// solo monitor, que es el caso normal.</summary>
+    public VideoRelayQueue Video => Cola(0);
+
+    /// <summary>Todas las colas vivas, para sumar sus contadores.</summary>
+    public IEnumerable<VideoRelayQueue> Colas => _video.Values;
 
     public long PacketsWritten { get; private set; }
     public long BytesWritten { get; private set; }
@@ -101,17 +123,30 @@ public sealed class RelayConnection : IDisposable
     /// politica de la cola, que es lo correcto para video.</summary>
     public bool SendVideo(VideoFrameChunks frame)
     {
-        if (!Video.TryEnqueue(frame))
+        // La pantalla la dice el propio frame: todos sus chunks la llevan y el
+        // agrupador ya comprobo que son del mismo frame.
+        if (!Cola(frame.Chunks[0].DisplayId).TryEnqueue(frame))
             return false;
 
         _timbre.Release();
         return true;
     }
 
-    /// <summary>Le dice al viewer que necesita VideoConfig y un IDR nuevos.</summary>
-    public void RequireKeyframe() => Video.RequireKeyframe();
+    /// <summary>Le dice al viewer que necesita VideoConfig y un IDR nuevos. De
+    /// TODAS las pantallas: quien lo pide acaba de entrar o de perder
+    /// sincronia, y eso vale para el escritorio entero.</summary>
+    public void RequireKeyframe()
+    {
+        // Al menos la principal, aunque todavia no haya llegado ningun frame:
+        // asi un viewer recien entrado queda esperando IDR y no se le cuela un
+        // P-frame suelto.
+        Cola(0).RequireKeyframe();
 
-    public void SetVideoConfig(VideoConfig config) => Video.SetConfig(config);
+        foreach (var cola in _video.Values)
+            cola.RequireKeyframe();
+    }
+
+    public void SetVideoConfig(VideoConfig config) => Cola(config.DisplayId).SetConfig(config);
 
     /// <summary>
     /// El unico escritor. Termina cuando se cancela o cuando se cierra la
@@ -157,20 +192,36 @@ public sealed class RelayConnection : IDisposable
     {
         await EscribirControlAsync(writer, cancellationToken);
 
-        while (Video.TryDequeue(out var config, out var frame))
+        // Por turnos entre pantallas, un frame de cada una por vuelta. Vaciar una
+        // cola entera antes de mirar la siguiente dejaria al segundo monitor
+        // detras de todo lo del primero cada vez.
+        bool salioAlguno;
+
+        do
         {
-            if (config is not null)
-                await EscribirAsync(writer, new RemotePacket { VideoConfig = config }, cancellationToken);
+            salioAlguno = false;
 
-            foreach (var trozo in frame!.Chunks)
-                await EscribirAsync(writer, new RemotePacket { VideoChunk = trozo }, cancellationToken);
+            foreach (var cola in _video.Values)
+            {
+                if (!cola.TryDequeue(out var config, out var frame))
+                    continue;
 
-            // Entre frame y frame, otra vez el control: no puede esperar detras
-            // de megabytes de video.
-            await EscribirControlAsync(writer, cancellationToken);
+                salioAlguno = true;
+
+                if (config is not null)
+                    await EscribirAsync(writer, new RemotePacket { VideoConfig = config }, cancellationToken);
+
+                foreach (var trozo in frame!.Chunks)
+                    await EscribirAsync(writer, new RemotePacket { VideoChunk = trozo }, cancellationToken);
+
+                // Entre frame y frame, otra vez el control: no puede esperar
+                // detras de megabytes de video.
+                await EscribirControlAsync(writer, cancellationToken);
+            }
         }
+        while (salioAlguno);
 
-        return _control.Reader.Count > 0 || Video.Depth > 0;
+        return _control.Reader.Count > 0 || _video.Values.Any(c => c.Depth > 0);
     }
 
     private async Task EscribirControlAsync(IRemotePacketWriter writer, CancellationToken cancellationToken)

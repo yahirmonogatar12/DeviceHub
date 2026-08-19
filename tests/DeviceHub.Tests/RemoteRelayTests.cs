@@ -596,4 +596,64 @@ public class RemoteRelayTests
         await Assert.ThrowsAsync<RelayBackpressureException>(async () =>
             await conexion.SendControlAsync(new RemotePacket { Ping = new Ping() }, CancellationToken.None));
     }
+
+    // -- Varias pantallas ----------------------------------------------------
+
+    private static VideoFrameChunks EnPantalla(VideoFrameChunks grupo, uint pantalla)
+    {
+        foreach (var trozo in grupo.Chunks)
+            trozo.DisplayId = pantalla;
+
+        return grupo;
+    }
+
+    private static async Task Mandar(RemoteSession sesion, VideoFrameChunks grupo, uint pantalla)
+    {
+        foreach (var trozo in EnPantalla(grupo, pantalla).Chunks)
+            await sesion.FromHostAsync(new RemotePacket { VideoChunk = trozo }, default);
+    }
+
+    [Fact]
+    public async Task Two_displays_do_not_cancel_each_other_out()
+    {
+        // LA PRUEBA DEL SEGUNDO MONITOR CONGELADO.
+        //
+        // Con una sola cola y un solo agrupador para toda la sesion, esto
+        // reenviaba 2 frames de 4: la configuracion de la pantalla 1 sustituia a
+        // la de la 0, y a partir de ahi todo frame de la 0 se tiraba como
+        // StaleConfig sin salir nunca del servidor. Encima el agrupador
+        // compartido marcaba como atrasado el frame 3 por haber completado ya el
+        // 4, que es de la otra pantalla.
+        //
+        // Se veia como una imagen que carga una vez y se queda quieta.
+        var registro = new RemoteSessionRegistry();
+        var sesion = registro.GetOrCreate("dos-pantallas");
+
+        using var host = new RelayConnection("dos-pantallas", RemoteRole.Host);
+        using var viewer = Viewer("dos-pantallas");
+
+        sesion.TryJoin(host);
+        sesion.TryJoin(viewer);
+
+        var cero = Config(version: 1);
+        var uno = Config(version: 2);
+        uno.DisplayId = 1;
+
+        await sesion.FromHostAsync(new RemotePacket { VideoConfig = cero }, default);
+        await sesion.FromHostAsync(new RemotePacket { VideoConfig = uno }, default);
+
+        // Entrelazadas y con la numeracion compartida que usa el host: los ids
+        // suben, pero entre pantallas no salen en orden.
+        await Mandar(sesion, Frame(1, clave: true, config: 1), 0);
+        await Mandar(sesion, Frame(2, clave: true, config: 2), 1);
+        await Mandar(sesion, Frame(4, clave: false, config: 2), 1);
+        await Mandar(sesion, Frame(3, clave: false, config: 1), 0);
+
+        var foto = sesion.Snapshot();
+
+        Assert.Equal(4, foto.FramesReceived);
+        Assert.Equal(4, foto.FramesForwarded);
+        Assert.Equal(0, foto.StaleConfig);
+        Assert.Equal(0, foto.DiscardedWaitingIdr);
+    }
 }

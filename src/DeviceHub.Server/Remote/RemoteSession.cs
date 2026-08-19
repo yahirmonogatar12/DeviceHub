@@ -44,9 +44,17 @@ public sealed class RemoteSession(string id)
 {
     private readonly Lock _puerta = new();
 
-    /// <summary>Agrupa los chunks que llegan del host. No concatena: reenviar no
-    /// necesita los bytes seguidos.</summary>
-    private readonly VideoFrameCollector _agrupador = new();
+    /// <summary>
+    /// Agrupa los chunks que llegan del host, UNO POR PANTALLA. No concatena:
+    /// reenviar no necesita los bytes seguidos.
+    ///
+    /// Por pantalla porque el agrupador monta un frame a la vez y recuerda cual
+    /// fue el ultimo que completo, para descartar como atrasado todo id menor o
+    /// igual. Compartido entre monitores, el frame de una pantalla marcaba como
+    /// atrasados los de la otra -- que numeran del mismo contador de sesion pero
+    /// no salen en ese orden -- y esos frames se perdian aqui dentro.
+    /// </summary>
+    private readonly Dictionary<uint, VideoFrameCollector> _agrupadores = [];
 
     public string Id { get; } = id;
 
@@ -55,9 +63,10 @@ public sealed class RemoteSession(string id)
 
     public RemoteSessionState State { get; private set; } = RemoteSessionState.Created;
 
-    /// <summary>Ultima configuracion que mando el host. Solo en memoria: el
-    /// servidor no persiste nada del video, ni siquiera sus parametros.</summary>
-    public VideoConfig? Config { get; private set; }
+    /// <summary>Ultima configuracion que mando el host DE CADA PANTALLA, para
+    /// darsela a un viewer que llegue tarde. Solo en memoria: el servidor no
+    /// persiste nada del video, ni siquiera sus parametros.</summary>
+    private readonly Dictionary<uint, VideoConfig> _configs = [];
 
     /// <summary>
     /// Ultima lista de pantallas que mando el host, para dársela a un viewer que
@@ -103,10 +112,19 @@ public sealed class RemoteSession(string id)
                 // Un viewer que acaba de llegar no tiene contexto. Si ya hay
                 // configuracion, se le prepara para recibirla por delante del
                 // proximo IDR; si no la hay, igualmente espera keyframe.
-                if (Config is not null)
-                    conexion.SetVideoConfig(Config);
+                // Todas las pantallas, no solo una: con dos monitores, darle la
+                // configuracion de uno y dejar al otro sin ella deja media
+                // sesion muda hasta el proximo cambio de config, que puede no
+                // llegar nunca.
+                if (_configs.Count > 0)
+                {
+                    foreach (var guardada in _configs.Values)
+                        conexion.SetVideoConfig(guardada);
+                }
                 else
+                {
                     conexion.RequireKeyframe();
+                }
 
                 // La lista de pantallas viaja fuera de la cola de video, asi que
                 // se le manda aparte en cuanto entra.
@@ -193,15 +211,20 @@ public sealed class RemoteSession(string id)
     {
         lock (_puerta)
         {
-            var cola = Viewer?.Video;
+            // Sumados de TODAS las pantallas: con dos monitores, mirar solo la
+            // primera esconde justo el caso que costo encontrar -- una pantalla
+            // sana y la otra descartando el 100 % de sus frames.
+            var colas = Viewer?.Colas.ToList() ?? [];
 
             return new RemoteSessionSnapshot(
                 Id, State, Host is not null, Viewer is not null,
                 FramesReceived, FramesForwarded, BytesForwarded, ControlForwarded,
-                cola?.FramesDropped ?? 0, cola?.DiscardedWaitingIdr ?? 0,
-                cola?.StaleConfig ?? 0, cola?.DiscardedNoConfig ?? 0,
-                cola?.HighWater ?? 0, cola?.Depth ?? 0,
-                Viewer?.ControlHighWater ?? 0, Config?.ConfigVersion ?? 0);
+                colas.Sum(c => c.FramesDropped), colas.Sum(c => c.DiscardedWaitingIdr),
+                colas.Sum(c => c.StaleConfig), colas.Sum(c => c.DiscardedNoConfig),
+                colas.Count == 0 ? 0 : colas.Max(c => c.HighWater),
+                colas.Sum(c => c.Depth),
+                Viewer?.ControlHighWater ?? 0,
+                _configs.GetValueOrDefault(0u)?.ConfigVersion ?? 0);
         }
     }
 
@@ -212,7 +235,7 @@ public sealed class RemoteSession(string id)
         {
             case RemotePacket.PayloadOneofCase.VideoConfig:
                 lock (_puerta)
-                    Config = paquete.VideoConfig;
+                    _configs[paquete.VideoConfig.DisplayId] = paquete.VideoConfig;
 
                 Viewer?.SetVideoConfig(paquete.VideoConfig);
                 break;
@@ -225,7 +248,15 @@ public sealed class RemoteSession(string id)
                 break;
 
             case RemotePacket.PayloadOneofCase.VideoChunk:
-                if (_agrupador.TryAdd(paquete.VideoChunk, out var frame))
+                VideoFrameCollector agrupador;
+
+                lock (_puerta)
+                {
+                    if (!_agrupadores.TryGetValue(paquete.VideoChunk.DisplayId, out agrupador!))
+                        _agrupadores[paquete.VideoChunk.DisplayId] = agrupador = new VideoFrameCollector();
+                }
+
+                if (agrupador.TryAdd(paquete.VideoChunk, out var frame))
                 {
                     FramesReceived++;
 

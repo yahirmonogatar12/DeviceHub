@@ -987,25 +987,29 @@ public static class RelaySession
 
                 IReadOnlyList<EncodedFrame> producidos;
 
-                // SI DXGI SE QUEDA MUDO, RELEVO POR GDI.
+                // SI DXGI NO ARRANCA, RELEVO POR GDI.
                 //
                 // Es lo que hace RustDesk: cuenta los WouldBlock seguidos -- que
                 // es nuestro WAIT_TIMEOUT -- y a la tercera cambia ESE capturador
-                // a GDI ("No image, fall back to gdi"). O sea que a ellos tampoco
-                // les entrega DXGI el segundo monitor, y no lo pelean.
+                // a GDI ("No image, fall back to gdi").
                 //
-                // Aqui se mide por TIEMPO y no por cuenta, porque con la espera a
-                // 0 los nulos son constantes en una pantalla quieta: tres
-                // seguidos no significan nada, tres segundos si.
+                // SOLO ANTES DEL PRIMER FRAME, que es el detalle que importa y
+                // que RustDesk tambien respeta: en cuanto llega uno, ponen el
+                // contador a cero y no vuelven a mirarlo. Una pantalla quieta no
+                // entrega frames durante minutos y esta perfectamente sana --
+                // degradarla a GDI ahi seria cambiar la GPU por copias de CPU a
+                // 10 FPS sin que nada estuviera roto.
                 //
-                // El precio es real -- GDI copia por CPU y sube 8 MB a la GPU por
-                // frame -- y por eso es el ultimo recurso y no se vuelve atras.
-                if (!flujo.Relevada && Stopwatch.GetTimestamp() - ultimoFrame > Stopwatch.Frequency * 3)
+                // Por tiempo y no por cuenta porque con la espera a 0 los nulos
+                // son constantes: tres seguidos no significan nada, tres
+                // segundos sin haber arrancado nunca si.
+                if (!flujo.Relevada && !flujo.Arranco
+                    && Stopwatch.GetTimestamp() - ultimoFrame > Stopwatch.Frequency * 3)
                 {
                     flujo.Relevada = true;
 
                     Avisar(opciones,
-                        $"DXGI lleva 3 s sin entregar la pantalla {flujo.DisplayId}; se releva por GDI");
+                        $"DXGI no ha entregado ni un frame de la pantalla {flujo.DisplayId} en 3 s; se releva por GDI");
 
                     if (Relevar(flujo, opciones, cuenta))
                     {
@@ -1023,6 +1027,7 @@ public static class RelaySession
                         continue;
 
                     ultimoFrame = Stopwatch.GetTimestamp();
+                    flujo.Arranco = true;
 
                     Interlocked.Increment(ref cuenta.Capturados);
                     producidos = flujo.Codificador.Encode(frame, cancellationToken);
@@ -1207,6 +1212,11 @@ public static class RelaySession
         /// <summary>Ya se relevo una vez. No se vuelve: GDI es el ultimo
         /// recurso, y girar entre los dos seria peor que quedarse en uno.</summary>
         public bool Relevada { get; set; }
+
+        /// <summary>Esta duplicacion ha entregado al menos un frame. A partir de
+        /// ahi DXGI funciona y el silencio solo significa que nadie toca esa
+        /// pantalla.</summary>
+        public bool Arranco { get; set; }
 
         public bool ConfigEnviada { get; set; }
 
