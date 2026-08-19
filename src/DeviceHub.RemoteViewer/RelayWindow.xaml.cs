@@ -10,6 +10,7 @@ using System.Windows.Interop;
 using Contracts = DeviceHub.Remote.Contracts;
 using DeviceHub.Remote.Contracts;
 using DeviceHub.RemoteViewer.Decode;
+using DeviceHub.RemoteViewer.Input;
 using DeviceHub.RemoteViewer.Render;
 using Grpc.Core;
 using Grpc.Net.Client;
@@ -95,6 +96,81 @@ public partial class RelayWindow : Window
         PreviewKeyUp += (_, e) => Tecla(e, pulsada: false);
 
         Activated += EnviarPortapapeles;
+
+        // El gancho SOLO mientras esta ventana tiene el foco. Instalado a secas
+        // se tragaria la tecla Windows del tecnico tambien cuando esta en sus
+        // propias aplicaciones, que es lo contrario de lo que se quiere.
+        Activated += (_, _) => EngancharTeclado();
+        Deactivated += (_, _) => SoltarTeclado();
+        Closed += (_, _) => SoltarTeclado();
+    }
+
+    /// <summary>
+    /// El gancho de bajo nivel, puesto solo mientras el visor tiene el foco.
+    ///
+    /// Sin el, la tecla Windows y Alt+Tab actuan en la PC DEL TECNICO: el shell
+    /// las atiende antes que la aplicacion con el foco, asi que WPF no llega a
+    /// verlas y no hay nada que reenviar.
+    /// </summary>
+    private GanchoTeclado? _ganchoTeclado;
+
+    private void EngancharTeclado()
+    {
+        if (_ganchoTeclado is not null || !MenuTeclas.IsChecked)
+            return;
+
+        try
+        {
+            _ganchoTeclado = new GanchoTeclado(TeclaDeWindows);
+        }
+        catch (Exception ex)
+        {
+            // Una directiva de grupo puede prohibirlo. Se sigue sin el: todo lo
+            // demas del teclado ya funciona por PreviewKeyDown.
+            Nota($"No se pudo capturar el teclado: {ex.Message}");
+        }
+    }
+
+    private void SoltarTeclado()
+    {
+        _ganchoTeclado?.Dispose();
+        _ganchoTeclado = null;
+    }
+
+    private void AlternarTeclas(object sender, RoutedEventArgs e)
+    {
+        if (MenuTeclas.IsChecked)
+            EngancharTeclado();
+        else
+            SoltarTeclado();
+    }
+
+    /// <summary>Decide si una pulsacion se queda aqui y viaja a la PC remota. La
+    /// regla vive en <see cref="TeclasDeWindows"/>; esto solo la aplica.</summary>
+    private bool TeclaDeWindows(TeclaCruda tecla)
+    {
+        var nuestra = TeclasDeWindows.LaAtiendeElShell(
+            tecla.VirtualKey,
+            Keyboard.Modifiers.HasFlag(ModifierKeys.Alt),
+            Keyboard.Modifiers.HasFlag(ModifierKeys.Control));
+
+        if (!nuestra)
+            return false;
+
+        // El scan code REAL, que aqui se conoce. Tecla() manda 0 y deja que el
+        // host lo deduzca con MapVirtualKey, que para estas no siempre acierta.
+        Enviar(new InputEvent
+        {
+            Key = new KeyEvent
+            {
+                VirtualKey = tecla.VirtualKey,
+                ScanCode = tecla.ScanCode,
+                Pressed = tecla.Pulsada,
+                Extended = tecla.Extendida
+            }
+        });
+
+        return true;
     }
 
     /// <summary>Token de reconexion vigente. SOLO en RAM: ni disco, ni log, ni

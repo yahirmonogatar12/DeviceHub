@@ -82,6 +82,10 @@
                         <MenuItem Header="Bloquear la PC remota" Click="BloquearRemota" />
                         <MenuItem x:Name="MenuCongelar" Header="Congelar entrada local"
                                   IsCheckable="True" Click="CongelarEntrada" />
+                        <!-- Se puede apagar, y hace falta que se pueda: con esto
+                             puesto, Alt+Tab ya no saca al tecnico del visor. -->
+                        <MenuItem x:Name="MenuTeclas" Header="Enviar Windows y Alt+Tab a la PC remota"
+                                  IsCheckable="True" IsChecked="True" Click="AlternarTeclas" />
                         <Separator />
                         <MenuItem Header="Reiniciar la PC remota..." Click="ReiniciarRemota" />
                     </MenuItem>
