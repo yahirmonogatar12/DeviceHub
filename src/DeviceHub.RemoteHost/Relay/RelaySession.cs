@@ -281,9 +281,13 @@ public static class RelaySession
     /// mirando el RTT y lo obedece el de captura.</summary>
     private static int _fpsDeseado = ControlFps.Inicial;
 
-    /// <summary>RTT medido POR EL HOST, con su propio reloj de ida y vuelta.
-    /// Negativo = todavia no hay medida.</summary>
-    private static double _rttMs = -1;
+    /// <summary>
+    /// RTT medido POR EL HOST, con su propio reloj de ida y vuelta, y separado
+    /// en red pura y cola. Lo que gobierna los FPS es la parte de COLA: la red
+    /// no la podemos cambiar y bajar el ritmo por su culpa es tirar calidad
+    /// para arreglar algo que no estaba roto.
+    /// </summary>
+    private static readonly MedidorRetraso _retraso = new();
 
     private sealed class Contadores
     {
@@ -357,6 +361,7 @@ public static class RelaySession
         var reloj = Stopwatch.StartNew();
         var siguienteAviso = TimeSpan.FromSeconds(2);
         var acusesAlMirar = 0L;
+        var codificadosAlMirar = 0L;
 
         try
         {
@@ -401,6 +406,8 @@ public static class RelaySession
                         $"{cuenta.Bytes * 8 / reloj.Elapsed.TotalSeconds / 1_000_000:0.00} Mbps  " +
                         $"keyframes {cuenta.Claves}  config {cuenta.ConfigVersion}  cola {cola.Reader.Count}  " +
                         $"acuses {(_visorAcusa ? "si" : "no")}/{cuenta.AcusesPerdidos} perdidos  " +
+                        $"red {_retraso.Base:0.0} ms + cola {_retraso.Encolado:0.0} ms  " +
+                        $"fps {_fpsDeseado}  " +
                         // Aplicados y rechazados de SendInput. Es lo que dice si
                         // la entrada llega de verdad al otro lado o se la traga
                         // el escritorio equivocado.
@@ -421,11 +428,20 @@ public static class RelaySession
 
                     acusesAlMirar = acusesPerdidos;
 
-                    _bitrateDeseado = ControlBitrate.Siguiente(_bitrateDeseado, ocupacion, 8);
+                    // Y si la pantalla se movio de verdad en estos 2 s. Con el
+                    // escritorio quieto no se codifica casi nada y la cola vive
+                    // vacia: leer eso como "cabe mas" es subir hasta el techo
+                    // sin una sola prueba.
+                    var codificados = Interlocked.Read(ref cuenta.Codificados);
+                    var viva = codificados - codificadosAlMirar >= _fpsDeseado;
+
+                    codificadosAlMirar = codificados;
+
+                    _bitrateDeseado = ControlBitrate.Siguiente(_bitrateDeseado, ocupacion, 8, viva);
 
                     // Y el ritmo, por su cuenta y con otra senal. La cola dice
                     // que algo va lento; el RTT dice que es la RED.
-                    _fpsDeseado = ControlFps.Siguiente(_fpsDeseado, _rttMs);
+                    _fpsDeseado = ControlFps.Siguiente(_fpsDeseado, _retraso.Encolado);
 
                     // El host tambien pregunta. Hasta ahora solo contestaba, asi
                     // que el RTT lo conocia el visor y aqui se controlaba a
@@ -817,8 +833,12 @@ public static class RelaySession
         // controlador segun lo que aguante la red.
         var bitrateActual = opciones.Bitrate;
 
+        // La semilla es la SUMA de lo que pide cada pantalla por su tamano, no
+        // un numero fijo para todo. Antes eran 6 Mbps para cualquier cosa.
+        var bitrateBaseTotal = Math.Max(flujos.Sum(f => f.BitrateBase), ControlBitrate.Minimo);
+
         if (_bitrateDeseado == 0)
-            _bitrateDeseado = opciones.Bitrate;
+            _bitrateDeseado = bitrateBaseTotal;
 
         var siguienteRevision = reloj.Elapsed;
 
@@ -950,12 +970,15 @@ public static class RelaySession
 
                 if (_bitrateDeseado > 0)
                 {
-                    // Repartido: dos pantallas a 6 Mbps cada una son 12 por el
-                    // mismo cable.
-                    var porFlujo = Math.Max(_bitrateDeseado / flujos.Count, ControlBitrate.Minimo);
-
+                    // Repartido POR TAMANO y no a partes iguales: dos pantallas
+                    // comparten el mismo cable, pero una de 1280x1024 y una 4K
+                    // no piden lo mismo.
                     foreach (var flujo in flujos)
-                        flujo.BitrateDeseado = porFlujo;
+                    {
+                        flujo.BitrateDeseado = (int)Math.Max(
+                            (long)_bitrateDeseado * flujo.BitrateBase / bitrateBaseTotal,
+                            ControlBitrate.Minimo);
+                    }
                 }
 
                 // El video ya no se produce aqui: cada flujo tiene su hilo. Este
@@ -1135,7 +1158,7 @@ public static class RelaySession
                             Width = (uint)frameCodificado.Width,
                             Height = (uint)frameCodificado.Height,
                             FramesPerSecond = (uint)opciones.Fps,
-                            BitrateBitsPerSecond = (uint)opciones.Bitrate,
+                            BitrateBitsPerSecond = (uint)flujo.BitrateBase,
                             ParameterSets = Google.Protobuf.ByteString.CopyFrom(parametros),
                             VisibleWidth = (uint)frameCodificado.Width,
                             VisibleHeight = (uint)frameCodificado.Height,
@@ -1327,6 +1350,11 @@ public static class RelaySession
 
         public int BitrateDeseado;
 
+        /// <summary>Lo que le toca a ESTA pantalla por su tamano. Es el reparto
+        /// justo: un monitor de 1280x1024 no necesita lo mismo que uno 4K, y
+        /// dividir un total entre el numero de pantallas les daba igual.</summary>
+        public required int BitrateBase { get; init; }
+
         /// <summary>Se abre cuando el visor confirma el frame en vuelo.</summary>
         public readonly ManualResetEventSlim Acuse = new(false);
 
@@ -1378,8 +1406,10 @@ public static class RelaySession
                     DisplayId = pedida,
                     Info = elegida,
                     Captura = unica,
+                    BitrateBase = ControlBitrate.PorResolucion(unica.Width, unica.Height),
                     Codificador = new H264Encoder(
-                        unica.Device, unica.Width, unica.Height, opciones.Fps, opciones.Bitrate,
+                        unica.Device, unica.Width, unica.Height, opciones.Fps,
+                        ControlBitrate.PorResolucion(unica.Width, unica.Height),
                         unica.AdapterLuid, unica.AdapterVendorId),
                     Version = ++cuenta.ConfigVersion,
                     LayoutX = 0,
@@ -1408,9 +1438,10 @@ public static class RelaySession
                     DisplayId = pantalla.Id,
                     Info = pantalla,
                     Captura = captura,
+                    BitrateBase = ControlBitrate.PorResolucion(captura.Width, captura.Height),
                     Codificador = new H264Encoder(
                         captura.Device, captura.Width, captura.Height, opciones.Fps,
-                        Math.Max(opciones.Bitrate / pantallas.Count, ControlBitrate.Minimo),
+                        ControlBitrate.PorResolucion(captura.Width, captura.Height),
                         captura.AdapterLuid, captura.AdapterVendorId),
                     Version = ++cuenta.ConfigVersion,
 
@@ -1661,7 +1692,7 @@ public static class RelaySession
                         // NUESTRO reloj de ida y vuelta. Restar marcas de dos PCs
                         // distintas da un numero inventado: sus relojes
                         // monotonicos no son comparables.
-                        _rttMs = (Ahora() - paquete.Pong.SentAtUs) / 1000.0;
+                        _retraso.Anotar((Ahora() - paquete.Pong.SentAtUs) / 1000.0);
                         break;
 
                     case RemotePacket.PayloadOneofCase.Ping:

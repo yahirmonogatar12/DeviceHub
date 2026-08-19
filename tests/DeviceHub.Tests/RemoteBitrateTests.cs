@@ -81,4 +81,72 @@ public class RemoteBitrateTests
 
         Assert.InRange(bitrate, ControlBitrate.Minimo, ControlBitrate.Maximo);
     }
+
+    // -- De donde se arranca --------------------------------------------------
+
+    [Fact]
+    public void A_1080p_screen_starts_around_one_and_a_half_megabits()
+    {
+        // 2073 kbps del preset de RustDesk por 0.67 de calidad equilibrada. El
+        // valor viejo era 6 Mbps FIJOS para cualquier resolucion: cuatro veces
+        // esto, y el bitrate no es solo ancho de banda -- es tamano de frame, y
+        // un frame cuatro veces mas gordo tarda cuatro veces mas en cruzar.
+        var bitrate = ControlBitrate.PorResolucion(1920, 1080);
+
+        Assert.InRange(bitrate, 1_300_000, 1_450_000);
+    }
+
+    [Fact]
+    public void A_smaller_screen_asks_for_less()
+    {
+        // Es lo que hace que repartir por tamano tenga sentido con dos
+        // monitores: dividir un total a partes iguales le daba lo mismo a un
+        // 1280x1024 que a un 4K.
+        var pequena = ControlBitrate.PorResolucion(1280, 1024);
+        var grande = ControlBitrate.PorResolucion(1920, 1080);
+
+        Assert.True(pequena < grande);
+    }
+
+    [Fact]
+    public void Four_k_does_not_ask_for_four_times_1080p()
+    {
+        // Por eso es una tabla y no una multiplicacion: la curva es sublineal.
+        var mil = ControlBitrate.PorResolucion(1920, 1080);
+        var cuatroK = ControlBitrate.PorResolucion(3840, 2160);
+
+        Assert.True(cuatroK > mil);
+        Assert.True(cuatroK < mil * 4);
+    }
+
+    [Fact]
+    public void Odd_sizes_stay_inside_the_limits()
+    {
+        Assert.InRange(ControlBitrate.PorResolucion(0, 0), ControlBitrate.Minimo, ControlBitrate.Maximo);
+        Assert.InRange(ControlBitrate.PorResolucion(15360, 8640), ControlBitrate.Minimo, ControlBitrate.Maximo);
+    }
+
+    [Fact]
+    public void A_still_screen_does_not_earn_more_bitrate()
+    {
+        // LA COLA VACIA NO DEMUESTRA NADA si no se esta codificando. Antes se
+        // subia igual, asi que con el escritorio quieto trepaba hasta el techo
+        // y en cuanto alguien movia una ventana salia a 15 Mbps contra una red
+        // que nunca se habia medido.
+        Assert.Equal(
+            2_000_000,
+            ControlBitrate.Siguiente(2_000_000, 0, Capacidad, pantallaViva: false));
+
+        Assert.True(
+            ControlBitrate.Siguiente(2_000_000, 0, Capacidad, pantallaViva: true) > 2_000_000);
+    }
+
+    [Fact]
+    public void A_still_screen_still_gives_way_when_it_does_not_fit()
+    {
+        // Bajar SI se hace siempre: si la cola esta llena da igual por que --
+        // lo que hay dentro ya no cabe.
+        Assert.True(
+            ControlBitrate.Siguiente(2_000_000, Capacidad, Capacidad, pantallaViva: false) < 2_000_000);
+    }
 }

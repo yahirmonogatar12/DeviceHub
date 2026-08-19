@@ -16,8 +16,11 @@ namespace DeviceHub.RemoteHost.Encode;
 public static class ControlBitrate
 {
     /// <summary>Por debajo de esto la imagen ya no sirve para trabajar, y seguir
-    /// bajando solo cambia una sesion mala por una inutil.</summary>
-    public const int Minimo = 1_000_000;
+    /// bajando solo cambia una sesion mala por una inutil.
+    ///
+    /// Bajado de 1 Mbps: con el objetivo de 1080p en 1.4 Mbps, un suelo de 1
+    /// dejaba al controlador tres pasos de margen antes de tocar fondo.</summary>
+    public const int Minimo = 400_000;
 
     public const int Maximo = 15_000_000;
 
@@ -30,7 +33,19 @@ public static class ControlBitrate
     /// caben. La cola es de 8 y con espera, asi que llena significa que la
     /// captura ya se esta frenando sola.
     /// </summary>
-    public static int Siguiente(int actual, int ocupacion, int capacidad)
+    /// <param name="pantallaViva">
+    /// Si el escritorio remoto esta cambiando de verdad.
+    ///
+    /// SIN ESTO SE SUBIA SIEMPRE. Con la pantalla quieta no se codifica casi
+    /// nada, la cola vive vacia y el controlador leia eso como "hay sitio para
+    /// mas calidad" -- asi que trepaba hasta el techo sin una sola prueba de que
+    /// cupiera. Cuando por fin alguien movia una ventana, salia de golpe a 15
+    /// Mbps contra una red que nunca se habia medido.
+    ///
+    /// RustDesk lo mira igual en video_qos.rs: solo sube el ratio cuando su
+    /// send_counter pasa de DYNAMIC_SCREEN_THRESHOLD.
+    /// </param>
+    public static int Siguiente(int actual, int ocupacion, int capacidad, bool pantallaViva = true)
     {
         var lleno = ocupacion / (double)Math.Max(capacidad, 1);
 
@@ -44,10 +59,69 @@ public static class ControlBitrate
             // vaiven de bajar y subir cada dos segundos.
             > 0.0 => actual,
 
-            // Vacia de verdad: hay sitio para mas calidad.
-            _ => actual * 1.1
+            // Vacia de verdad: hay sitio para mas calidad, PERO solo si la
+            // pantalla se esta moviendo. Vacia con el escritorio quieto no
+            // demuestra nada.
+            _ => pantallaViva ? actual * 1.1 : actual
         };
 
         return (int)Math.Clamp(objetivo, Minimo, Maximo);
+    }
+
+    /// <summary>
+    /// Con cuanto ARRANCAR segun el tamano de la pantalla.
+    ///
+    /// Antes se arrancaba en 6 Mbps fijos para todo, y era mucho: RustDesk
+    /// apunta a 2073 kbps en 1080p y lo multiplica por 0.67 en calidad
+    /// equilibrada, o sea ~1.4 Mbps -- la cuarta parte.
+    ///
+    /// Y el bitrate no es solo ancho de banda, que en una LAN sobra: es TAMANO
+    /// DE FRAME. Un frame cuatro veces mas gordo tarda cuatro veces mas en
+    /// cruzar y en descodificarse, y eso se paga en cada vuelta.
+    ///
+    /// De aqui sale el punto de partida; a partir de ahi lo mueve Siguiente,
+    /// que es quien puede comprobar si cabe.
+    /// </summary>
+    public static int PorResolucion(int ancho, int alto)
+    {
+        // Los mismos tres puntos que su RESOLUTION_PRESETS. Entre ellos se
+        // interpola por pixeles y fuera se queda en el extremo: la curva no es
+        // proporcional -- 4K no necesita cuatro veces lo de 1080p -- y por eso
+        // es una tabla y no una multiplicacion.
+        (long Pixeles, int Kbps)[] tabla =
+        [
+            (640L * 480, 400),
+            (1920L * 1080, 2073),
+            (3840L * 2160, 5000)
+        ];
+
+        var pixeles = (long)Math.Max(ancho, 1) * Math.Max(alto, 1);
+        double kbps;
+
+        if (pixeles <= tabla[0].Pixeles)
+        {
+            kbps = tabla[0].Kbps;
+        }
+        else if (pixeles >= tabla[^1].Pixeles)
+        {
+            kbps = tabla[^1].Kbps;
+        }
+        else
+        {
+            var i = 1;
+
+            while (pixeles > tabla[i].Pixeles)
+                i++;
+
+            var (desdePx, desdeKbps) = tabla[i - 1];
+            var (hastaPx, hastaKbps) = tabla[i];
+
+            var t = (pixeles - desdePx) / (double)(hastaPx - desdePx);
+            kbps = desdeKbps + t * (hastaKbps - desdeKbps);
+        }
+
+        // Calidad equilibrada, su BR_BALANCED. Es el punto en el que un
+        // escritorio se ve nitido sin gastar en lo que nadie mira.
+        return (int)Math.Clamp(kbps * 1000 * 0.67, Minimo, Maximo);
     }
 }
