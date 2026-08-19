@@ -294,7 +294,12 @@ public static class RelaySession
             {
                 FullMode = System.Threading.Channels.BoundedChannelFullMode.Wait,
                 SingleReader = true,
-                SingleWriter = true
+                // YA NO. Desde que hay un hilo por pantalla, a esta cola escriben
+                // varios productores a la vez, y dejar SingleWriter puesto es
+                // prometerle al canal algo que no se cumple: la optimizacion que
+                // habilita da por hecho que nadie compite, y con dos hilos eso se
+                // paga en corrupcion silenciosa, no en excepcion.
+                SingleWriter = false
             });
 
         var cuenta = new Contadores();
@@ -696,6 +701,9 @@ public static class RelaySession
         // siempre no se bifurca: es el mismo bucle con N=1.
         var flujos = Etiquetar(paso, () => AbrirFlujos(pedida, pantallas, elegida, opciones, cuenta));
 
+        using var pararBombas = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var bombas = new List<Thread>();
+
         try
         {
 
@@ -722,7 +730,28 @@ public static class RelaySession
             $"Hardware {(flujos[0].Codificador.Capabilities.Hardware ? "TRUE" : "FALSE")}  " +
             $"Lienzo {lienzo.Ancho}x{lienzo.Alto}");
 
-        var siguienteFrame = Stopwatch.GetTimestamp();
+        // UN HILO POR PANTALLA, que es como lo hace RustDesk.
+        //
+        // Sondear las dos duplicaciones en el mismo bucle no funciona, y el dato
+        // lo dijo el visor: (p0:403 p1:6). Da igual que la espera sea 0 -- una
+        // vuelta cuesta lo que cuesta capturar Y CODIFICAR la primera pantalla,
+        // y mientras tanto la segunda no se pide. Con el codificador picando a
+        // decenas de milisegundos, la segunda recibe las sobras.
+        //
+        // Cada display es un productor independiente: su captura, su
+        // codificador, su ritmo. DXGI y el MFT quieren un hilo para ellos solos,
+        // y asi lo tienen -- que es la misma leccion de la Fase 2, ahora por
+        // duplicado.
+        bombas.AddRange(flujos.Select(flujo =>
+            new Thread(() => Bombear(flujo, salida, cuenta, opciones, lienzo, pararBombas.Token))
+            {
+                IsBackground = true,
+                Name = $"devicehub-pantalla-{flujo.DisplayId}"
+            }));
+
+        foreach (var bomba in bombas)
+            bomba.Start();
+
         var avisadoDeCeguera = 0;
         // El bitrate vigente. Arranca en el configurado y de ahi lo mueve el
         // controlador segun lo que aguante la red.
@@ -736,21 +765,6 @@ public static class RelaySession
         {
             while (reloj.Elapsed < duracion && !cancellationToken.IsCancellationRequested)
             {
-                // EL RITMO. No se pide un frame antes de que toque.
-                //
-                // Antes se capturaba tan deprisa como DXGI entregara -- 57/s en
-                // una PC de planta -- y el codificador solo aceptaba 20, asi que
-                // el 38 % se adquiria y se tiraba. Ese trabajo no producia nada:
-                // el frame que se acaba codificando es el mismo, porque DXGI
-                // acumula los cambios y entrega la pantalla mas reciente cuando
-                // por fin se la pides.
-                //
-                // NO es lo que fallo en NVIDIA. Alli se esperaba al NeedInput
-                // DENTRO de Encode, o sea bloqueando cuando el codificador estaba
-                // saturado. Esto es dormir contra el reloj de pared, sin mirar el
-                // estado del codificador.
-                Marcar(ref siguienteFrame, cancellationToken);
-
                 // Cada medio segundo, no cada frame: OpenInputDesktop es una
                 // llamada al sistema y a 60 FPS serian 60 por segundo para
                 // detectar algo que pasa dos veces al dia.
@@ -846,14 +860,78 @@ public static class RelaySession
                 // pueden salir a 60-120 por segundo contra los 20-30 de la
                 // imagen. Es lo que hace que el control se SIENTA inmediato
                 // aunque la pantalla no lo sea.
-                foreach (var flujo in flujos)
+                // Lo que el hilo de RED pide va a cada bomba, que es la unica
+                // dueña de su codificador. Tocar un MFT desde fuera de su hilo es
+                // la familia de cuelgues que costo dos fases entender.
+                if (_keyframePedido)
                 {
-                    if (flujo.Captura.TomarCursor() is not { } puntero)
-                        continue;
+                    _keyframePedido = false;
 
-                    // Del sistema de coordenadas de SU pantalla al del lienzo. Con
-                    // un solo flujo la traslacion es la identidad; con dos, sin
-                    // ella el puntero del monitor derecho aparece en el izquierdo.
+                    foreach (var flujo in flujos)
+                        flujo.KeyframePedido = true;
+                }
+
+                if (_bitrateDeseado > 0)
+                {
+                    // Repartido: dos pantallas a 6 Mbps cada una son 12 por el
+                    // mismo cable.
+                    var porFlujo = Math.Max(_bitrateDeseado / flujos.Count, ControlBitrate.Minimo);
+
+                    foreach (var flujo in flujos)
+                        flujo.BitrateDeseado = porFlujo;
+                }
+
+                // El video ya no se produce aqui: cada flujo tiene su hilo. Este
+                // se queda con lo COMPARTIDO -- escritorio, portapapeles,
+                // pantalla elegida -- y no tiene prisa.
+                cancellationToken.WaitHandle.WaitOne(50);
+            }
+
+            cuenta.DescartesEncoder = flujos.Sum(f => f.Codificador.Dropped);
+            cuenta.DescartesCaptura = flujos.Sum(f => f.Captura.Dropped);
+        }
+        }
+        finally
+        {
+            // Primero se paran las bombas y se espera: disponer una captura
+            // mientras su hilo esta dentro de AcquireNextFrame es como se cuelga
+            // DXGI sin dejar rastro.
+            pararBombas.Cancel();
+
+            foreach (var bomba in bombas)
+                bomba.Join(TimeSpan.FromSeconds(3));
+
+            foreach (var flujo in flujos)
+                flujo.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Produce el video de UNA pantalla, de principio a fin.
+    ///
+    /// Hilo propio y no una vuelta de un bucle compartido: capturar y codificar
+    /// cuesta decenas de milisegundos, y en un solo hilo la segunda pantalla solo
+    /// recibe lo que sobra de la primera. Con dos monitores eso se veia como una
+    /// imagen congelada, no como una imagen lenta.
+    /// </summary>
+    private static void Bombear(
+        Flujo flujo, System.Threading.Channels.ChannelWriter<Enviable> salida, Contadores cuenta,
+        RelayOptions opciones, Lienzo lienzo, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var siguienteFrame = Stopwatch.GetTimestamp();
+            var bitrateActual = opciones.Bitrate / Math.Max(1, 1);
+
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                Marcar(ref siguienteFrame, cancellationToken);
+
+                // El CURSOR, antes de decidir si hay imagen nueva. Mover el raton
+                // no cambia el escritorio, asi que ese frame se descarta -- y con
+                // el se iria el unico aviso de que el puntero se movio.
+                if (flujo.Captura.TomarCursor() is { } puntero)
+                {
                     var aviso = new CursorUpdate
                     {
                         X = (flujo.LayoutX + puntero.X * flujo.Captura.Width) / lienzo.Ancho,
@@ -884,78 +962,49 @@ public static class RelaySession
                     }));
                 }
 
-                // Lo que el hilo de red pidio, aplicado AQUI, que es donde vive
-                // el codificador.
-                if (_keyframePedido)
+                if (flujo.KeyframePedido)
                 {
-                    _keyframePedido = false;
+                    flujo.KeyframePedido = false;
+                    flujo.Codificador.ForzarKeyframe();
 
-                    foreach (var flujo in flujos)
-                    {
-                        flujo.Codificador.ForzarKeyframe();
-                        flujo.ConfigEnviada = false;
-                    }
-
-                    // La config va DELANTE del IDR. Si el visor perdio el SPS,
-                    // un keyframe suelto no le sirve de nada.
+                    // La config va DELANTE del IDR: si el visor perdio el SPS, un
+                    // keyframe suelto no le sirve de nada.
+                    flujo.ConfigEnviada = false;
                 }
 
-                if (_bitrateDeseado != bitrateActual && _bitrateDeseado > 0)
+                if (flujo.BitrateDeseado != bitrateActual && flujo.BitrateDeseado > 0)
                 {
-                    // El bitrate se REPARTE entre los flujos: dos pantallas a 6
-                    // Mbps cada una son 12 por el mismo cable.
-                    var porFlujo = Math.Max(_bitrateDeseado / flujos.Count, ControlBitrate.Minimo);
+                    if (flujo.Codificador.CambiarBitrate(flujo.BitrateDeseado))
+                        opciones.Escribir($"Pantalla {flujo.DisplayId}: bitrate {flujo.BitrateDeseado / 1000} kbps");
 
-                    if (flujos.All(f => f.Codificador.CambiarBitrate(porFlujo)))
-                    {
-                        opciones.Escribir(
-                            $"Bitrate {bitrateActual / 1000} -> {_bitrateDeseado / 1000} kbps");
-
-                        bitrateActual = _bitrateDeseado;
-                    }
-                    else
-                    {
-                        // El codificador no deja cambiarlo en caliente. Se deja
-                        // de intentar en vez de repetirlo cada 2 s para siempre.
-                        opciones.Escribir("Este codificador no admite cambiar el bitrate en caliente");
-                        bitrateActual = _bitrateDeseado;
-                    }
+                    bitrateActual = flujo.BitrateDeseado;
                 }
 
-                foreach (var flujo in flujos)
+                IReadOnlyList<EncodedFrame> producidos;
+
+                // El frame DXGI se suelta ANTES de esperar por nada. Encolar
+                // puede bloquear si la red va por detras, y quedarse la
+                // superficie duplicada mientras tanto es lo que no se hace.
+                using (var frame = flujo.Captura.CaptureAsync(cancellationToken).GetAwaiter().GetResult())
                 {
-                    IReadOnlyList<EncodedFrame> producidos;
+                    if (frame is null || !frame.DesktopChanged)
+                        continue;
 
-                    // El frame DXGI se suelta ANTES de esperar por nada. Encolar
-                    // puede bloquear si la red va por detras, y quedarse la
-                    // superficie duplicada mientras tanto es lo que no se hace.
-                    using (var frame = Etiquetar(
-                        "pedir el frame",
-                        () => flujo.Captura.CaptureAsync(cancellationToken).GetAwaiter().GetResult()))
-                    {
-                        if (frame is null || !frame.DesktopChanged)
-                            continue;
+                    Interlocked.Increment(ref cuenta.Capturados);
+                    producidos = flujo.Codificador.Encode(frame, cancellationToken);
+                }
 
-                        cuenta.Capturados++;
-
-                        producidos = Etiquetar(
-                            $"codificar {frame.Width}x{frame.Height}",
-                            () => flujo.Codificador.Encode(frame, cancellationToken));
-                    }
-
-                    foreach (var frameCodificado in producidos)
-                    {
-                    cuenta.Codificados++;
+                foreach (var frameCodificado in producidos)
+                {
+                    Interlocked.Increment(ref cuenta.Codificados);
 
                     if (frameCodificado.IsKeyFrame)
-                        cuenta.Claves++;
+                        Interlocked.Increment(ref cuenta.Claves);
 
                     VideoConfig? config = null;
 
-                    // El SPS/PPS sale dentro del primer IDR. Se saca UNA vez, se
-                    // manda en VideoConfig y a partir de ahi el viewer lo
-                    // conserva: reenviarlo con cada keyframe es ancho de banda
-                    // que no aporta nada a quien ya lo tiene.
+                    // El SPS/PPS sale dentro del primer IDR. Se saca UNA vez y se
+                    // manda en VideoConfig; a partir de ahi el visor lo conserva.
                     if (!flujo.ConfigEnviada && frameCodificado.IsKeyFrame)
                     {
                         var parametros = H264AnnexB.ParameterSets(frameCodificado.Payload);
@@ -977,7 +1026,6 @@ public static class RelaySession
                             VisibleWidth = (uint)frameCodificado.Width,
                             VisibleHeight = (uint)frameCodificado.Height,
 
-                            // Donde va colocado este flujo dentro del lienzo.
                             DisplayId = (uint)flujo.DisplayId,
                             LayoutX = (uint)flujo.LayoutX,
                             LayoutY = (uint)flujo.LayoutY,
@@ -989,43 +1037,30 @@ public static class RelaySession
                     if (!flujo.ConfigEnviada)
                         continue;   // sin configuracion no hay nada descodificable
 
-                    // EL NUMERO DE FRAME ES DE LA SESION, no del codificador.
-                    //
-                    // Aqui estaba la congelacion al cambiar de pantalla, y era
-                    // silenciosa: cada captura nueva estrena su propio contador y
-                    // volvia a empezar en 1. Los reensambladores -- el del relay
-                    // y el del visor -- descartan como ATRASADO todo frame con un
-                    // id menor o igual al ultimo que completaron, asi que despues
-                    // de un cambio TODOS los frames nuevos se tiraban. Para
-                    // siempre, sin un solo error, con el contador `tardios`
-                    // subiendo donde nadie lo miraba.
-                    //
-                    // Un contador de sesion nunca retrocede, asi que el cambio de
-                    // captura deja de ser visible desde fuera.
+                    // El numero de frame es de la SESION y lo comparten los
+                    // hilos: los reensambladores descartan como atrasado todo id
+                    // menor o igual al ultimo completado, asi que dos productores
+                    // numerando por su cuenta se anularian entre ellos.
+                    var numero = (ulong)Interlocked.Increment(ref _frameDeLaSesion);
+
                     var grupo = VideoFraming.Split(
-                        ++_frameDeLaSesion, frameCodificado.IsKeyFrame, flujo.Version,
+                        numero, frameCodificado.IsKeyFrame, flujo.Version,
                         frameCodificado.TimestampUs, frameCodificado.Payload);
 
-                    // De que pantalla es cada trozo. Los frame_id siguen siendo
-                    // unicos en toda la sesion, asi que el relay los agrupa como
-                    // siempre sin saber que hay varias pantallas.
                     foreach (var trozo in grupo.Chunks)
                         trozo.DisplayId = (uint)flujo.DisplayId;
 
                     salida.WriteAsync(new Enviable(config, grupo), cancellationToken)
                         .AsTask().GetAwaiter().GetResult();
-                    }
                 }
             }
-
-            cuenta.DescartesEncoder = flujos.Sum(f => f.Codificador.Dropped);
-            cuenta.DescartesCaptura = flujos.Sum(f => f.Captura.Dropped);
         }
-        }
-        finally
+        catch (OperationCanceledException)
         {
-            foreach (var flujo in flujos)
-                flujo.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Avisar(opciones, $"La pantalla {flujo.DisplayId} dejo de emitir: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -1131,6 +1166,12 @@ public static class RelaySession
         public required Lienzo Lienzo { get; init; }
 
         public bool ConfigEnviada { get; set; }
+
+        /// <summary>Lo pide el hilo de red y lo atiende la bomba de ESTA
+        /// pantalla, que es la unica dueña de su codificador.</summary>
+        public volatile bool KeyframePedido;
+
+        public int BitrateDeseado;
 
         public void Dispose()
         {
