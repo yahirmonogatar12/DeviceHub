@@ -742,7 +742,14 @@ public partial class RelayWindow : Window
     {
         _quiereGrabar = !_quiereGrabar;
 
-        BotonGrabar.Content = _quiereGrabar ? "Detener" : "Grabar";
+        BotonGrabar.Content = _quiereGrabar ? "● Detener" : "Grabar";
+
+        // Rojo mientras graba, como el punto de AnyDesk. Es el unico estado del
+        // visor que sigue corriendo cuando nadie lo mira, y el unico que escribe
+        // en el disco del tecnico sin volver a preguntar.
+        BotonGrabar.Foreground = _quiereGrabar
+            ? (System.Windows.Media.Brush)FindResource("Acento")
+            : (System.Windows.Media.Brush)FindResource("Letra");
         Nota(_quiereGrabar ? "Grabando desde el proximo fotograma clave..." : "Grabacion detenida.");
     }
 
@@ -817,10 +824,21 @@ public partial class RelayWindow : Window
 
     private int _videoAncho, _videoAlto;
 
-    private void CambiarEscala(object sender, SelectionChangedEventArgs e)
+    private void ElegirEscala(object sender, RoutedEventArgs e)
     {
-        if (Escala.SelectedItem is ComboBoxItem { Tag: string etiqueta })
-            _escala = double.Parse(etiqueta, CultureInfo.InvariantCulture);
+        if (sender is not MenuItem elegido || elegido.Tag is not string etiqueta)
+            return;
+
+        _escala = double.Parse(etiqueta, CultureInfo.InvariantCulture);
+
+        // IsCheckable pone y quita la marca sola, pero no sabe que estas cinco
+        // son la MISMA decision: sin esto se quedarian varias marcadas a la vez.
+        foreach (var otro in MenuEscala.Items.OfType<MenuItem>())
+            otro.IsChecked = ReferenceEquals(otro, elegido);
+
+        // El titulo del menu dice que hay elegido sin abrirlo, que es lo que
+        // hacia el desplegable y lo unico que se echaba de menos al quitarlo.
+        MenuEscala.Header = elegido.Header;
 
         Ajustar();
     }
@@ -1389,57 +1407,73 @@ public partial class RelayWindow : Window
     /// Publico por lo mismo que <see cref="Entrada"/>: con un tipo private, WPF
     /// deja el desplegable en blanco sin decir por que.
     /// </summary>
+    /// <summary>Lo que se guarda en el Tag de cada entrada del menu: el id que
+    /// viaja al host y el nombre corto que se queda en el titulo.</summary>
     public sealed record Monitor(int Id, string Etiqueta);
-
-    /// <summary>Rellenar el ComboBox dispara SelectionChanged, que pediria al host
-    /// la pantalla que el host acaba de decir que ya esta mostrando. Sin esta
-    /// bandera, cada lista provoca una recaptura completa.</summary>
-    private bool _rellenandoMonitores;
 
     private void RecibirPantallas(DisplayList lista)
     {
-        var monitores = new List<Monitor>();
+        var opciones = new List<(Monitor Corto, string Largo)>();
 
         foreach (var d in lista.Displays)
         {
-            monitores.Add(new Monitor(
-                d.Id,
-                $"{d.Name.Replace(@"\\.\", string.Empty)}  {d.Width}x{d.Height} @{d.X},{d.Y}" +
+            var nombre = d.Name.Replace(@"\.\", string.Empty);
+
+            opciones.Add((
+                new Monitor(d.Id, nombre),
+                $"{nombre}  {d.Width}x{d.Height} @{d.X},{d.Y}" +
                 (d.Primary ? "  (principal)" : string.Empty)));
         }
 
         // Solo tiene sentido ofrecer el escritorio completo si hay mas de una.
-        if (monitores.Count > 1)
+        if (opciones.Count > 1)
         {
             var ancho = lista.Displays.Max(d => d.X + d.Width) - lista.Displays.Min(d => d.X);
             var alto = lista.Displays.Max(d => d.Y + d.Height) - lista.Displays.Min(d => d.Y);
 
-            monitores.Insert(0, new Monitor(-1, $"Todas a la vez  {ancho}x{alto}"));
+            opciones.Insert(0, (new Monitor(-1, "Todas"), $"Todas a la vez  {ancho}x{alto}"));
         }
 
         var actual = lista.Current;
 
         Dispatcher.BeginInvoke(() =>
         {
-            _rellenandoMonitores = true;
+            // Rellenar un menu no dispara Click, asi que aqui no hace falta la
+            // bandera que si necesitaba el desplegable: cada lista que llegaba
+            // disparaba SelectionChanged y pedia al host la pantalla que el host
+            // acababa de decir que ya estaba mostrando.
+            MenuPantallas.Items.Clear();
 
-            try
+            foreach (var (corto, largo) in opciones)
             {
-                Monitores.ItemsSource = monitores;
-                Monitores.SelectedItem = monitores.FirstOrDefault(m => m.Id == actual);
-                Monitores.IsEnabled = monitores.Count > 1;
+                var entrada = new MenuItem
+                {
+                    Header = largo,
+                    Tag = corto,
+                    IsCheckable = true,
+                    IsChecked = corto.Id == actual
+                };
+
+                entrada.Click += ElegirPantalla;
+                MenuPantallas.Items.Add(entrada);
             }
-            finally
-            {
-                _rellenandoMonitores = false;
-            }
+
+            MenuPantallas.IsEnabled = opciones.Count > 1;
+
+            MenuPantallas.Header = opciones
+                .FirstOrDefault(o => o.Corto.Id == actual).Corto?.Etiqueta ?? "Pantalla";
         });
     }
 
-    private void CambiarPantalla(object sender, SelectionChangedEventArgs e)
+    private void ElegirPantalla(object sender, RoutedEventArgs e)
     {
-        if (_rellenandoMonitores || Monitores.SelectedItem is not Monitor elegido)
+        if (sender is not MenuItem elegido || elegido.Tag is not Monitor monitor)
             return;
+
+        foreach (var otro in MenuPantallas.Items.OfType<MenuItem>())
+            otro.IsChecked = ReferenceEquals(otro, elegido);
+
+        MenuPantallas.Header = monitor.Etiqueta;
 
         // El host rehace duplicador y codificador, asi que detras de esto vienen
         // una config nueva y un IDR. Las cifras de la barra no se reinician a
@@ -1448,10 +1482,10 @@ public partial class RelayWindow : Window
         {
             ProtocolVersion = RemoteSessionProtocol.Version,
             SessionId = _sesion,
-            SelectDisplay = new SelectDisplay { DisplayId = elegido.Id }
+            SelectDisplay = new SelectDisplay { DisplayId = monitor.Id }
         });
 
-        Nota($"Cambiando a {elegido.Etiqueta}...");
+        Nota($"Cambiando a {elegido.Header}...");
     }
 
     // ------------------------------------------------------------ portapapeles

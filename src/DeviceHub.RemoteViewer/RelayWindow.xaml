@@ -3,123 +3,189 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:render="clr-namespace:DeviceHub.RemoteViewer.Render"
         Title="DeviceHub - Sesion remota" Height="700" Width="1180"
-        Background="#0B1F55" WindowStartupLocation="CenterScreen">
+        Background="#1B1B1B" WindowStartupLocation="CenterScreen">
 
+    <!-- GRIS NEUTRO Y ROJO, como AnyDesk, y no el azul de DeviceHub.
+
+         No es capricho de marca: alrededor del escritorio remoto va NEGRO. Un
+         azul saturado detras de una pantalla ajena tine lo que se mira: el ojo
+         compara contra el marco, y en una PC de planta se acaba discutiendo si
+         el MES se ve mas apagado de lo que esta. El negro no compite con nada.
+
+         El rojo es de acento y solo aparece donde hay algo encendido: grabando,
+         o un boton pulsado. -->
     <Window.Resources>
+        <SolidColorBrush x:Key="Barra"     Color="#2D2D2D" />
+        <SolidColorBrush x:Key="Panel"     Color="#232323" />
+        <SolidColorBrush x:Key="Hueco"     Color="#181818" />
+        <SolidColorBrush x:Key="Linea"     Color="#3C3C3C" />
+        <SolidColorBrush x:Key="Realce"    Color="#3A3A3A" />
+        <SolidColorBrush x:Key="Letra"     Color="#DCDCDC" />
+        <SolidColorBrush x:Key="LetraTenue" Color="#8C8C8C" />
+        <SolidColorBrush x:Key="Acento"    Color="#EF443B" />
+
         <!-- Focusable=False en TODOS: si un boton se queda el foco, la barra
              espaciadora lo vuelve a pulsar en vez de viajar a la PC remota. -->
         <Style TargetType="Button">
             <Setter Property="Focusable" Value="False" />
-            <Setter Property="Background" Value="#16295E" />
-            <Setter Property="Foreground" Value="#E8EEFB" />
-            <Setter Property="BorderBrush" Value="#2B4488" />
-            <Setter Property="Padding" Value="12,4" />
-            <Setter Property="Margin" Value="0,0,8,0" />
-        </Style>
-        <!-- TEXTO OSCURO, y el fondo se deja en paz.
-             
-             El intento anterior fue al reves: fondo azul oscuro y letra clara.
-             Pero la plantilla del ComboBox de Windows NO usa el Background del
-             control para pintar ni la caja cerrada ni el popup: los saca de
-             sus propios pinceles de tema, que son claros. O sea que el fondo
-             seguia blanco y lo unico que se aplicaba era la letra clara: letra
-             blanca sobre blanco, y los dos desplegables en blanco.
-             
-             Se veia hasta en el de la escala, que lleva los textos escritos a
-             mano: si "Adaptar" tampoco sale, no faltan datos, falta contraste. -->
-        <Style TargetType="ComboBox">
-            <Setter Property="Focusable" Value="False" />
-            <Setter Property="Width" Value="110" />
-            <Setter Property="Margin" Value="0,0,8,0" />
-            <Setter Property="Foreground" Value="#0B1F55" />
+            <Setter Property="Foreground" Value="{StaticResource Letra}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Padding" Value="11,5" />
+            <Setter Property="Margin" Value="0,0,2,0" />
+            <Setter Property="FontSize" Value="12" />
+
+            <!-- Plantilla propia porque el boton de serie trae su propio marco
+                 con degradado, y ese marco no se quita con Background: se
+                 quedaria un boton claro con relieve sobre una barra oscura. -->
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Fondo" Background="{TemplateBinding Background}"
+                                CornerRadius="3" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Fondo" Property="Background" Value="{StaticResource Realce}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Fondo" Property="Background" Value="{StaticResource Acento}" />
+                                <Setter Property="Foreground" Value="#FFFFFF" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="#6A6A6A" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
 
-        <Style TargetType="ComboBoxItem">
-            <Setter Property="Foreground" Value="#0B1F55" />
-            <Setter Property="Padding" Value="8,4" />
+        <!-- YA NO HAY ComboBox EN LA BARRA, y esa es la razon de que esto sea un
+             menu y no un desplegable.
+
+             La plantilla del ComboBox de Windows no pinta ni la caja cerrada ni
+             el popup con el Background del control: los saca de sus propios
+             pinceles de tema, que son claros. Con la barra oscura eso deja dos
+             recuadros blancos en medio, y el intento de arreglarlo con letra
+             clara acabo en blanco sobre blanco. El MenuItem si obedece, asi que
+             la escala y el monitor pasan a ser menus como Acciones. -->
+        <Style TargetType="MenuItem">
+            <Setter Property="Background" Value="{StaticResource Barra}" />
+            <Setter Property="Foreground" Value="{StaticResource Letra}" />
+            <Setter Property="Padding" Value="10,5" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+
+        <Style TargetType="Separator">
+            <Setter Property="Background" Value="{StaticResource Linea}" />
+            <Setter Property="Margin" Value="0,3" />
         </Style>
 
         <Style TargetType="ListBoxItem">
             <Setter Property="Background" Value="Transparent" />
-            <Setter Property="Foreground" Value="#C8D6EE" />
+            <Setter Property="Foreground" Value="{StaticResource Letra}" />
             <Setter Property="Padding" Value="4,2" />
             <Style.Triggers>
                 <Trigger Property="IsSelected" Value="True">
-                    <Setter Property="Background" Value="#2B4488" />
+                    <Setter Property="Background" Value="{StaticResource Acento}" />
                     <Setter Property="Foreground" Value="#FFFFFF" />
                 </Trigger>
             </Style.Triggers>
-        </Style>
-
-        <!-- El menu de acciones, por lo mismo. -->
-        <Style TargetType="MenuItem">
-            <Setter Property="Background" Value="#16295E" />
-            <Setter Property="Foreground" Value="#E8EEFB" />
         </Style>
     </Window.Resources>
 
     <DockPanel>
 
-        <Border DockPanel.Dock="Top" Background="#08163D" Padding="12,7">
-            <StackPanel Orientation="Horizontal">
-                <Button x:Name="BotonCaptura" Content="Captura" Click="Capturar" />
-                <Button x:Name="BotonGrabar" Content="Grabar" Click="AlternarGrabacion" />
-                <ComboBox x:Name="Escala" SelectionChanged="CambiarEscala" SelectedIndex="0">
-                    <ComboBoxItem Content="Adaptar" Tag="0" />
-                    <ComboBoxItem Content="Original" Tag="1" />
-                    <ComboBoxItem Content="50 %" Tag="0.5" />
-                    <ComboBoxItem Content="150 %" Tag="1.5" />
-                    <ComboBoxItem Content="200 %" Tag="2" />
-                </ComboBox>
-                <ComboBox x:Name="Monitores" Width="190" SelectionChanged="CambiarPantalla"
-                          DisplayMemberPath="Etiqueta" />
-                <Button x:Name="BotonArchivos" Content="Archivos" Click="AlternarArchivos" />
-                <Button x:Name="BotonDatos" Content="Datos" Click="AlternarDatos" />
+        <!-- Una franja fina y de un solo color, con una linea abajo que la separa
+             del negro. Sin el borde, la barra y el hueco del video se funden y no
+             se sabe donde acaba el visor y empieza la PC remota. -->
+        <Border DockPanel.Dock="Top" Background="{StaticResource Barra}"
+                BorderBrush="{StaticResource Linea}" BorderThickness="0,0,0,1" Padding="6,3">
+            <DockPanel>
 
-                <Menu Background="Transparent" VerticalAlignment="Center" Margin="0,0,12,0">
-                    <MenuItem Header="Acciones" Foreground="#E8EEFB" Padding="12,4">
-                        <MenuItem Header="Ctrl + Alt + Supr" Click="EnviarCtrlAltSupr" />
-                        <MenuItem Header="Bloquear la PC remota" Click="BloquearRemota" />
-                        <MenuItem x:Name="MenuCongelar" Header="Congelar entrada local"
-                                  IsCheckable="True" Click="CongelarEntrada" />
-                        <!-- Se puede apagar, y hace falta que se pueda: con esto
-                             puesto, Alt+Tab ya no saca al tecnico del visor. -->
-                        <MenuItem x:Name="MenuTeclas" Header="Enviar Windows y Alt+Tab a la PC remota"
-                                  IsCheckable="True" IsChecked="True" Click="AlternarTeclas" />
-                        <Separator />
-                        <MenuItem Header="Reiniciar la PC remota..." Click="ReiniciarRemota" />
-                    </MenuItem>
-                </Menu>
+                <!-- El nombre de la sesion a la derecha del todo, como la barra
+                     de AnyDesk lleva el ID: es lo que se mira para saber CONTRA
+                     QUE maquina se esta actuando antes de tocar nada. -->
+                <TextBlock x:Name="Aviso" DockPanel.Dock="Right" VerticalAlignment="Center"
+                           FontFamily="Consolas" FontSize="11" Margin="12,0,6,0"
+                           Foreground="{StaticResource LetraTenue}" Text="" />
 
-                <TextBlock x:Name="Aviso" VerticalAlignment="Center" FontFamily="Consolas"
-                           FontSize="12" Foreground="#8FA6CE" Text="" />
-            </StackPanel>
+                <StackPanel Orientation="Horizontal">
+                    <Button x:Name="BotonCaptura" Content="Captura" Click="Capturar"
+                            ToolTip="Guarda una imagen del escritorio remoto" />
+                    <Button x:Name="BotonGrabar" Content="Grabar" Click="AlternarGrabacion"
+                            ToolTip="Graba la sesion en H.264, sin recodificar" />
+
+                    <Border Width="1" Background="{StaticResource Linea}" Margin="6,4" />
+
+                    <Menu Background="Transparent" VerticalAlignment="Center">
+                        <MenuItem x:Name="MenuEscala" Header="Adaptar">
+                            <MenuItem Header="Adaptar"  Tag="0"   IsCheckable="True" IsChecked="True" Click="ElegirEscala" />
+                            <MenuItem Header="Original" Tag="1"   IsCheckable="True" Click="ElegirEscala" />
+                            <MenuItem Header="50 %"     Tag="0.5" IsCheckable="True" Click="ElegirEscala" />
+                            <MenuItem Header="150 %"    Tag="1.5" IsCheckable="True" Click="ElegirEscala" />
+                            <MenuItem Header="200 %"    Tag="2"   IsCheckable="True" Click="ElegirEscala" />
+                        </MenuItem>
+
+                        <MenuItem x:Name="MenuPantallas" Header="Pantalla" IsEnabled="False" />
+                    </Menu>
+
+                    <Border Width="1" Background="{StaticResource Linea}" Margin="6,4" />
+
+                    <Button x:Name="BotonArchivos" Content="Archivos" Click="AlternarArchivos"
+                            ToolTip="Transferencia de archivos con la PC remota" />
+                    <Button x:Name="BotonDatos" Content="Datos" Click="AlternarDatos"
+                            ToolTip="Medidas de la sesion (Ctrl + Mayus + F12)" />
+
+                    <Menu Background="Transparent" VerticalAlignment="Center">
+                        <MenuItem Header="Acciones">
+                            <MenuItem Header="Ctrl + Alt + Supr" Click="EnviarCtrlAltSupr" />
+                            <MenuItem Header="Bloquear la PC remota" Click="BloquearRemota" />
+                            <MenuItem x:Name="MenuCongelar" Header="Congelar entrada local"
+                                      IsCheckable="True" Click="CongelarEntrada" />
+                            <!-- Se puede apagar, y hace falta que se pueda: con esto
+                                 puesto, Alt+Tab ya no saca al tecnico del visor. -->
+                            <MenuItem x:Name="MenuTeclas" Header="Enviar Windows y Alt+Tab a la PC remota"
+                                      IsCheckable="True" IsChecked="True" Click="AlternarTeclas" />
+                            <Separator />
+                            <MenuItem Header="Reiniciar la PC remota..." Click="ReiniciarRemota" />
+                        </MenuItem>
+                    </Menu>
+                </StackPanel>
+
+            </DockPanel>
         </Border>
 
         <!-- Al lado del video, nunca encima: un HwndHost dibuja fuera del arbol
              visual de WPF y cualquier XAML superpuesto quedaria tapado. -->
-        <Border x:Name="BarraEstado" DockPanel.Dock="Bottom" Background="#08163D" Padding="12,7">
-            <TextBlock x:Name="Estado" FontFamily="Consolas" FontSize="12"
-                       Foreground="#B6C2DC" TextWrapping="Wrap"
+        <Border x:Name="BarraEstado" DockPanel.Dock="Bottom" Background="{StaticResource Panel}"
+                BorderBrush="{StaticResource Linea}" BorderThickness="0,1,0,0" Padding="10,5">
+            <TextBlock x:Name="Estado" FontFamily="Consolas" FontSize="11"
+                       Foreground="{StaticResource LetraTenue}" TextWrapping="Wrap"
                        Text="Conectando..." />
         </Border>
 
         <!-- Al lado del video, nunca encima, por el mismo airspace de siempre. -->
         <Border x:Name="PanelArchivos" DockPanel.Dock="Right" Width="360"
-                Background="#08163D" Padding="10" Visibility="Collapsed">
+                Background="{StaticResource Panel}" BorderBrush="{StaticResource Linea}"
+                BorderThickness="1,0,0,0" Padding="10" Visibility="Collapsed">
             <DockPanel>
                 <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
                     <Button DockPanel.Dock="Left" Content="&#x2191;" Width="30" Margin="0,0,6,0"
                             Click="SubirCarpeta" ToolTip="Carpeta superior" />
                     <TextBox x:Name="RutaRemota" FontFamily="Consolas" FontSize="12"
-                             Background="#061029" Foreground="#E8EEFB" BorderThickness="0"
+                             Background="{StaticResource Hueco}" Foreground="{StaticResource Letra}"
+                             CaretBrush="{StaticResource Letra}" BorderThickness="0"
                              Padding="6,4" KeyDown="RutaEscrita" />
                 </DockPanel>
 
                 <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
-                    <ProgressBar x:Name="Progreso" Height="6" Margin="0,0,0,6" />
+                    <ProgressBar x:Name="Progreso" Height="6" Margin="0,0,0,6"
+                                 Background="{StaticResource Hueco}" Foreground="{StaticResource Acento}"
+                                 BorderThickness="0" />
                     <TextBlock x:Name="EstadoArchivos" FontFamily="Consolas" FontSize="11"
-                               Foreground="#8FA6CE" TextWrapping="Wrap" Text="" />
+                               Foreground="{StaticResource LetraTenue}" TextWrapping="Wrap" Text="" />
                     <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                         <Button Content="Descargar" Click="Descargar" />
                         <Button Content="Subir..." Click="Subir" />
@@ -134,7 +200,8 @@
                     </StackPanel>
                 </StackPanel>
 
-                <ListBox x:Name="Archivos" Background="#061029" Foreground="#C8D6EE"
+                <ListBox x:Name="Archivos" Background="{StaticResource Hueco}"
+                         Foreground="{StaticResource Letra}"
                          BorderThickness="0" FontFamily="Consolas" FontSize="12"
                          DisplayMemberPath="Etiqueta" MouseDoubleClick="AbrirEntrada" />
             </DockPanel>
@@ -144,7 +211,7 @@
              desplazamiento entran y salen solas, y al hacerlo cambian el hueco
              util sin que el ScrollViewer cambie de tamano. SizeChanged no se
              entera de eso; ScrollChanged si. -->
-        <ScrollViewer x:Name="Lienzo" Background="#0B1F55" SizeChanged="Ajustar"
+        <ScrollViewer x:Name="Lienzo" Background="Black" SizeChanged="Ajustar"
                       ScrollChanged="Ajustar"
                       HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
             <!-- Un minimo, no un tamano: sin el, el ScrollViewer mide 0x0 y el
