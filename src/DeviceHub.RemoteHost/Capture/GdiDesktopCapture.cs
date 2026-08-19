@@ -69,13 +69,22 @@ public sealed class GdiDesktopCapture : IScreenCapture
     /// </summary>
     private static readonly long IntervaloTicks = Stopwatch.Frequency / 10;
 
-    public GdiDesktopCapture()
+    private readonly int _origenX;
+    private readonly int _origenY;
+
+    /// <summary>
+    /// Sin argumentos captura la pantalla PRINCIPAL, que es donde sale la de
+    /// bloqueo. Con un rectangulo captura ESE trozo del escritorio virtual, que
+    /// es lo que hace falta cuando este capturador releva a DXGI en un monitor
+    /// concreto.
+    /// </summary>
+    public GdiDesktopCapture(int x = 0, int y = 0, int ancho = 0, int alto = 0)
     {
-        // La pantalla PRINCIPAL. La de bloqueo sale ahi, y capturar el escritorio
-        // virtual entero solo anadiria monitores en negro a un caso que ya es el
-        // respaldo lento.
-        Width = ParOSuperior(GetSystemMetrics(SmCxScreen));
-        Height = ParOSuperior(GetSystemMetrics(SmCyScreen));
+        _origenX = x;
+        _origenY = y;
+
+        Width = ParOSuperior(ancho > 0 ? ancho : GetSystemMetrics(SmCxScreen));
+        Height = ParOSuperior(alto > 0 ? alto : GetSystemMetrics(SmCyScreen));
 
         Abrir();
     }
@@ -91,8 +100,8 @@ public sealed class GdiDesktopCapture : IScreenCapture
     public ID3D11Device Device => _device;
     public Vortice.Luid AdapterLuid { get; private set; }
     public uint AdapterVendorId { get; private set; }
-    public int DesktopLeft => 0;
-    public int DesktopTop => 0;
+    public int DesktopLeft => _origenX;
+    public int DesktopTop => _origenY;
 
     public long Timeouts { get; private set; }
     public long AccessLostRecoveries { get; private set; }
@@ -143,7 +152,9 @@ public sealed class GdiDesktopCapture : IScreenCapture
 
         // CAPTUREBLT ademas de SRCCOPY: sin el no salen las ventanas por capas, y
         // la interfaz de inicio de sesion de Windows es una de ellas.
-        if (!BitBlt(_dcMemoria, 0, 0, Width, Height, _dcEscritorio, 0, 0, SrcCopy | CaptureBlt))
+        // El origen es el del MONITOR dentro del escritorio virtual: el de la
+        // izquierda tiene x negativa en Windows y BitBlt lo acepta tal cual.
+        if (!BitBlt(_dcMemoria, 0, 0, Width, Height, _dcEscritorio, _origenX, _origenY, SrcCopy | CaptureBlt))
         {
             Timeouts++;
             Thread.Sleep(100);
@@ -233,6 +244,9 @@ public sealed class GdiDesktopCapture : IScreenCapture
     {
         // CreateDC y no GetDC(null): GetDC entrega el DC de la ventana de
         // escritorio que hubiera antes del salto.
+        // CreateDC("DISPLAY") da el contexto del escritorio entero, con todos los
+        // monitores en sus coordenadas. Por eso el origen de arriba basta para
+        // sacar cualquiera de ellos.
         _dcEscritorio = CreateDC("DISPLAY", null, null, IntPtr.Zero);
 
         if (_dcEscritorio == IntPtr.Zero)

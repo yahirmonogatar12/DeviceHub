@@ -263,6 +263,10 @@ public static class RelaySession
         public long Capturados, Codificados, Claves, Enviados, Trozos, Bytes;
         public long DescartesEncoder, DescartesCaptura;
         public uint ConfigVersion;
+
+        /// <summary>La misma cuenta, en un campo que Interlocked puede tocar: al
+        /// relevar una pantalla se estrena version desde su propia bomba.</summary>
+        public int ConfigVersionCompartida;
         public Exception? Fallo;
     }
 
@@ -921,7 +925,8 @@ public static class RelaySession
         try
         {
             var siguienteFrame = Stopwatch.GetTimestamp();
-            var bitrateActual = opciones.Bitrate / Math.Max(1, 1);
+            var ultimoFrame = Stopwatch.GetTimestamp();
+            var bitrateActual = 0;
 
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -982,6 +987,33 @@ public static class RelaySession
 
                 IReadOnlyList<EncodedFrame> producidos;
 
+                // SI DXGI SE QUEDA MUDO, RELEVO POR GDI.
+                //
+                // Es lo que hace RustDesk: cuenta los WouldBlock seguidos -- que
+                // es nuestro WAIT_TIMEOUT -- y a la tercera cambia ESE capturador
+                // a GDI ("No image, fall back to gdi"). O sea que a ellos tampoco
+                // les entrega DXGI el segundo monitor, y no lo pelean.
+                //
+                // Aqui se mide por TIEMPO y no por cuenta, porque con la espera a
+                // 0 los nulos son constantes en una pantalla quieta: tres
+                // seguidos no significan nada, tres segundos si.
+                //
+                // El precio es real -- GDI copia por CPU y sube 8 MB a la GPU por
+                // frame -- y por eso es el ultimo recurso y no se vuelve atras.
+                if (!flujo.Relevada && Stopwatch.GetTimestamp() - ultimoFrame > Stopwatch.Frequency * 3)
+                {
+                    flujo.Relevada = true;
+
+                    Avisar(opciones,
+                        $"DXGI lleva 3 s sin entregar la pantalla {flujo.DisplayId}; se releva por GDI");
+
+                    if (Relevar(flujo, opciones, cuenta))
+                    {
+                        ultimoFrame = Stopwatch.GetTimestamp();
+                        continue;
+                    }
+                }
+
                 // El frame DXGI se suelta ANTES de esperar por nada. Encolar
                 // puede bloquear si la red va por detras, y quedarse la
                 // superficie duplicada mientras tanto es lo que no se hace.
@@ -989,6 +1021,8 @@ public static class RelaySession
                 {
                     if (frame is null || !frame.DesktopChanged)
                         continue;
+
+                    ultimoFrame = Stopwatch.GetTimestamp();
 
                     Interlocked.Increment(ref cuenta.Capturados);
                     producidos = flujo.Codificador.Encode(frame, cancellationToken);
@@ -1158,12 +1192,21 @@ public static class RelaySession
     private sealed class Flujo : IDisposable
     {
         public required int DisplayId { get; init; }
-        public required IScreenCapture Captura { get; init; }
-        public required H264Encoder Codificador { get; init; }
-        public required uint Version { get; init; }
+        public required Pantalla? Info { get; init; }
+
+        // Captura, codificador y version dejan de ser fijos: si DXGI se queda
+        // mudo en esta pantalla, se releva por GDI y eso son los tres a la vez.
+        public required IScreenCapture Captura { get; set; }
+        public required H264Encoder Codificador { get; set; }
+        public required uint Version { get; set; }
+
         public required int LayoutX { get; init; }
         public required int LayoutY { get; init; }
         public required Lienzo Lienzo { get; init; }
+
+        /// <summary>Ya se relevo una vez. No se vuelve: GDI es el ultimo
+        /// recurso, y girar entre los dos seria peor que quedarse en uno.</summary>
+        public bool Relevada { get; set; }
 
         public bool ConfigEnviada { get; set; }
 
@@ -1199,11 +1242,14 @@ public static class RelaySession
         {
             var unica = Abrir(pedida, elegida, opciones);
 
+            cuenta.ConfigVersionCompartida = (int)cuenta.ConfigVersion + 1;
+
             return
             [
                 new Flujo
                 {
                     DisplayId = pedida,
+                    Info = elegida,
                     Captura = unica,
                     Codificador = new H264Encoder(
                         unica.Device, unica.Width, unica.Height, opciones.Fps, opciones.Bitrate,
@@ -1233,6 +1279,7 @@ public static class RelaySession
                 flujos.Add(new Flujo
                 {
                     DisplayId = pantalla.Id,
+                    Info = pantalla,
                     Captura = captura,
                     Codificador = new H264Encoder(
                         captura.Device, captura.Width, captura.Height, opciones.Fps,
@@ -1259,6 +1306,12 @@ public static class RelaySession
         if (flujos.Count == 0)
             throw new ScreenCaptureUnavailableException("No se pudo abrir ninguna de las pantallas.");
 
+        // La cuenta compartida arranca donde va la normal. Sin esto, el primer
+        // relevo estrenaria una version que otra pantalla ya esta usando, y el
+        // visor descodificaria sus frames con el SPS equivocado -- que no da
+        // error, da imagen corrupta.
+        cuenta.ConfigVersionCompartida = (int)cuenta.ConfigVersion;
+
         // Con varias pantallas NADIE espera: se sondean todas en el mismo hilo,
         // asi que una quieta se llevaria 100 ms de cada vuelta y dejaria a las
         // demas a 5 FPS aunque fueran las unicas moviendose. El freno del ritmo
@@ -1270,6 +1323,55 @@ public static class RelaySession
         }
 
         return flujos;
+    }
+
+    /// <summary>
+    /// Cambia una pantalla de DXGI a GDI sin cortar la sesion.
+    ///
+    /// Se rehace TAMBIEN el codificador porque el capturador nuevo trae su propio
+    /// dispositivo D3D, y un MFT atado al dispositivo viejo no puede recibir sus
+    /// texturas. Y con codificador nuevo hay SPS nuevo, asi que estrena
+    /// config_version: el visor tirara su decodificador de esa pantalla y montara
+    /// otro, que es justo para lo que la version existe.
+    /// </summary>
+    private static bool Relevar(Flujo flujo, RelayOptions opciones, Contadores cuenta)
+    {
+        if (flujo.Info is not { } info)
+            return false;
+
+        try
+        {
+            var gdi = new GdiDesktopCapture(info.X, info.Y, info.Ancho, info.Alto);
+
+            var codificador = new H264Encoder(
+                gdi.Device, gdi.Width, gdi.Height, opciones.Fps,
+                Math.Max(flujo.BitrateDeseado, ControlBitrate.Minimo),
+                gdi.AdapterLuid, gdi.AdapterVendorId);
+
+            // El viejo se suelta DESPUES de que el nuevo exista: si crear el
+            // nuevo falla, la pantalla sigue con lo que tenia en vez de quedarse
+            // sin nada.
+            var anterior = flujo.Captura;
+            var anteriorCodificador = flujo.Codificador;
+
+            flujo.Captura = gdi;
+            flujo.Codificador = codificador;
+            flujo.Version = (uint)Interlocked.Increment(ref cuenta.ConfigVersionCompartida);
+            flujo.ConfigEnviada = false;
+
+            anteriorCodificador.Dispose();
+            anterior.Dispose();
+
+            Avisar(opciones,
+                $"Pantalla {flujo.DisplayId} en GDI: {gdi.Width}x{gdi.Height} desde @{info.X},{info.Y}");
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Avisar(opciones, $"El respaldo GDI de la pantalla {flujo.DisplayId} tampoco pudo: {ex.Message}");
+            return false;
+        }
     }
 
     private static long Ahora()
