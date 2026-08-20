@@ -386,7 +386,21 @@ public partial class RelayWindow : Window
         // suba, no su valor.
         var perdidasVistas = new Dictionary<uint, long>();
 
-        var decodificaciones = new List<long>();
+        // LAS MEDIDAS SON DE AHORA, LOS CONTADORES SON DE LA SESION.
+        //
+        // Un contador -- frames, chunks, perdidas -- cuenta desde el principio y
+        // asi tiene que ser: sirve para saber que ha pasado. Una MEDIDA de
+        // rendimiento promediada desde el principio no sirve para nada, porque
+        // la pantalla remota se pasa la mayor parte del tiempo quieta y arrastra
+        // la media al suelo mientras la imagen va fina.
+        var ritmo = new Ritmo();
+
+        // Y lo mismo con los tiempos de descodificado: los ultimos 600, que a 30
+        // FPS son los ultimos 20 s. De paso deja de crecer sin limite -- en una
+        // sesion de ocho horas eran cien mil entradas para calcular dos
+        // percentiles.
+        const int MuestrasDeDecode = 600;
+        var decodificaciones = new Queue<long>();
         long chunks = 0, reconstruidos = 0, decodificados = 0, pintados = 0;
         long cambiosConfig = 0, idr = 0;
 
@@ -550,7 +564,10 @@ public partial class RelayWindow : Window
 
                         var antes = Stopwatch.GetTimestamp();
                         var salidas = decoder.Decode(completo.Payload, 0, completo.Payload.Length, completo.CaptureTimestampUs);
-                        decodificaciones.Add(Micros(Stopwatch.GetTimestamp() - antes));
+                        decodificaciones.Enqueue(Micros(Stopwatch.GetTimestamp() - antes));
+
+                        while (decodificaciones.Count > MuestrasDeDecode)
+                            decodificaciones.Dequeue();
 
                         foreach (var imagen in salidas)
                         {
@@ -576,6 +593,7 @@ public partial class RelayWindow : Window
 
                                 presentador?.Present(pantalla, imagen.Texture, imagen.Subresource, captura);
                                 pintados++;
+                                ritmo.Marcar(reloj.Elapsed.TotalSeconds);
 
                                 if (captura is not null)
                                     Nota($"Captura guardada en {captura}");
@@ -684,7 +702,7 @@ public partial class RelayWindow : Window
                         $"sesion {_sesion}   {Resumen(configs)}   " +
                         $"RTT {(_rttUs < 0 ? "-" : $"{_rttUs / 1000.0:0.0} ms")}\n" +
                         $"chunks {chunks}{PorPantalla(porPantalla)}   frames {reconstruidos}   decodificados {decodificados}   pintados {pintados}   " +
-                        $"render {pintados / segundos:0.00} FPS   " +
+                        $"render {ritmo.Fps(reloj.Elapsed.TotalSeconds):0.0} FPS   " +
                         $"decode p50 {Percentil(ordenadas, 0.50):0.00} ms   p95 {Percentil(ordenadas, 0.95):0.00} ms\n" +
                         // La entrada enviada va en la barra a proposito: cuando
                         // el video se ve pero no se puede controlar, esta cifra
