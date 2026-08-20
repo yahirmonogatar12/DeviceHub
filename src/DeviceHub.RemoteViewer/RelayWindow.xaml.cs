@@ -339,6 +339,27 @@ public partial class RelayWindow : Window
             }
         }, intento.Token);
 
+        // LO QUE QUEDO DE LA CONEXION ANTERIOR NO SE REPRODUCE.
+        //
+        // _salida es de la VENTANA y no de la conexion, asi que al caerse la red
+        // se queda dentro lo que no llego a salir. Reproducirlo ahora seria
+        // aplicar en la PC remota clics y teclas de hace medio minuto, contra
+        // una pantalla que ya no es la que el tecnico estaba mirando -- y encima
+        // por delante del ReleaseInput, que quedaria al final de la fila.
+        //
+        // Nada de lo pendiente sigue valiendo: el relay nunca lo recibio, los
+        // acuses son de un stream muerto y los frames que confirmaban ya no
+        // existen.
+        while (_salida.Reader.TryRead(out _))
+        {
+        }
+
+        Interlocked.Exchange(ref _movimiento, null);
+
+        // Y lo primero que sale del stream nuevo es soltar lo que quedara
+        // hundido, antes que cualquier entrada.
+        PedirSoltarEntrada();
+
         var latidos = LatirAsync(llamada.RequestStream, intento.Token);
 
         using var device = VideoPresenter.CreateDevice();
@@ -657,7 +678,7 @@ public partial class RelayWindow : Window
                         // hundida al otro lado y desde la PC de planta no hay
                         // forma de despegarla. Cuesta un mensaje y solo hace algo
                         // cuando de verdad quedo algo.
-                        SoltarEntradaRemota();
+                        PedirSoltarEntrada();
 
                         // La reconexion funciono: la espera vuelve al principio.
                         // Sin esto, un microcorte a los diez minutos empezaria
@@ -1052,12 +1073,15 @@ public partial class RelayWindow : Window
     /// corte de red entre un KeyDown y su KeyUp deja esa tecla pegada al otro
     /// lado, y desde la PC de planta no hay forma de despegarla.
     /// </summary>
-    private void SoltarEntradaRemota()
-        => Enviar(new HostAction { Kind = HostAction.Types.Kind.HostActionReleaseInput });
+    /// <summary>1 = hay que pedir al host que suelte lo hundido. Lo levanta
+    /// quien lo necesite y lo baja el hilo de envio.</summary>
+    private int _soltarPendiente;
+
+    private void PedirSoltarEntrada() => Interlocked.Exchange(ref _soltarPendiente, 1);
 
     private void SoltarEntradaRemota(object sender, RoutedEventArgs e)
     {
-        SoltarEntradaRemota();
+        PedirSoltarEntrada();
         Nota("Pedido soltar teclas y botones pegados.");
     }
 
@@ -1780,7 +1804,23 @@ public partial class RelayWindow : Window
                     continue;
                 }
 
-                // EL MOVIMIENTO PRIMERO, y solo el ultimo. Mandarlo despues de
+                // EL RESCATE ANTES QUE NADA. No pasa por la cola -- por eso
+                // existe -- y va delante porque lo que sigue puede ser mas
+                // entrada sobre un estado que todavia esta sucio.
+                if (Interlocked.Exchange(ref _soltarPendiente, 0) == 1)
+                {
+                    await salida.WriteAsync(new RemotePacket
+                    {
+                        ProtocolVersion = RemoteSessionProtocol.Version,
+                        SessionId = _sesion,
+                        HostAction = new HostAction
+                        {
+                            Kind = HostAction.Types.Kind.HostActionReleaseInput
+                        }
+                    }, cancellationToken);
+                }
+
+                // EL MOVIMIENTO DESPUES, y solo el ultimo. Mandarlo despues de
                 // la rafaga de criticos lo dejaria llegando tarde justo cuando
                 // hay prisa.
                 if (Interlocked.Exchange(ref _movimiento, null) is { } movimiento)
@@ -1957,15 +1997,21 @@ public partial class RelayWindow : Window
         if (_salida.Writer.TryWrite(paquete))
         {
             _entradaEnviada++;
+            return;
         }
-        else
-        {
-            // Con el movimiento fuera de la cola esto no deberia pasar nunca. Si
-            // pasa, algo hundido puede haberse quedado sin su KeyUp, asi que se
-            // pide soltar todo en vez de dejarlo a la suerte.
-            _entradaPerdida++;
-            SoltarEntradaRemota();
-        }
+
+        // Con el movimiento fuera de la cola esto no deberia pasar nunca. Si
+        // pasa, algo hundido puede haberse quedado sin su KeyUp.
+        //
+        // EL RESCATE NO PUEDE IR POR LA COLA QUE ACABA DE FALLAR. Mandarlo con
+        // Enviar() volveria a Encolar(), que volveria a fallar, que volveria a
+        // pedir el rescate: recursion sin fondo y desbordamiento de pila, justo
+        // en el momento de mas presion.
+        //
+        // Se levanta una bandera y la atiende el hilo de envio, que es el unico
+        // que de verdad escribe en el stream y no depende de esta cola.
+        _entradaPerdida++;
+        PedirSoltarEntrada();
     }
 
     /// <summary>

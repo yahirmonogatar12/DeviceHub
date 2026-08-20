@@ -52,21 +52,32 @@ public sealed class InputInjector(int ancho, int alto, int izquierda, int arriba
     {
         var cuantos = 0;
 
+        // SE OLVIDA LO QUE DE VERDAD SE SOLTO, uno a uno.
+        //
+        // Un Clear() al final daria por soltado lo que fallo, y lo que falla
+        // aqui falla por algo que dura: el escritorio activo es otro, o falta
+        // privilegio. Borrarlo de la lista seria perder la ultima constancia de
+        // que esa tecla esta hundida, y al siguiente intento -- ya sobre el
+        // escritorio bueno -- no habria nada que soltar.
         foreach (var vk in _teclasHundidas.ToArray())
         {
-            Soltar(vk);
+            if (!Soltar(vk))
+                continue;
+
+            _teclasHundidas.Remove(vk);
             cuantos++;
         }
-
-        _teclasHundidas.Clear();
 
         foreach (var boton in _botonesHundidos.ToArray())
         {
-            Pulsar(boton, false);
-            cuantos++;
-        }
+            // Pulsar ya se encarga de quitarlo de la lista si lo consigue.
+            var antes = _botonesHundidos.Count;
 
-        _botonesHundidos.Clear();
+            Pulsar(boton, false);
+
+            if (_botonesHundidos.Count < antes)
+                cuantos++;
+        }
 
         return cuantos;
     }
@@ -167,22 +178,32 @@ public sealed class InputInjector(int ancho, int alto, int izquierda, int arriba
             return;
         }
 
-        if (pulsado)
-            _botonesHundidos.Add(boton);
-        else
-            _botonesHundidos.Remove(boton);
-
-        Enviar(new INPUT
+        // EL ESTADO SE APUNTA DESPUES Y SOLO SI SE APLICO.
+        //
+        // Al reves era peligroso en una direccion concreta: si el UP falla y ya
+        // se habia borrado de la lista, ese boton sigue hundido en Windows y
+        // aqui consta que no. SoltarTodo ya no sabria que existe, y ese boton se
+        // queda pulsado hasta que alguien lo note fisicamente.
+        //
+        // Apuntar de mas es inofensivo -- un UP de sobra no hace nada -- y
+        // apuntar de menos deja algo hundido para siempre. La asimetria manda.
+        if (Enviar(new INPUT
         {
             type = INPUT_MOUSE,
             u = new INPUTUNION { mi = new MOUSEINPUT { dwFlags = bandera } }
-        });
+        }))
+        {
+            if (pulsado)
+                _botonesHundidos.Add(boton);
+            else
+                _botonesHundidos.Remove(boton);
+        }
     }
 
     /// <summary>Suelta una tecla por codigo virtual, sin evento de por medio.
     /// Es lo que hace falta para deshacer lo que quedo hundido: del KeyDown
     /// original ya no se conserva ni el scan code ni la marca de extendida.</summary>
-    private void Soltar(uint virtualKey)
+    private bool Soltar(uint virtualKey)
     {
         var scan = (ushort)MapVirtualKey(virtualKey, MAPVK_VK_TO_VSC);
         var banderas = KEYEVENTF_KEYUP | (scan != 0 ? KEYEVENTF_SCANCODE : 0);
@@ -196,7 +217,7 @@ public sealed class InputInjector(int ancho, int alto, int izquierda, int arriba
             banderas |= KEYEVENTF_EXTENDEDKEY;
         }
 
-        Enviar(new INPUT
+        return Enviar(new INPUT
         {
             type = INPUT_KEYBOARD,
             u = new INPUTUNION
@@ -254,15 +275,15 @@ public sealed class InputInjector(int ancho, int alto, int izquierda, int arriba
         if (scan == 0)
             banderas &= ~KEYEVENTF_SCANCODE;
 
-        // Se apunta ANTES de mandarla. Si SendInput falla la tecla no quedo
-        // hundida, pero apuntarla de mas solo cuesta un KeyUp de mas al soltar
-        // -- que no hace nada -- y apuntarla de menos deja un Ctrl invisible.
-        if (tecla.Pressed)
-            _teclasHundidas.Add(tecla.VirtualKey);
-        else
-            _teclasHundidas.Remove(tecla.VirtualKey);
-
-        Enviar(new INPUT
+        // EL ESTADO SE APUNTA DESPUES Y SOLO SI SE APLICO, y la asimetria es lo
+        // que importa: apuntar de mas cuesta un KeyUp de sobra al soltar -- que
+        // no hace nada -- y apuntar de menos deja un Ctrl hundido del que ya no
+        // queda constancia.
+        //
+        // El caso feo es el UP: si se borra de la lista antes y SendInput falla,
+        // Windows sigue con esa tecla pulsada y aqui consta que no. SoltarTodo
+        // ya no sabria que existe.
+        if (!Enviar(new INPUT
         {
             type = INPUT_KEYBOARD,
             u = new INPUTUNION
@@ -274,7 +295,15 @@ public sealed class InputInjector(int ancho, int alto, int izquierda, int arriba
                     dwFlags = banderas
                 }
             }
-        });
+        }))
+        {
+            return;
+        }
+
+        if (tecla.Pressed)
+            _teclasHundidas.Add(tecla.VirtualKey);
+        else
+            _teclasHundidas.Remove(tecla.VirtualKey);
     }
 
     /// <summary>
@@ -293,12 +322,24 @@ public sealed class InputInjector(int ancho, int alto, int izquierda, int arriba
     ///
     /// Evitar la coordinacion era el problema, no la solucion.
     /// </summary>
-    private void Enviar(INPUT entrada)
+    /// <summary>
+    /// Devuelve si el evento se aplico DE VERDAD.
+    ///
+    /// Hace falta saberlo para llevar la cuenta de lo hundido. SendInput falla
+    /// cuando el escritorio activo no es el nuestro o falta privilegio, y eso
+    /// pasa justo en los momentos interesantes: un UAC abriendose, la pantalla
+    /// de bloqueo, un cambio de usuario.
+    /// </summary>
+    private bool Enviar(INPUT entrada)
     {
         if (SendInput(1, [entrada], Marshal.SizeOf<INPUT>()) == 1)
+        {
             Applied++;
-        else
-            Rejected++;   // el escritorio activo no es el nuestro, o falta privilegio
+            return true;
+        }
+
+        Rejected++;
+        return false;
     }
 
     // ------------------------------------------------------------------ interop
