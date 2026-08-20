@@ -277,6 +277,16 @@ public static class RelaySession
     /// </summary>
     private static volatile bool _keyframePedido;
 
+    /// <summary>El visor pidio soltar todo lo que quedo hundido. Lo atiende el
+    /// hilo de captura, que es el atado al escritorio activo.</summary>
+    private static volatile bool _soltarEntrada;
+
+    private static string Anotar(ref bool bandera)
+    {
+        bandera = true;
+        return string.Empty;
+    }
+
     /// <summary>
     /// Pantallas para las que se pidio un IDR. Por pantalla y no una bandera
     /// global: con dos monitores, una perdida en uno no justifica gastar el
@@ -738,6 +748,17 @@ public static class RelaySession
                     Avisar(opciones, "Llega entrada pero la captura todavia no publico el inyector.");
                 }
 
+                // ANTES de la entrada nueva: si el visor acaba de reconectar,
+                // lo primero es despegar lo que quedo hundido y despues aplicar
+                // lo que venga.
+                if (_soltarEntrada)
+                {
+                    _soltarEntrada = false;
+
+                    if (_entrada?.SoltarTodo() is > 0 and var cuantos)
+                        Avisar(opciones, $"Se soltaron {cuantos} teclas o botones que quedaron pegados.");
+                }
+
                 while (Pendientes.TryDequeue(out var evento))
                     _entrada?.Apply(evento);
 
@@ -1075,6 +1096,9 @@ public static class RelaySession
         }
         finally
         {
+            // Nadie se queda con una tecla hundida porque la sesion terminara.
+            _entrada?.SoltarTodo();
+
             _acusar = null;
             _medidas = null;
 
@@ -1938,6 +1962,12 @@ public static class RelaySession
                             HostAction.Types.Kind.HostActionBlockInput => HostActions.Congelar(true),
                             HostAction.Types.Kind.HostActionUnblockInput => HostActions.Congelar(false),
                             HostAction.Types.Kind.HostActionReboot => HostActions.Reiniciar(),
+
+                            // NO se suelta aqui. Este es el hilo de red, y
+                            // SendInput inyecta en el escritorio al que esta
+                            // atado el hilo que llama: se anota y lo hace el de
+                            // captura, igual que el resto de la entrada.
+                            HostAction.Types.Kind.HostActionReleaseInput => Anotar(ref _soltarEntrada),
 
                             _ => $"Accion desconocida: {paquete.HostAction.Kind}"
                         });

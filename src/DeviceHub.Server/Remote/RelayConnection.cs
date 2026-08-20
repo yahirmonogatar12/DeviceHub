@@ -105,6 +105,11 @@ public sealed class RelayConnection : IDisposable
     public long ControlSent { get; private set; }
     public int ControlHighWater => _controlHighWater;
 
+    /// <summary>Mensajes de control esperando salir. Lo critico -- teclas,
+    /// botones, keyframes, cierre -- no se descarta nunca, asi que esta cifra
+    /// tiene que coincidir con lo que se encolo y no ha salido.</summary>
+    public int PendingControl => _control.Reader.Count;
+
     /// <summary>Escrituras solapadas detectadas. Tiene que quedarse en cero: si
     /// sube, hay mas de un escritor y el stream se va a romper.</summary>
     public long ConcurrentWrites { get; private set; }

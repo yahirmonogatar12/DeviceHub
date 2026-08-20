@@ -27,6 +27,49 @@ public sealed class InputInjector(int ancho, int alto, int izquierda, int arriba
         Math.Max(GetSystemMetrics(SM_CYVIRTUALSCREEN), 1));
 
     public long Applied { get; private set; }
+
+    /// <summary>
+    /// Lo que esta hundido AHORA MISMO en la maquina remota.
+    ///
+    /// Sin esta lista no hay forma de deshacerlo: SendInput no tiene "suelta
+    /// todo", y el host no ve el teclado fisico del tecnico -- solo los eventos
+    /// que le llegaron. Si el KeyUp no llego, esa tecla se queda hundida y nadie
+    /// en la PC de planta puede despegarla.
+    /// </summary>
+    private readonly HashSet<uint> _teclasHundidas = [];
+
+    private readonly HashSet<MouseButtonId> _botonesHundidos = [];
+
+    /// <summary>
+    /// Suelta todo lo que quedo hundido. Se llama al conectar, al reconectar y
+    /// al cerrar la captura.
+    ///
+    /// Es idempotente a proposito: soltar una tecla que no estaba pulsada no
+    /// hace nada, asi que llamarlo de mas es gratis y llamarlo de menos deja un
+    /// Ctrl invisible pegado.
+    /// </summary>
+    public int SoltarTodo()
+    {
+        var cuantos = 0;
+
+        foreach (var vk in _teclasHundidas.ToArray())
+        {
+            Soltar(vk);
+            cuantos++;
+        }
+
+        _teclasHundidas.Clear();
+
+        foreach (var boton in _botonesHundidos.ToArray())
+        {
+            Pulsar(boton, false);
+            cuantos++;
+        }
+
+        _botonesHundidos.Clear();
+
+        return cuantos;
+    }
     public long Rejected { get; private set; }
 
     public void Apply(InputEvent evento)
@@ -124,10 +167,47 @@ public sealed class InputInjector(int ancho, int alto, int izquierda, int arriba
             return;
         }
 
+        if (pulsado)
+            _botonesHundidos.Add(boton);
+        else
+            _botonesHundidos.Remove(boton);
+
         Enviar(new INPUT
         {
             type = INPUT_MOUSE,
             u = new INPUTUNION { mi = new MOUSEINPUT { dwFlags = bandera } }
+        });
+    }
+
+    /// <summary>Suelta una tecla por codigo virtual, sin evento de por medio.
+    /// Es lo que hace falta para deshacer lo que quedo hundido: del KeyDown
+    /// original ya no se conserva ni el scan code ni la marca de extendida.</summary>
+    private void Soltar(uint virtualKey)
+    {
+        var scan = (ushort)MapVirtualKey(virtualKey, MAPVK_VK_TO_VSC);
+        var banderas = KEYEVENTF_KEYUP | (scan != 0 ? KEYEVENTF_SCANCODE : 0);
+
+        // Las de la derecha y las de navegacion son extendidas. Soltarlas sin la
+        // marca deja hundida la otra mitad del par: Windows trata Ctrl izquierdo
+        // y derecho como teclas distintas aunque compartan codigo virtual.
+        if (virtualKey is 0xA3 or 0xA5 or 0x2D or 0x2E or 0x24 or 0x23
+            or 0x21 or 0x22 or 0x25 or 0x26 or 0x27 or 0x28 or 0x5B or 0x5C)
+        {
+            banderas |= KEYEVENTF_EXTENDEDKEY;
+        }
+
+        Enviar(new INPUT
+        {
+            type = INPUT_KEYBOARD,
+            u = new INPUTUNION
+            {
+                ki = new KEYBDINPUT
+                {
+                    wVk = scan != 0 ? (ushort)0 : (ushort)virtualKey,
+                    wScan = scan,
+                    dwFlags = banderas
+                }
+            }
         });
     }
 
@@ -173,6 +253,14 @@ public sealed class InputInjector(int ancho, int alto, int izquierda, int arriba
         // tragarse la tecla.
         if (scan == 0)
             banderas &= ~KEYEVENTF_SCANCODE;
+
+        // Se apunta ANTES de mandarla. Si SendInput falla la tecla no quedo
+        // hundida, pero apuntarla de mas solo cuesta un KeyUp de mas al soltar
+        // -- que no hace nada -- y apuntarla de menos deja un Ctrl invisible.
+        if (tecla.Pressed)
+            _teclasHundidas.Add(tecla.VirtualKey);
+        else
+            _teclasHundidas.Remove(tecla.VirtualKey);
 
         Enviar(new INPUT
         {

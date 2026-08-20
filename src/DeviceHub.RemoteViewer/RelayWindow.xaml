@@ -306,6 +306,8 @@
                                 </MenuItem.Icon>
                             </MenuItem>
 
+                            <MenuItem Header="Soltar teclas y botones pegados" Click="SoltarEntradaRemota" />
+
                             <MenuItem x:Name="MenuCongelar" Header="Congelar entrada local"
                                       IsCheckable="True" Click="CongelarEntrada" />
 

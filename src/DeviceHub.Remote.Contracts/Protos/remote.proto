@@ -267,6 +267,15 @@ message HostAction {
     // Reiniciar. El comando ya existia en el dashboard; esto es el mismo gesto
     // sin salir de la sesion.
     HOST_ACTION_REBOOT = 5;
+
+  // Suelta TODO lo que el host tenga pulsado: teclas y botones.
+  //
+  // El visor la manda al conectar y al reconectar. Un KeyDown viaja y su
+  // KeyUp se pierde -- porque se corto la red, porque el visor se cerro con
+  // Alt pulsado, porque la cola se lleno -- y esa tecla se queda hundida en
+  // la PC de planta sin que nadie pueda soltarla desde alli: el host no ve
+  // el teclado fisico del tecnico, solo los eventos que le llegaron.
+  HOST_ACTION_RELEASE_INPUT = 6;
   }
 
   Kind kind = 1;

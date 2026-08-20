@@ -641,6 +641,13 @@ public partial class RelayWindow : Window
                         _reconectarHasta = DateTimeOffset.FromUnixTimeMilliseconds(
                             paquete.HelloAccepted.ReconnectUntilUs / 1000);
 
+                        // AL ENTRAR SE SUELTA LO PEGADO. Si la sesion anterior se
+                        // corto entre un KeyDown y su KeyUp, esa tecla sigue
+                        // hundida al otro lado y desde la PC de planta no hay
+                        // forma de despegarla. Cuesta un mensaje y solo hace algo
+                        // cuando de verdad quedo algo.
+                        SoltarEntradaRemota();
+
                         // La reconexion funciono: la espera vuelve al principio.
                         // Sin esto, un microcorte a los diez minutos empezaria
                         // esperando los 5 s a los que llego el corte anterior.
@@ -740,7 +747,10 @@ public partial class RelayWindow : Window
                         // La entrada enviada va en la barra a proposito: cuando
                         // el video se ve pero no se puede controlar, esta cifra
                         // dice de un vistazo cual de las dos mitades falla.
-                        $"entrada {_entradaEnviada}   acuses {_acuses}   IDR pedidos {_idrPedidos}   " +
+                        $"entrada {_entradaEnviada}" +
+                        (_entradaPerdida == 0 ? string.Empty : $" ({_entradaPerdida} PERDIDOS)") +
+                        $"   movimientos fundidos {_movimientosFundidos}   " +
+                        $"acuses {_acuses}   IDR pedidos {_idrPedidos}   " +
                         (_grabacion is null ? string.Empty : $"grabando {_grabados} frames   ") +
                         $"incompletos {montadores.Values.Sum(m => m.Dropped)}   " +
                         $"invalidos {montadores.Values.Sum(m => m.Rejected)}   " +
@@ -1023,6 +1033,22 @@ public partial class RelayWindow : Window
         => BarraEstado.Visibility = BarraEstado.Visibility == Visibility.Visible
             ? Visibility.Collapsed
             : Visibility.Visible;
+
+    /// <summary>
+    /// Pide al host que suelte todo lo que tenga hundido.
+    ///
+    /// Se manda al CONECTAR y al RECONECTAR, no solo cuando alguien lo pulsa: un
+    /// corte de red entre un KeyDown y su KeyUp deja esa tecla pegada al otro
+    /// lado, y desde la PC de planta no hay forma de despegarla.
+    /// </summary>
+    private void SoltarEntradaRemota()
+        => Enviar(new HostAction { Kind = HostAction.Types.Kind.HostActionReleaseInput });
+
+    private void SoltarEntradaRemota(object sender, RoutedEventArgs e)
+    {
+        SoltarEntradaRemota();
+        Nota("Pedido soltar teclas y botones pegados.");
+    }
 
     private void EnviarCtrlAltSupr(object sender, RoutedEventArgs e)
         => Enviar(new HostAction { Kind = HostAction.Types.Kind.HostActionCtrlAltDel });
@@ -1743,8 +1769,23 @@ public partial class RelayWindow : Window
                     continue;
                 }
 
+                // EL MOVIMIENTO PRIMERO, y solo el ultimo. Mandarlo despues de
+                // la rafaga de criticos lo dejaria llegando tarde justo cuando
+                // hay prisa.
+                if (Interlocked.Exchange(ref _movimiento, null) is { } movimiento)
+                {
+                    await salida.WriteAsync(movimiento, cancellationToken);
+                    _entradaEnviada++;
+                }
+
                 while (_salida.Reader.TryRead(out var paquete))
+                {
+                    // El golpecito no se manda: solo servia para despertar.
+                    if (ReferenceEquals(paquete, Golpecito))
+                        continue;
+
                     await salida.WriteAsync(paquete, cancellationToken);
+                }
             }
         }
         catch (OperationCanceledException)
@@ -1856,13 +1897,60 @@ public partial class RelayWindow : Window
         });
     }
 
+    /// <summary>
+    /// El ultimo movimiento del raton pendiente de mandar. UNO, no una cola.
+    ///
+    /// EL MOVIMIENTO SE COALESCE Y LO CRITICO NO. Las coordenadas van
+    /// normalizadas 0..1, o sea que son ABSOLUTAS: de
+    ///
+    ///     0.20,0.30  0.21,0.31  0.25,0.35  0.42,0.51
+    ///
+    /// el ultimo dice todo lo que el host necesita saber. Reproducir el caminito
+    /// entero no aporta nada y es lo que llenaba la cola.
+    ///
+    /// Y llenar la cola no era gratis: Encolar usa TryWrite, que no espera, asi
+    /// que con 512 huecos ocupados por movimientos el que se caia podia ser un
+    /// KeyUp. Un KeyUp perdido deja esa tecla hundida en la PC de planta, donde
+    /// nadie puede despegarla -- el host no ve el teclado del tecnico, solo los
+    /// eventos que le llegaron.
+    /// </summary>
+    private RemotePacket? _movimiento;
+
+    private long _movimientosFundidos;
+
     private void Encolar(RemotePacket paquete)
     {
+        if (paquete.PayloadCase == RemotePacket.PayloadOneofCase.Input
+            && paquete.Input.EventCase == InputEvent.EventOneofCase.MouseMove)
+        {
+            // Se queda el ultimo. El anterior, si lo habia, no llego a salir y
+            // no hace falta que salga.
+            if (Interlocked.Exchange(ref _movimiento, paquete) is not null)
+                _movimientosFundidos++;
+
+            _salida.Writer.TryWrite(Golpecito);
+            return;
+        }
+
         if (_salida.Writer.TryWrite(paquete))
+        {
             _entradaEnviada++;
+        }
         else
+        {
+            // Con el movimiento fuera de la cola esto no deberia pasar nunca. Si
+            // pasa, algo hundido puede haberse quedado sin su KeyUp, asi que se
+            // pide soltar todo en vez de dejarlo a la suerte.
             _entradaPerdida++;
+            SoltarEntradaRemota();
+        }
     }
+
+    /// <summary>
+    /// Golpecito para despertar al hilo de envio cuando hay un movimiento
+    /// pendiente. No lleva nada dentro: el movimiento vive en su propio hueco.
+    /// </summary>
+    private static readonly RemotePacket Golpecito = new();
 
     private long _entradaEnviada;
 

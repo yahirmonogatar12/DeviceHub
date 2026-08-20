@@ -714,4 +714,39 @@ public class RemoteRelayTests
         // keyframes.
         Assert.Empty(conexion.PantallasQuePidenIdr());
     }
+
+    // -- Entrada critica -------------------------------------------------------
+
+    [Fact]
+    public async Task Key_events_survive_a_flood_of_mouse_moves()
+    {
+        // EL FALLO QUE ESTO FIJA. La cola de salida del visor tiene 512 huecos y
+        // se llenaba de MouseMove; el que se caia podia ser un KeyUp, y un KeyUp
+        // perdido deja esa tecla HUNDIDA en la PC de planta -- donde nadie puede
+        // despegarla, porque el host no ve el teclado del tecnico.
+        //
+        // Los movimientos ya no ocupan sitio: se coalescen en el visor y solo
+        // viaja el ultimo, que con coordenadas absolutas dice todo lo que hace
+        // falta. Aqui se comprueba la otra mitad: que la cola de control del
+        // relay no descarte lo critico ni bajo presion.
+        using var conexion = Viewer();
+
+        var criticos = 0;
+
+        for (var i = 0; i < 200; i++)
+        {
+            await conexion.SendControlAsync(new RemotePacket
+            {
+                Input = new InputEvent
+                {
+                    Key = new KeyEvent { VirtualKey = 0x11, Pressed = i % 2 == 0 }
+                }
+            }, CancellationToken.None);
+
+            criticos++;
+        }
+
+        // Ni uno se queda por el camino: la cola espera, no descarta.
+        Assert.Equal(criticos, conexion.PendingControl);
+    }
 }
