@@ -395,6 +395,12 @@ public partial class RelayWindow : Window
         // la media al suelo mientras la imagen va fina.
         var ritmo = new Ritmo();
 
+        // Lo ultimo que conto el host de si mismo. Es la mitad que falta para
+        // decidir donde esta el techo: aqui se ve la red y el descodificador,
+        // pero no cuanto se queda el codificador de la PC de planta por el
+        // camino.
+        var medidasDelHost = string.Empty;
+
         // Y lo mismo con los tiempos de descodificado: los ultimos 600, que a 30
         // FPS son los ultimos 20 s. De paso deja de crecer sin limite -- en una
         // sesion de ocho horas eran cien mil entradas para calcular dos
@@ -648,7 +654,15 @@ public partial class RelayWindow : Window
                         // Lo que pasa en la PC controlada, en la barra del
                         // tecnico. Antes solo acababa en el visor de eventos de
                         // esa maquina, o sea en ningun sitio util.
-                        Nota(paquete.HostStatus.Text);
+                        //
+                        // Las medidas periodicas van a su propia linea: por el
+                        // hueco de los avisos borrarian cada 2 s cualquier cosa
+                        // que hubiera que leer.
+                        if (paquete.HostStatus.Measurements)
+                            medidasDelHost = paquete.HostStatus.Text;
+                        else
+                            Nota(paquete.HostStatus.Text);
+
                         break;
 
                     case RemotePacket.PayloadOneofCase.Displays:
@@ -715,6 +729,7 @@ public partial class RelayWindow : Window
                         $"IDR {idr}   cursor {_cursoresRecibidos}   cambios de config {cambiosConfig}   " +
                         $"RAM {proceso.PrivateMemorySize64 / 1024 / 1024} MB (inicio {ramInicio / 1024 / 1024})   " +
                         $"{reloj.Elapsed:hh\\:mm\\:ss}" +
+                        (medidasDelHost.Length == 0 ? string.Empty : $"\nhost  {medidasDelHost}") +
                         (_cierre is null ? string.Empty : $"\n{_cierre}"));
                 }
 

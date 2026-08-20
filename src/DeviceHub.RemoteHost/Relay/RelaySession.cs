@@ -350,6 +350,13 @@ public static class RelaySession
             HostStatus = new HostStatus { Text = texto }
         }));
 
+        _medir = texto => cola.Writer.TryWrite(new Enviable(null, null, new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = opciones.SesionId,
+            HostStatus = new HostStatus { Text = texto, Measurements = true }
+        }));
+
         var hilo = new Thread(() => Capturar(cola.Writer, cuenta, opciones, cancellationToken))
         {
             IsBackground = true,
@@ -400,7 +407,7 @@ public static class RelaySession
 
                 if (reloj.Elapsed >= siguienteAviso)
                 {
-                    opciones.Escribir(
+                    Medir(opciones,
                         $"{reloj.Elapsed:mm\\:ss}  capturados {cuenta.Capturados}  codificados {cuenta.Codificados}  " +
                         $"frames enviados {cuenta.Enviados}  chunks {cuenta.Trozos}  " +
                         $"{cuenta.Bytes * 8 / reloj.Elapsed.TotalSeconds / 1_000_000:0.00} Mbps  " +
@@ -411,6 +418,7 @@ public static class RelaySession
                         // Aplicados y rechazados de SendInput. Es lo que dice si
                         // la entrada llega de verdad al otro lado o se la traga
                         // el escritorio equivocado.
+                        $"descartes {cuenta.DescartesEncoder}+{cuenta.DescartesCaptura}  " +
                         $"entrada {_entrada?.Applied ?? 0}/{_entrada?.Rejected ?? 0}");
 
                     // El bitrate se DECIDE aqui, donde se ve la cola, y se
@@ -1270,6 +1278,14 @@ public static class RelaySession
         _avisar?.Invoke(texto);
     }
 
+    /// <summary>Las medidas periodicas, al visor y por su propio carril.
+    ///
+    /// Lo que sabe el host -- cuanto captura, cuanto codifica, cuanto descarta
+    /// el codificador -- decide donde esta el techo de una sesion, y hasta ahora
+    /// solo acababa en el visor de eventos de la PC de planta. O sea que para
+    /// saber si el cuello era la iGPU habia que ir hasta la maquina.</summary>
+    private static Action<string>? _medir;
+
     /// <summary>
     /// Ejecuta un paso y, si falla, le pone NOMBRE a la excepcion.
     ///
@@ -1530,6 +1546,12 @@ public static class RelaySession
             Avisar(opciones, $"El respaldo GDI de la pantalla {flujo.DisplayId} tampoco pudo: {ex.Message}");
             return false;
         }
+    }
+
+    private static void Medir(RelayOptions opciones, string texto)
+    {
+        opciones.Escribir(texto);
+        _medir?.Invoke(texto);
     }
 
     private static long Ahora()

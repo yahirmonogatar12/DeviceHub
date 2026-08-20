@@ -92,6 +92,13 @@ message RemotePacket {
 // NO lleva secretos y no sustituye al log: es la copia que ve quien mira.
 message HostStatus {
   string text = 1;
+
+  // Las MEDIDAS periodicas van aparte de los avisos.
+  //
+  // Un aviso -- "se releva por GDI", "no se pudo abrir la pantalla 2" -- pasa
+  // una vez y tiene que quedarse a la vista. Las medidas salen cada 2 s, y por
+  // el mismo hueco borrarian cualquier aviso antes de que nadie lo leyera.
+  bool measurements = 2;
 }
 
 // Fase 25. Archivos en el portapapeles (CF_HDROP), en los dos sentidos.
