@@ -25,6 +25,22 @@ public static class ControlBitrate
     public const int Maximo = 15_000_000;
 
     /// <summary>
+    /// Cuantos bits se le dan a la imagen, sobre la base que pide su tamano.
+    ///
+    /// Son los mismos tres de RustDesk (BR_BEST, BR_BALANCED, BR_SPEED). Estaba
+    /// fijo en Equilibrado y no habia forma de pedir mas, y eso se veia: en
+    /// 1080p a 42 FPS son 33 kbit por frame, contra los 160 que gasta RustDesk
+    /// en esta misma PC. Con la pantalla quieta da igual -- el codificador no
+    /// necesita nada -- pero al mover una ventana el control de tasa tiene que
+    /// caber en ese presupuesto y lo paga en nitidez.
+    /// </summary>
+    public const double CalidadFiel = 1.5;
+
+    public const double CalidadEquilibrada = 0.67;
+
+    public const double CalidadRapida = 0.5;
+
+    /// <summary>
     /// Baja DEPRISA y sube DESPACIO, que es la asimetria de todo control de
     /// congestion sensato: pasarse por abajo cuesta un poco de nitidez durante
     /// unos segundos, y pasarse por arriba cuesta que se congele la imagen.
@@ -62,7 +78,12 @@ public static class ControlBitrate
             // Vacia de verdad: hay sitio para mas calidad, PERO solo si la
             // pantalla se esta moviendo. Vacia con el escritorio quieto no
             // demuestra nada.
-            _ => pantallaViva ? actual * 1.1 : actual
+            // Se sube un 15 % y no un 10, que es lo que hace RustDesk con la red
+            // holgada. Al 10 %, ir de 1.4 a 3.8 Mbps pedia veintiun segundos de
+            // movimiento seguido, y un arrastre de ventana dura dos: la subida
+            // llegaba siempre tarde y la nitidez se recuperaba cuando ya nadie
+            // estaba mirando.
+            _ => pantallaViva ? actual * 1.15 : actual
         };
 
         return (int)Math.Clamp(objetivo, Minimo, Maximo);
@@ -82,7 +103,7 @@ public static class ControlBitrate
     /// De aqui sale el punto de partida; a partir de ahi lo mueve Siguiente,
     /// que es quien puede comprobar si cabe.
     /// </summary>
-    public static int PorResolucion(int ancho, int alto)
+    public static int PorResolucion(int ancho, int alto, double calidad = CalidadEquilibrada)
     {
         // Los mismos tres puntos que su RESOLUTION_PRESETS. Entre ellos se
         // interpola por pixeles y fuera se queda en el extremo: la curva no es
@@ -120,8 +141,6 @@ public static class ControlBitrate
             kbps = desdeKbps + t * (hastaKbps - desdeKbps);
         }
 
-        // Calidad equilibrada, su BR_BALANCED. Es el punto en el que un
-        // escritorio se ve nitido sin gastar en lo que nadie mira.
-        return (int)Math.Clamp(kbps * 1000 * 0.67, Minimo, Maximo);
+        return (int)Math.Clamp(kbps * 1000 * calidad, Minimo, Maximo);
     }
 }

@@ -80,6 +80,7 @@ message RemotePacket {
     HostStatus          host_status       = 31;
     VideoAck            video_ack         = 32;
     SelectCodec         select_codec      = 33;
+    SelectQuality       select_quality    = 34;
   }
 }
 
@@ -578,6 +579,16 @@ message KeyEvent {
 // ---------------------------------------------------------------------------
 // Control de sesion
 // ---------------------------------------------------------------------------
+
+// Cuantos bits se le dan a la imagen.
+//
+// No rehace nada: el bitrate se cambia sobre el codificador en marcha, asi que
+// no hay ni config_version nueva ni parpadeo. Se nota en el frame siguiente.
+message SelectQuality {
+  // Sobre la base que pide la resolucion. 1.5 fiel, 0.67 equilibrado, 0.5
+  // rapido, que son los tres de RustDesk.
+  double ratio = 1;
+}
 
 // Cambiar de codec EN CALIENTE, sin editar un json ni reiniciar un servicio.
 //

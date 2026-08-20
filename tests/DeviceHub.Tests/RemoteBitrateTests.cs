@@ -149,4 +149,41 @@ public class RemoteBitrateTests
         Assert.True(
             ControlBitrate.Siguiente(2_000_000, Capacidad, Capacidad, pantallaViva: false) < 2_000_000);
     }
+
+    // -- Calidad ---------------------------------------------------------------
+
+    [Fact]
+    public void Quality_multiplies_the_budget()
+    {
+        var fiel = ControlBitrate.PorResolucion(1920, 1080, ControlBitrate.CalidadFiel);
+        var media = ControlBitrate.PorResolucion(1920, 1080, ControlBitrate.CalidadEquilibrada);
+        var rapida = ControlBitrate.PorResolucion(1920, 1080, ControlBitrate.CalidadRapida);
+
+        Assert.True(fiel > media);
+        Assert.True(media > rapida);
+
+        // Fiel al original tiene que acercarse a lo que gasta RustDesk en esta
+        // misma PC (3846 kbps medidos). Con Equilibrado estabamos en 1.4 Mbps y
+        // por eso la imagen se ablandaba al mover una ventana.
+        Assert.InRange(fiel, 2_800_000, 3_300_000);
+    }
+
+    [Fact]
+    public void It_climbs_fast_enough_to_matter()
+    {
+        // De Equilibrado a lo que gasta RustDesk, con la red holgada y la
+        // pantalla moviendose. Al 10 % por paso hacian falta 11 pasos -- 22
+        // segundos, y un arrastre de ventana dura dos.
+        var bitrate = ControlBitrate.PorResolucion(1920, 1080);
+        var pasos = 0;
+
+        while (bitrate < 3_800_000 && pasos < 20)
+        {
+            bitrate = ControlBitrate.Siguiente(bitrate, 0, Capacidad, pantallaViva: true);
+            pasos++;
+        }
+
+        Assert.True(bitrate >= 3_800_000);
+        Assert.True(pasos <= 8, $"tardo {pasos} pasos en llegar");
+    }
 }

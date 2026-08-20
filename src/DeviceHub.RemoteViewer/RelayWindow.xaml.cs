@@ -951,6 +951,34 @@ public partial class RelayWindow : Window
         Nota($"Cambiando a {(codec == VideoCodec.H265 ? "H.265" : "H.264")}...");
     }
 
+    /// <summary>
+    /// Cuantos bits se le dan a la imagen.
+    ///
+    /// A diferencia del codec, esto NO rehace nada: el bitrate se cambia sobre
+    /// el codificador en marcha, asi que no hay config_version nueva ni
+    /// parpadeo. Por eso la marca si se pone aqui -- no hay nada que esperar
+    /// de vuelta que pueda contradecirla.
+    /// </summary>
+    private void ElegirCalidad(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem elegido || elegido.Tag is not string etiqueta)
+            return;
+
+        var ratio = double.Parse(etiqueta, CultureInfo.InvariantCulture);
+
+        foreach (var otro in new[] { MenuCalidadFiel, MenuCalidadMedia, MenuCalidadRapida })
+            otro.IsChecked = ReferenceEquals(otro, elegido);
+
+        Encolar(new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = _sesion,
+            SelectQuality = new SelectQuality { Ratio = ratio }
+        });
+
+        Nota($"Calidad: {elegido.Header}");
+    }
+
     /// <summary>La marca sigue al codec REAL, el que vuelve en VideoConfig.</summary>
     private void MarcarCodec(VideoCodec codec)
     {

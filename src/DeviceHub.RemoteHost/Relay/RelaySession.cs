@@ -259,6 +259,13 @@ public static class RelaySession
     /// </summary>
     private static VideoCodec _codec = VideoCodec.Unspecified;
 
+    /// <summary>
+    /// Cuantos bits se le dan a la imagen, sobre la base que pide la
+    /// resolucion. Lo cambia el tecnico desde el visor y NO rehace nada: el
+    /// bitrate se toca sobre el codificador en marcha.
+    /// </summary>
+    private static double _calidad = ControlBitrate.CalidadEquilibrada;
+
     /// <summary>Numeracion de frames de toda la SESION. No se reinicia al rehacer
     /// la captura: ver el comentario en la llamada a Split.</summary>
     private static ulong _frameDeLaSesion;
@@ -439,6 +446,7 @@ public static class RelaySession
                         $"acuses {(_visorAcusa ? "si" : "no")}/{cuenta.AcusesPerdidos} perdidos  " +
                         $"red {_retraso.Base:0.0} ms + cola {_retraso.Encolado:0.0} ms  " +
                         $"fps {_fpsDeseado}  " +
+                        $"objetivo {_bitrateDeseado / 1000} kbps ({_calidad:0.00}x)  " +
                         // Aplicados y rechazados de SendInput. Es lo que dice si
                         // la entrada llega de verdad al otro lado o se la traga
                         // el escritorio equivocado.
@@ -891,10 +899,14 @@ public static class RelaySession
 
         // La semilla es la SUMA de lo que pide cada pantalla por su tamano, no
         // un numero fijo para todo. Antes eran 6 Mbps para cualquier cosa.
-        var bitrateBaseTotal = Math.Max(flujos.Sum(f => f.BitrateBase), ControlBitrate.Minimo);
+        // SIN la calidad, que se aplica al usarla. Guardarla ya multiplicada
+        // ataria el reparto a la calidad que hubiera al ABRIR los flujos, y
+        // cambiarla desde el visor no llegaria a una sesion en marcha -- que es
+        // justo lo que se quiere poder hacer sin rehacer nada.
+        var bitrateBaseTotal = Math.Max(flujos.Sum(f => f.BitrateBase), 1);
 
         if (_bitrateDeseado == 0)
-            _bitrateDeseado = bitrateBaseTotal;
+            _bitrateDeseado = Objetivo(bitrateBaseTotal);
 
         var siguienteRevision = reloj.Elapsed;
 
@@ -1031,6 +1043,12 @@ public static class RelaySession
                             flujo.KeyframePedido = true;
                     }
                 }
+
+                // La calidad puede haber cambiado a media sesion. Reseteando el
+                // objetivo a cero, el visor pide que se recalcule con la base
+                // nueva sin rehacer el codificador.
+                if (_bitrateDeseado == 0)
+                    _bitrateDeseado = Objetivo(bitrateBaseTotal);
 
                 if (_bitrateDeseado > 0)
                 {
@@ -1491,7 +1509,7 @@ public static class RelaySession
                     DisplayId = pedida,
                     Info = elegida,
                     Captura = unica,
-                    BitrateBase = ControlBitrate.PorResolucion(unica.Width, unica.Height),
+                    BitrateBase = ControlBitrate.PorResolucion(unica.Width, unica.Height, 1.0),
                     Codificador = Codificar(
                         unica.Device, unica.Width, unica.Height,
                         unica.AdapterLuid, unica.AdapterVendorId, opciones),
@@ -1522,7 +1540,7 @@ public static class RelaySession
                     DisplayId = pantalla.Id,
                     Info = pantalla,
                     Captura = captura,
-                    BitrateBase = ControlBitrate.PorResolucion(captura.Width, captura.Height),
+                    BitrateBase = ControlBitrate.PorResolucion(captura.Width, captura.Height, 1.0),
                     Codificador = Codificar(
                         captura.Device, captura.Width, captura.Height,
                         captura.AdapterLuid, captura.AdapterVendorId, opciones),
@@ -1583,6 +1601,11 @@ public static class RelaySession
     /// casos reales, y con el interruptor puesto por descuido dejarian sin
     /// control remoto a una PC de planta. Mejor H.264 y un aviso.
     /// </summary>
+    /// <summary>La base de todas las pantallas por la calidad pedida, acotada a
+    /// lo que el codificador acepta.</summary>
+    private static int Objetivo(int baseTotal)
+        => (int)Math.Clamp(baseTotal * _calidad, ControlBitrate.Minimo, ControlBitrate.Maximo);
+
     internal static string Etiqueta(VideoCodec codec)
         => codec == VideoCodec.H265 ? "H.265" : "H.264";
 
@@ -1590,7 +1613,7 @@ public static class RelaySession
         ID3D11Device device, int ancho, int alto, Vortice.Luid luid, uint vendor,
         RelayOptions opciones)
     {
-        var bitrate = ControlBitrate.PorResolucion(ancho, alto);
+        var bitrate = ControlBitrate.PorResolucion(ancho, alto, _calidad);
 
         if (_codec == VideoCodec.H265)
         {
@@ -1942,6 +1965,17 @@ public static class RelaySession
                             FileAck = _archivos.Escribir(paquete.FileChunk)
                         });
 
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.SelectQuality:
+                        // Acotada aqui y no en el visor: lo que llega por el
+                        // cable no se cree, se comprueba. Un ratio de 500
+                        // pondria el bitrate en el techo sin que nadie lo
+                        // pidiera de verdad.
+                        _calidad = Math.Clamp(paquete.SelectQuality.Ratio, 0.2, 4.0);
+                        _bitrateDeseado = 0;   // se recalcula con la base nueva
+
+                        opciones.Escribir($"Calidad puesta en {_calidad:0.00}x");
                         break;
 
                     case RemotePacket.PayloadOneofCase.SelectCodec:

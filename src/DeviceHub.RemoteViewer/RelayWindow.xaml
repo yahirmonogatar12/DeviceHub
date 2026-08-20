@@ -248,6 +248,25 @@
                                       IsCheckable="True" IsChecked="True" Click="ElegirCodec" />
                             <MenuItem x:Name="MenuH265" Header="H.265  (menos ancho de banda)" Tag="h265"
                                       IsCheckable="True" Click="ElegirCodec" />
+
+                            <Separator />
+
+                            <MenuItem IsHitTestVisible="False" Focusable="False">
+                                <MenuItem.Header>
+                                    <TextBlock Text="Calidad" Foreground="{StaticResource LetraTenue}" FontSize="11" />
+                                </MenuItem.Header>
+                            </MenuItem>
+
+                            <!-- Cuantos bits se le dan a la imagen. Estaba fijo
+                                 en Equilibrado, y en 1080p a 42 FPS eso son 33
+                                 kbit por frame contra los 160 que gasta RustDesk
+                                 en la misma PC: al mover una ventana se notaba. -->
+                            <MenuItem x:Name="MenuCalidadFiel" Header="Fiel al original" Tag="1.5"
+                                      IsCheckable="True" Click="ElegirCalidad" />
+                            <MenuItem x:Name="MenuCalidadMedia" Header="Equilibrado" Tag="0.67"
+                                      IsCheckable="True" IsChecked="True" Click="ElegirCalidad" />
+                            <MenuItem x:Name="MenuCalidadRapida" Header="De rapida reaccion" Tag="0.5"
+                                      IsCheckable="True" Click="ElegirCalidad" />
                         </MenuItem>
                     </Menu>
 
