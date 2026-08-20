@@ -37,16 +37,28 @@ public static class HostActions
     ///   - Windows lo levanta solo si el proceso que lo pidio muere. Eso es lo
     ///     que evita dejar una PC de planta inutilizable si el host se cae.
     ///
-    /// Y una que imponemos nosotros: nuestro propio SendInput sigue pasando. La
-    /// llamada la hace este mismo proceso, y BlockInput no filtra al que bloquea.
+    /// Y la que decide donde vive esta llamada: la exencion es del HILO, no del
+    /// proceso. Solo el hilo que bloqueo puede desbloquear, y solo su SendInput
+    /// sigue entrando mientras dure. Por eso lo llama devicehub-entrada, que es
+    /// el mismo que inyecta: pedirlo desde el hilo de red dejaba una PC de
+    /// planta congelada para todos, el tecnico incluido.
     /// </summary>
-    public static string Congelar(bool congelar)
-        => BlockInput(congelar)
-            ? congelar
+    public static bool Congelar(bool congelar, out string mensaje)
+    {
+        if (BlockInput(congelar))
+        {
+            mensaje = congelar
                 ? "Entrada local congelada. Ctrl+Alt+Supr la reactiva desde alla."
-                : "Entrada local reactivada."
-            : $"No se pudo {(congelar ? "congelar" : "reactivar")} la entrada local " +
-              $"(error {Marshal.GetLastWin32Error()}; suele ser falta de elevacion).";
+                : "Entrada local reactivada.";
+
+            return true;
+        }
+
+        mensaje = $"No se pudo {(congelar ? "congelar" : "reactivar")} la entrada local " +
+                  $"(error {Marshal.GetLastWin32Error()}; suele ser falta de elevacion).";
+
+        return false;
+    }
 
     /// <summary>
     /// Reinicia.

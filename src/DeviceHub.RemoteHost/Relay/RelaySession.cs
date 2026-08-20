@@ -297,6 +297,30 @@ public static class RelaySession
     /// hilo de captura, que es el atado al escritorio activo.</summary>
     private static volatile bool _soltarEntrada;
 
+    /// <summary>
+    /// Congelar o descongelar la entrada FISICA de la PC remota: -1 nada
+    /// pendiente, 0 descongelar, 1 congelar.
+    ///
+    /// Va por bandera y no por llamada directa por la misma razon que el resto
+    /// de la entrada, pero con una consecuencia peor: la exencion de BlockInput
+    /// es del HILO que bloqueo. Pedirlo desde el hilo de red dejaba el bloqueo
+    /// en poder de un hilo del pool cualquiera, y entonces ni nuestro propio
+    /// SendInput entraba ni el desbloqueo -- que casi seguro caia en OTRO hilo
+    /// del pool -- servia de nada. Congelar una PC de planta para todos, el
+    /// tecnico incluido, y sin forma de deshacerlo.
+    /// </summary>
+    private static volatile int _congelarPedido = -1;
+
+    /// <summary>Si el bloqueo esta puesto. Lo lee y lo escribe SOLO
+    /// devicehub-entrada, que es su dueno.</summary>
+    private static bool _congelado;
+
+    private static string Pedir(int estado)
+    {
+        _congelarPedido = estado;
+        return string.Empty;
+    }
+
     private static string Anotar(ref bool bandera)
     {
         bandera = true;
@@ -359,6 +383,23 @@ public static class RelaySession
     /// </summary>
     private static readonly MedidorRetraso _retraso = new();
 
+    /// <summary>
+    /// La version de configuracion, para TODO el proceso y no por corrida.
+    ///
+    /// Sobrevive a las reconexiones a proposito. Nacia con los contadores, asi
+    /// que tras un microcorte el host volvia a estrenar la v1 -- y el visor
+    /// descarta una configuracion cuya version ya tiene, porque el relay repite
+    /// la vigente cada vez que se recupera de una perdida. Misma version, mismo
+    /// tamano, SPS distinto: se seguia descodificando con el del codificador
+    /// anterior, que no da error, da imagen corrupta.
+    ///
+    /// Interlocked porque cada pantalla estrena la suya desde su propia bomba.
+    /// </summary>
+    private static int _versionDeConfig;
+
+    private static uint SiguienteVersion(Contadores cuenta)
+        => cuenta.ConfigVersion = (uint)Interlocked.Increment(ref _versionDeConfig);
+
     private sealed class Contadores
     {
         public long Capturados, Codificados, Claves, Enviados, Trozos, Bytes;
@@ -367,11 +408,10 @@ public static class RelaySession
         /// <summary>Frames que salieron y nadie confirmo en EsperaDeAcuseMs. Si
         /// esto sube, el visor no esta siguiendo el ritmo.</summary>
         public long AcusesPerdidos;
-        public uint ConfigVersion;
 
-        /// <summary>La misma cuenta, en un campo que Interlocked puede tocar: al
-        /// relevar una pantalla se estrena version desde su propia bomba.</summary>
-        public int ConfigVersionCompartida;
+        /// <summary>La ultima version que se estreno en esta corrida. Solo para
+        /// mostrarla: quien las reparte es SiguienteVersion.</summary>
+        public uint ConfigVersion;
         public Exception? Fallo;
     }
 
@@ -807,6 +847,16 @@ public static class RelaySession
                         Avisar(opciones, $"Se soltaron {cuantos} teclas o botones que quedaron pegados.");
                 }
 
+                if (_congelarPedido is var pedido and >= 0)
+                {
+                    _congelarPedido = -1;
+
+                    if (HostActions.Congelar(pedido == 1, out var queja))
+                        _congelado = pedido == 1;
+
+                    Avisar(opciones, queja);
+                }
+
                 while (Pendientes.TryDequeue(out var evento))
                     _entrada?.Apply(evento);
 
@@ -819,6 +869,20 @@ public static class RelaySession
         catch (Exception ex)
         {
             opciones.Escribir($"El hilo de entrada murio: {ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            // EL BLOQUEO MUERE CON SU DUENO, pase lo que pase.
+            //
+            // Windows tambien lo levanta solo cuando el hilo que bloqueo
+            // termina, pero eso deja la PC congelada el rato que tarde en
+            // terminar -- y si alguna vez este hilo sobrevive a la sesion,
+            // no lo levanta nunca.
+            if (_congelado)
+            {
+                HostActions.Congelar(false, out _);
+                _congelado = false;
+            }
         }
     }
 
@@ -1637,8 +1701,6 @@ public static class RelaySession
         {
             var unica = Abrir(pedida, elegida, opciones);
 
-            cuenta.ConfigVersionCompartida = (int)cuenta.ConfigVersion + 1;
-
             return
             [
                 new Flujo
@@ -1650,7 +1712,7 @@ public static class RelaySession
                     Codificador = Codificar(
                         unica.Device, unica.Width, unica.Height,
                         unica.AdapterLuid, unica.AdapterVendorId, opciones),
-                    Version = ++cuenta.ConfigVersion,
+                    Version = SiguienteVersion(cuenta),
                     LayoutX = 0,
                     LayoutY = 0,
                     Lienzo = new Lienzo(unica.DesktopLeft, unica.DesktopTop, unica.Width, unica.Height)
@@ -1681,7 +1743,7 @@ public static class RelaySession
                     Codificador = Codificar(
                         captura.Device, captura.Width, captura.Height,
                         captura.AdapterLuid, captura.AdapterVendorId, opciones),
-                    Version = ++cuenta.ConfigVersion,
+                    Version = SiguienteVersion(cuenta),
 
                     // Coordenadas RELATIVAS al lienzo: el monitor de la izquierda
                     // tiene X negativa en Windows y aqui tiene que caer en 0.
@@ -1701,12 +1763,6 @@ public static class RelaySession
 
         if (flujos.Count == 0)
             throw new ScreenCaptureUnavailableException("No se pudo abrir ninguna de las pantallas.");
-
-        // La cuenta compartida arranca donde va la normal. Sin esto, el primer
-        // relevo estrenaria una version que otra pantalla ya esta usando, y el
-        // visor descodificaria sus frames con el SPS equivocado -- que no da
-        // error, da imagen corrupta.
-        cuenta.ConfigVersionCompartida = (int)cuenta.ConfigVersion;
 
         // Con varias pantallas NADIE espera: se sondean todas en el mismo hilo,
         // asi que una quieta se llevaria 100 ms de cada vuelta y dejaria a las
@@ -1815,7 +1871,7 @@ public static class RelaySession
 
             flujo.Captura = gdi;
             flujo.Codificador = codificador;
-            flujo.Version = (uint)Interlocked.Increment(ref cuenta.ConfigVersionCompartida);
+            flujo.Version = SiguienteVersion(cuenta);
             flujo.ConfigEnviada = false;
 
             anteriorCodificador.Dispose();
@@ -2115,8 +2171,13 @@ public static class RelaySession
                                     : $"No se pudo enviar Ctrl+Alt+Supr: {detalle}",
 
                             HostAction.Types.Kind.HostActionLock => HostActions.Bloquear(),
-                            HostAction.Types.Kind.HostActionBlockInput => HostActions.Congelar(true),
-                            HostAction.Types.Kind.HostActionUnblockInput => HostActions.Congelar(false),
+
+                            // ESTAS DOS TAMPOCO se hacen aqui, aunque no sean
+                            // SendInput: la exencion de BlockInput es del hilo
+                            // que bloquea, y ese tiene que ser el que inyecta.
+                            HostAction.Types.Kind.HostActionBlockInput => Pedir(1),
+                            HostAction.Types.Kind.HostActionUnblockInput => Pedir(0),
+
                             HostAction.Types.Kind.HostActionReboot => HostActions.Reiniciar(),
 
                             // NO se suelta aqui. Este es el hilo de red, y

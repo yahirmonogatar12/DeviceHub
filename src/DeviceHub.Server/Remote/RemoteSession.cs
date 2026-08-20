@@ -116,15 +116,18 @@ public sealed class RemoteSession(string id)
                 // configuracion de uno y dejar al otro sin ella deja media
                 // sesion muda hasta el proximo cambio de config, que puede no
                 // llegar nunca.
-                if (_configs.Count > 0)
-                {
-                    foreach (var guardada in _configs.Values)
-                        conexion.SetVideoConfig(guardada);
-                }
-                else
-                {
-                    conexion.RequireKeyframe();
-                }
+                foreach (var guardada in _configs.Values)
+                    conexion.SetVideoConfig(guardada);
+
+                // Y SE PIDE EL IDR SIEMPRE, haya configuracion guardada o no.
+                //
+                // Estaba solo en la rama del "no la hay", y era justo la rama
+                // equivocada: SetConfig deja la cola esperando keyframe pero no
+                // se lo PIDE a nadie. Un visor que entra en una sesion ya
+                // montada quedaba descartando P-frames hasta que el codificador
+                // sacara un IDR por su cuenta -- y el GOP no esta configurado,
+                // asi que eso llega cuando llega.
+                conexion.RequireKeyframe();
 
                 // La lista de pantallas viaja fuera de la cola de video, asi que
                 // se le manda aparte en cuanto entra.
@@ -157,7 +160,16 @@ public sealed class RemoteSession(string id)
     /// justo lo que impedia reconectar: el host se quedaba en una sesion que el
     /// relay ya daba por cerrada.
     /// </summary>
-    public RelayConnection? Leave(RelayConnection conexion, SessionCloseReason motivo)
+    /// <param name="esperaAlHost">
+    /// El host se CAYO -- no cerro -- y su lease sigue en gracia.
+    ///
+    /// Entonces al viewer no se le cierra: el host tiene un bucle entero para
+    /// reconectar tras un microcorte, y cerrarle la sesion al tecnico dejaba ese
+    /// bucle sin sentido. Dos segundos de wifi malo en la PC de planta y el host
+    /// volvia, correctamente, a una sesion donde ya no habia nadie esperandolo.
+    /// </param>
+    public RelayConnection? Leave(
+        RelayConnection conexion, SessionCloseReason motivo, bool esperaAlHost = false)
     {
         lock (_puerta)
         {
@@ -177,11 +189,36 @@ public sealed class RemoteSession(string id)
 
             if (Host is null)
             {
+                if (esperaAlHost && Viewer is not null)
+                {
+                    State = RemoteSessionState.WaitingForHost;
+                    return null;   // que vuelva; quien cierra es el vigilante
+                }
+
                 CloseReason ??= motivo.ToString();
                 return Viewer;   // sin host no hay video: al viewer se le cierra
             }
 
             return null;   // se fue el viewer y el host sigue: no se avisa a nadie
+        }
+    }
+
+    /// <summary>
+    /// Se acabo la gracia: si el host no volvio, el viewer que se dejo esperando
+    /// tiene que enterarse. Devuelve a quien cerrar, o null si el host ya esta
+    /// de vuelta o el tecnico se fue por su cuenta.
+    /// </summary>
+    public RelayConnection? ViewerSiElHostNoVolvio(SessionCloseReason motivo)
+    {
+        lock (_puerta)
+        {
+            if (Host is not null || Viewer is null)
+                return null;
+
+            CloseReason ??= motivo.ToString();
+            State = RemoteSessionState.Closing;
+
+            return Viewer;
         }
     }
 

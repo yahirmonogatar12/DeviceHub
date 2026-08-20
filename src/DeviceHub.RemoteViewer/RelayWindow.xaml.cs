@@ -860,7 +860,11 @@ public partial class RelayWindow : Window
     private string NombreArchivo(string extension)
         => Path.Combine(
             Carpeta(extension == ".png" ? Environment.SpecialFolder.MyPictures : Environment.SpecialFolder.MyVideos),
-            $"{_machineId}-{DateTime.Now:yyyyMMdd-HHmmss}{extension}");
+            // UtcNow.ToLocalTime() y no la hora local a secas: la regla del
+            // proyecto prohibe esa llamada en src entero, y con razon -- pero un
+            // archivo que va a la carpeta Videos DEL TECNICO se nombra con SU
+            // hora, no con UTC, o buscar "el de las tres" no encuentra nada.
+            $"{_machineId}-{DateTime.UtcNow.ToLocalTime():yyyyMMdd-HHmmss}{extension}");
 
     private void Capturar(object sender, RoutedEventArgs e)
     {
@@ -916,7 +920,10 @@ public partial class RelayWindow : Window
 
             _pantallaGrabada = pantalla;
 
-            var ruta = NombreArchivo(".h264");
+            // LA EXTENSION LA DICE EL CODEC, no el nombre de la variable. Con
+            // H.265 por defecto, un .h264 con HEVC dentro es un archivo que la
+            // mitad de los reproductores abre en negro sin decir por que.
+            var ruta = NombreArchivo(config.Codec == VideoCodec.H265 ? ".h265" : ".h264");
             Directory.CreateDirectory(Path.GetDirectoryName(ruta)!);
 
             _grabacion = File.Create(ruta);

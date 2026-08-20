@@ -22,6 +22,9 @@ public class RemoteOutboxTests
     private static RemotePacket Tecla(uint vk, bool pulsada)
         => new() { Input = new InputEvent { Key = new KeyEvent { VirtualKey = vk, Pressed = pulsada } } };
 
+    private static RemotePacket Acuse(ulong frame)
+        => new() { VideoAck = new VideoAck { FrameId = frame } };
+
     private static List<RemotePacket> Vaciar(BuzonDeSalida buzon)
     {
         var todo = new List<RemotePacket>();
@@ -48,6 +51,29 @@ public class RemoteOutboxTests
         Assert.Single(salieron);
         Assert.Equal(0.999, salieron[0].Input.MouseMove.X, precision: 5);
         Assert.Equal(999, buzon.Fundidos);
+    }
+
+    [Fact]
+    public void A_burst_of_moves_does_not_eat_the_queue()
+    {
+        // ESTO NO LO COGIA A_thousand_moves_leave_one: ese solo mira lo que sale
+        // de TryTomar, y lo que fallaba era cuanto ESPACIO se habia comido por
+        // el camino. Cada movimiento metia su propio marcador para despertar al
+        // hilo, asi que mil movimientos dejaban un movimiento... y 512
+        // marcadores llenando el canal. El KeyUp que llegara detras no cabia.
+        var buzon = new BuzonDeSalida(capacidad: 512);
+
+        for (var i = 0; i < 1000; i++)
+            buzon.Encolar(Mover(i / 1000.0, 0.5));
+
+        for (var i = 0; i < 500; i++)
+            buzon.Encolar(Tecla(0x41, i % 2 == 0));
+
+        Assert.Equal(0, buzon.Perdidos);
+
+        var teclas = Vaciar(buzon).Count(p => p.Input?.EventCase == InputEvent.EventOneofCase.Key);
+
+        Assert.Equal(500, teclas);
     }
 
     [Fact]
@@ -88,21 +114,61 @@ public class RemoteOutboxTests
     }
 
     [Fact]
-    public void The_release_jumps_the_queue()
+    public void The_release_jumps_the_queue_and_buries_what_was_behind_it()
     {
         var buzon = new BuzonDeSalida();
 
-        buzon.Encolar(Tecla(0x41, true));
+        buzon.Encolar(Tecla(0x11, true));
         buzon.Encolar(Mover(0.5, 0.5));
         buzon.PedirSoltar();
 
         var salieron = Vaciar(buzon);
 
-        // Rescate, movimiento, y despues lo demas. Lo que viene detras puede ser
-        // mas entrada sobre un estado que todavia esta sucio.
+        // SOLO el rescate. Antes salia el rescate y DETRAS el Ctrl DOWN viejo,
+        // asi que la tecla volvia a quedarse hundida justo despues de haberla
+        // despegado -- y su KeyUp ocurrio fuera del visor, con el foco perdido,
+        // asi que no iba a llegar jamas.
+        Assert.Single(salieron);
         Assert.Equal(HostAction.Types.Kind.HostActionReleaseInput, salieron[0].HostAction.Kind);
-        Assert.Equal(InputEvent.EventOneofCase.MouseMove, salieron[1].Input.EventCase);
-        Assert.Equal(InputEvent.EventOneofCase.Key, salieron[2].Input.EventCase);
+        Assert.Equal(2, buzon.Caducados);
+    }
+
+    [Fact]
+    public void Input_after_the_release_is_normal_input()
+    {
+        // La barrera es un instante, no un modo: lo que el tecnico teclee al
+        // volver a la ventana tiene que pasar.
+        var buzon = new BuzonDeSalida();
+
+        buzon.Encolar(Tecla(0x11, true));
+        buzon.PedirSoltar();
+        buzon.Encolar(Tecla(0x41, true));
+
+        var salieron = Vaciar(buzon);
+
+        Assert.Equal(2, salieron.Count);
+        Assert.Equal(HostAction.Types.Kind.HostActionReleaseInput, salieron[0].HostAction.Kind);
+        Assert.Equal(0x41u, salieron[1].Input.Key.VirtualKey);
+    }
+
+    [Fact]
+    public void The_release_does_not_touch_anything_that_is_not_input()
+    {
+        // Un acuse, el portapapeles o un trozo de archivo no dependen de que
+        // haya teclas hundidas ni las dejan. Tirarlos por perder el foco de la
+        // ventana romperia una transferencia a medias.
+        var buzon = new BuzonDeSalida();
+
+        buzon.Encolar(Acuse(7));
+        buzon.Encolar(Tecla(0x11, true));
+        buzon.PedirSoltar();
+
+        var salieron = Vaciar(buzon);
+
+        Assert.Equal(2, salieron.Count);
+        Assert.Equal(HostAction.Types.Kind.HostActionReleaseInput, salieron[0].HostAction.Kind);
+        Assert.Equal(7ul, salieron[1].VideoAck.FrameId);
+        Assert.Equal(1, buzon.Caducados);
     }
 
     [Fact]

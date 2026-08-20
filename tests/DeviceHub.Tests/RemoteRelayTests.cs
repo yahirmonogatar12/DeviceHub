@@ -140,6 +140,74 @@ public class RemoteRelayTests
     }
 
     [Fact]
+    public void A_host_that_only_lost_the_network_does_not_take_the_viewer_with_it()
+    {
+        var sesion = new RemoteSessionRegistry().GetOrCreate("s");
+
+        using var host = new RelayConnection("s", RemoteRole.Host);
+        using var viewer = Viewer();
+
+        sesion.TryJoin(host);
+        sesion.TryJoin(viewer);
+
+        // Se CAYO, no cerro: su lease sigue en gracia y tiene todo un bucle de
+        // reconexion para usarla. Cerrarle la sesion al tecnico dejaba ese bucle
+        // sin sentido -- dos segundos de wifi malo en la PC de planta y el host
+        // volvia, correctamente, a una sesion donde ya no habia nadie.
+        Assert.Null(sesion.Leave(host, SessionCloseReason.HostGone, esperaAlHost: true));
+        Assert.Equal(RemoteSessionState.WaitingForHost, sesion.State);
+        Assert.Same(viewer, sesion.Viewer);
+
+        using var vuelve = new RelayConnection("s", RemoteRole.Host);
+
+        Assert.Equal(JoinOutcome.Joined, sesion.TryJoin(vuelve));
+        Assert.Equal(RemoteSessionState.Connected, sesion.State);
+
+        // Y el vigilante que salta despues de la gracia no encuentra nada que
+        // cerrar, porque el host ya esta de vuelta.
+        Assert.Null(sesion.ViewerSiElHostNoVolvio(SessionCloseReason.HostGone));
+        Assert.Equal(RemoteSessionState.Connected, sesion.State);
+    }
+
+    [Fact]
+    public void A_host_that_never_comes_back_ends_the_session()
+    {
+        var registro = new RemoteSessionRegistry();
+        var sesion = registro.GetOrCreate("s");
+
+        using var host = new RelayConnection("s", RemoteRole.Host);
+        using var viewer = Viewer();
+
+        sesion.TryJoin(host);
+        sesion.TryJoin(viewer);
+        sesion.Leave(host, SessionCloseReason.HostGone, esperaAlHost: true);
+
+        // Esperar no es esperar para siempre: pasada la gracia el host que vuelva
+        // necesita autorizacion nueva, asi que sostener al tecnico mas tiempo
+        // seria sostenerlo mirando una imagen congelada.
+        Assert.Same(viewer, sesion.ViewerSiElHostNoVolvio(SessionCloseReason.HostGone));
+        Assert.Equal(RemoteSessionState.Closing, sesion.State);
+        Assert.Equal(nameof(SessionCloseReason.HostGone), sesion.CloseReason);
+    }
+
+    [Fact]
+    public void A_host_that_closed_on_purpose_does_take_the_viewer_with_it()
+    {
+        var sesion = new RemoteSessionRegistry().GetOrCreate("s");
+
+        using var host = new RelayConnection("s", RemoteRole.Host);
+        using var viewer = Viewer();
+
+        sesion.TryJoin(host);
+        sesion.TryJoin(viewer);
+
+        // Un cierre ORDENADO revoca el lease: ese host no va a volver, y dejar al
+        // tecnico esperando 30 s a alguien que dijo adios seria peor que cerrar.
+        Assert.Same(viewer, sesion.Leave(host, SessionCloseReason.HostGone));
+        Assert.Equal(RemoteSessionState.Closing, sesion.State);
+    }
+
+    [Fact]
     public void A_reconnecting_viewer_gets_the_configuration_and_waits_for_an_IDR()
     {
         var sesion = new RemoteSessionRegistry().GetOrCreate("s");
@@ -159,6 +227,12 @@ public class RemoteRelayTests
         // El que vuelve no tiene contexto: config por delante y a esperar IDR.
         Assert.True(segundo.Video.AwaitingKeyframe);
         Assert.True(segundo.Video.ConfigPending);
+
+        // Y SE LO PIDE AL HOST. Esto faltaba: con configuracion guardada se le
+        // dejaba esperando un IDR que nadie habia pedido, asi que el visor que
+        // entraba en una sesion ya montada descartaba P-frames hasta que el
+        // codificador sacara uno por su cuenta -- y el GOP no esta configurado.
+        Assert.Equal([0u], segundo.PantallasQuePidenIdr());
         Assert.False(segundo.Video.TryEnqueue(Frame(500, clave: false)));
         Assert.True(segundo.Video.TryEnqueue(Frame(501, clave: true)));
         Assert.True(segundo.Video.TryDequeue(out var config, out _));

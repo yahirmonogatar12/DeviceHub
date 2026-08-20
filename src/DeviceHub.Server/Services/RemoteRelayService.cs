@@ -85,7 +85,7 @@ public sealed class RemoteRelayGrpcService(
 
         // AUTENTICACION. O un ticket de un solo uso, o el token de reconexion que
         // este servidor emitio antes. Nada mas entra.
-        var (autorizado, motivoAuth, token, hasta, usuario) = Autenticar(hola, papel, conexion);
+        var (autorizado, motivoAuth, credencial) = Comprobar(hola, papel);
 
         if (!autorizado)
         {
@@ -116,6 +116,21 @@ public sealed class RemoteRelayGrpcService(
             log.LogWarning("Relay: segundo {Papel} rechazado en la sesion {Sesion}", papel, hola.SessionId);
             return;
         }
+
+        // EL LEASE SE ESTABLECE AQUI, con el sitio ya ocupado, y no antes.
+        //
+        // Antes se hacia dentro de la autenticacion, o sea antes del TryJoin, y
+        // Establish PISA el TokenHash y la conexion activa del lease que ya
+        // hubiera. Como se puede emitir mas de un ticket para la misma sesion y
+        // el mismo papel, un segundo intento con un ticket valido rotaba el
+        // lease del tecnico que estaba conectado, se llevaba un RoleTaken, y
+        // dejaba al primero sin token con el que reconectar. Perdia su sesion
+        // quien no habia hecho nada.
+        var (token, lease) = leases.Establish(
+            credencial.SessionId, papel, credencial.MachineId, credencial.UserId, conexion);
+
+        var hasta = lease.ReconnectUntil;
+        var usuario = credencial.UserId ?? string.Empty;
 
         log.LogInformation(
             "Relay: {Papel} conectado a la sesion {Sesion} (estado {Estado})",
@@ -224,7 +239,29 @@ public sealed class RemoteRelayGrpcService(
                 $"sesion {sesion.Id} papel {papel} motivo {motivo} {detalle}".TrimEnd(),
                 contexto.Peer);
 
-            var otro = sesion.Leave(conexion, motivo);
+            // EL HOST QUE SE CAE NO ES EL HOST QUE CIERRA.
+            //
+            // Si cerro en orden o rompio el protocolo, su lease se acaba de
+            // revocar ahi arriba y no va a volver: al tecnico se le cierra. Si
+            // solo se le fue la red, tiene 30 s de gracia y todo un bucle de
+            // reconexion para usarlos -- y hasta ahora volvia a una sesion de la
+            // que ya habiamos echado al tecnico.
+            var esperaAlHost = papel == RemoteRole.Host
+                               && !cerroOrdenado
+                               && motivo != SessionCloseReason.ProtocolError;
+
+            var otro = sesion.Leave(conexion, motivo, esperaAlHost);
+
+            if (esperaAlHost && sesion.State == RemoteSessionState.WaitingForHost)
+            {
+                await AvisarAsync(
+                    sesion,
+                    $"Se perdio la PC controlada. Esperandola {RemoteLeaseRegistry.Gracia.TotalSeconds:0} s...");
+
+                // Sin await: aqui todavia se esta cerrando el stream del host, y
+                // esto tiene que sobrevivirlo.
+                _ = VigilarRegresoAsync(sesion);
+            }
 
             // Avisar al que queda es lo que evita sesiones huerfanas: sin esto,
             // el viewer se queda mirando una imagen congelada sin saber que la
@@ -270,15 +307,8 @@ public sealed class RemoteRelayGrpcService(
 
     // -- Autenticacion ------------------------------------------------------
 
-    /// <summary>
-    /// Dos caminos, y solo dos: un ticket de arranque de un solo uso, o el token
-    /// de reconexion que este mismo servidor emitio.
-    ///
-    /// `session_id` + `machine_id` NO bastan por si solos: los dos son
-    /// adivinables, y aceptarlos convertiria la reconexion en una puerta sin
-    /// llave.
-    /// </summary>
-    /// <param name="Usuario">
+    /// <summary>Quien dice ser el que llama, ya comprobado.</summary>
+    /// <param name="UserId">
     /// QUIEN abrio la sesion, no contra que maquina.
     ///
     /// Salia de aqui y se tiraba, y la auditoria acababa registrando el
@@ -289,8 +319,22 @@ public sealed class RemoteRelayGrpcService(
     /// Vacio en el host: la sesion la abre un tecnico, y el host es la PC
     /// controlada, que no es nadie.
     /// </param>
-    private (bool Ok, string Motivo, string Token, DateTimeOffset Hasta, string Usuario) Autenticar(
-        RemotePacket paquete, RemoteRole papel, RelayConnection conexion)
+    private readonly record struct Credencial(string SessionId, string MachineId, string? UserId);
+
+    /// <summary>
+    /// Dos caminos, y solo dos: un ticket de arranque de un solo uso, o el token
+    /// de reconexion que este mismo servidor emitio.
+    ///
+    /// `session_id` + `machine_id` NO bastan por si solos: los dos son
+    /// adivinables, y aceptarlos convertiria la reconexion en una puerta sin
+    /// llave.
+    ///
+    /// COMPRUEBA Y NO REPARTE NADA. El lease -- el derecho a volver -- se
+    /// establece fuera, cuando ya se sabe que el sitio estaba libre. Consumir el
+    /// ticket si es un efecto, y tiene que serlo: es de un solo uso, y un
+    /// intento fallido lo gasta igual.
+    /// </summary>
+    private (bool Ok, string Motivo, Credencial Cred) Comprobar(RemotePacket paquete, RemoteRole papel)
     {
         var hola = paquete.Hello;
 
@@ -299,28 +343,77 @@ public sealed class RemoteRelayGrpcService(
             var veredicto = leases.TryReconnect(hola.ReconnectToken, papel, paquete.SessionId, out var lease);
 
             if (veredicto != LeaseRejection.Accepted)
-                return (false, veredicto.ToString(), string.Empty, default, string.Empty);
+                return (false, veredicto.ToString(), default);
 
-            // Se ROTA: el token que acaba de usarse deja de valer aqui mismo.
-            var (nuevo, renovado) = leases.Establish(
-                lease!.SessionId, papel, lease.MachineId, lease.UserId, conexion);
-
-            return (true, "reconexion", nuevo, renovado.ReconnectUntil, lease.UserId ?? string.Empty);
+            // El token se rota en el Establish de mas arriba: el que acaba de
+            // usarse deja de valer en cuanto el que vuelve tiene su sitio.
+            return (true, "reconexion", new Credencial(lease!.SessionId, lease.MachineId, lease.UserId));
         }
 
         var rechazo = tickets.TryConsume(
             hola.Ticket, papel, paquete.SessionId, hola.MachineId, out var ticket);
 
         if (rechazo != TicketRejection.Accepted)
-            return (false, rechazo.ToString(), string.Empty, default, string.Empty);
+            return (false, rechazo.ToString(), default);
 
         // El ticket queda consumido para siempre. A partir de aqui la
         // reconexion la sostiene el lease: convertir el ticket de arranque en
         // algo reutilizable seria deshacer que sea de un solo uso.
-        var (emitido, primero) = leases.Establish(
-            ticket!.SessionId, papel, ticket.TargetMachineId, ticket.UserId, conexion);
+        return (true, "ticket", new Credencial(ticket!.SessionId, ticket.TargetMachineId, ticket.UserId));
+    }
 
-        return (true, "ticket", emitido, primero.ReconnectUntil, ticket.UserId ?? string.Empty);
+    /// <summary>Un aviso de texto para el tecnico, por el mismo hueco que usa el
+    /// host. No hay que inventar mensaje: el visor ya sabe enseñarlo.</summary>
+    private static async Task AvisarAsync(RemoteSession sesion, string texto)
+    {
+        if (sesion.Viewer is not { } viewer)
+            return;
+
+        try
+        {
+            await viewer.SendControlAsync(
+                new RemotePacket { HostStatus = new HostStatus { Text = texto } }, CancellationToken.None);
+        }
+        catch (Exception)
+        {
+            // El tecnico tambien se esta yendo. No cambia nada.
+        }
+    }
+
+    /// <summary>
+    /// Cierra al viewer si el host no volvio dentro de la gracia.
+    ///
+    /// La espera es la MISMA que la del lease a proposito: pasada esa, el host
+    /// que vuelva necesita autorizacion nueva, asi que sostener al tecnico mas
+    /// tiempo seria sostenerlo mirando una imagen congelada que ya no se va a
+    /// mover nunca.
+    /// </summary>
+    private async Task VigilarRegresoAsync(RemoteSession sesion)
+    {
+        await Task.Delay(RemoteLeaseRegistry.Gracia);
+
+        if (sesion.ViewerSiElHostNoVolvio(SessionCloseReason.HostGone) is not { } viewer)
+        {
+            log.LogInformation("Relay: la sesion {Sesion} no necesito el cierre por host perdido", sesion.Id);
+            return;
+        }
+
+        log.LogWarning("Relay: el host de la sesion {Sesion} no volvio; se cierra al viewer", sesion.Id);
+
+        try
+        {
+            await viewer.SendControlAsync(new RemotePacket
+            {
+                Close = new SessionClose
+                {
+                    Reason = SessionCloseReason.HostGone,
+                    Detail = "La PC controlada no volvio a conectarse."
+                }
+            }, CancellationToken.None);
+        }
+        catch (Exception)
+        {
+        }
     }
 
     // -- Validacion ---------------------------------------------------------
