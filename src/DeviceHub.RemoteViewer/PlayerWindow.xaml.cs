@@ -22,15 +22,17 @@ public partial class PlayerWindow : Window
 {
     private readonly string _ruta;
     private readonly int _fps;
+    private readonly VideoCodec _codec;
     private readonly bool _bucle;
 
     private readonly CancellationTokenSource _cancelacion = new();
     private Thread? _hilo;
 
-    public PlayerWindow(string ruta, int fps, bool bucle)
+    public PlayerWindow(string ruta, int fps, bool bucle, VideoCodec codec = VideoCodec.H264)
     {
         InitializeComponent();
 
+        _codec = codec;
         _ruta = ruta;
         _fps = fps;
         _bucle = bucle;
@@ -104,7 +106,7 @@ public partial class PlayerWindow : Window
     private void Bucle(IntPtr hwnd, byte[] flujo, List<AccessUnit> unidades)
     {
         using var device = VideoPresenter.CreateDevice();
-        using var decoder = new H264Decoder(device, 1920, 1080);
+        using var decoder = new H264Decoder(device, 1920, 1080, _codec);
 
         VideoPresenter? presentador = null;
 

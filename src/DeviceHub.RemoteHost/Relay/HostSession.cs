@@ -82,6 +82,7 @@ public static class HostSession
             Ticket = saludo.Ticket,
             PinnedKeys = saludo.PinnedKeys,
             AllowUntrusted = saludo.AllowUntrusted,
+            UsarH265 = saludo.UseH265,
             Adapter = adapter,
             Output = output,
             Seconds = 0,                 // hasta que la sesion termine

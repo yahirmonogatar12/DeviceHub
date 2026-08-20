@@ -1,4 +1,5 @@
 using System.IO;
+using DeviceHub.Remote.Contracts;
 using System.Windows;
 
 namespace DeviceHub.RemoteViewer;
@@ -50,7 +51,9 @@ public partial class App : Application
             return;
         }
 
-        new PlayerWindow(ruta, Numero(e.Args, "--fps", 60), e.Args.Contains("--loop")).Show();
+        new PlayerWindow(
+            ruta, Numero(e.Args, "--fps", 60), e.Args.Contains("--loop"),
+            e.Args.Contains("--h265") ? VideoCodec.H265 : VideoCodec.H264).Show();
     }
 
     private static string? Texto(string[] args, string nombre)

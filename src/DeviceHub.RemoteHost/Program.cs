@@ -44,14 +44,16 @@ if (args.Contains("--relay-test"))
         Seconds = Indice(args, "--seconds", 60),
         Fps = Indice(args, "--fps", 60),
         Bitrate = Indice(args, "--bitrate", 6_000_000),
-        AllowUntrusted = args.Contains("--allow-untrusted")
+        AllowUntrusted = args.Contains("--allow-untrusted"),
+        UsarH265 = args.Contains("--h265")
     }, CancellationToken.None);
 
 if (args.Contains("--encode-test"))
     return EncodeTest.Run(
         Indice(args, "--adapter"), Indice(args, "--output"), Indice(args, "--seconds", 30),
         Indice(args, "--fps", 60), Indice(args, "--bitrate", 6_000_000),
-        Texto(args, "--scenario") ?? "sin etiquetar", Texto(args, "--save"));
+        Texto(args, "--scenario") ?? "sin etiquetar", Texto(args, "--save"),
+        args.Contains("--h265"));
 
 Console.Error.WriteLine("""
     DeviceHub.RemoteHost

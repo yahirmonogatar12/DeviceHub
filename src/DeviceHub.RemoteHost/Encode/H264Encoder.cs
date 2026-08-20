@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using DeviceHub.Remote.Contracts;
 using DeviceHub.RemoteHost.Capture;
 using SharpGen.Runtime;
 using Vortice.Direct3D11;
@@ -8,7 +9,10 @@ using Vortice.MediaFoundation;
 namespace DeviceHub.RemoteHost.Encode;
 
 /// <summary>
-/// Codificador H.264 sobre Media Foundation, alimentado con texturas D3D11.
+/// Codificador H.264 o H.265 sobre Media Foundation, alimentado con texturas
+/// D3D11. El nombre se queda por lo que era: los dos comparten TODO menos el
+/// subtipo de salida, y partirlo en dos clases seria duplicar 700 lineas para
+/// cambiar un GUID.
 ///
 /// Ruta unica: BGRA -> NV12 en GPU -> superficie DXGI -> MFT. Sin atajo por
 /// ARGB32 aunque AMD y NVIDIA lo acepten, porque el codificador por software
@@ -49,10 +53,28 @@ public sealed class H264Encoder : IVideoEncoder
     /// Existe por el modo compuesto: dos monitores dan una imagen que el
     /// codificador de una iGPU no siempre traga.
     /// </summary>
+    /// <summary>
+    /// MFVideoFormat_HEVC. Vortice no lo expone, asi que se escribe a mano igual
+    /// que CleanPoint: es el fourcc 'HEVC' dentro del GUID base de Media
+    /// Foundation, no un identificador inventado.
+    /// </summary>
+    private static readonly Guid Hevc = new("43564548-0000-0010-8000-00aa00389b71");
+
+    /// <summary>Que codec produce este codificador. La entrada es NV12 en los
+    /// dos casos; lo unico que cambia es el subtipo de salida.</summary>
+    public VideoCodec Codec { get; }
+
+    private Guid Subtipo => Codec == VideoCodec.H265 ? Hevc : VideoFormatGuids.H264;
+
+    private string Nombre => Codec == VideoCodec.H265 ? "H.265" : "H.264";
+
     public H264Encoder(
         ID3D11Device device, int width, int height, int framesPerSecond, int bitrate,
-        Vortice.Luid adapterLuid, uint vendorId, int anchoEntrada = 0, int altoEntrada = 0)
+        Vortice.Luid adapterLuid, uint vendorId, int anchoEntrada = 0, int altoEntrada = 0,
+        VideoCodec codec = VideoCodec.H264)
     {
+        Codec = codec;
+
         if (anchoEntrada <= 0) anchoEntrada = width;
         if (altoEntrada <= 0) altoEntrada = height;
 
@@ -473,7 +495,7 @@ public sealed class H264Encoder : IVideoEncoder
         // 1) Los MFT que Windows asocia a ESTA GPU. Es el criterio exacto:
         //    MFT_ENUM_ADAPTER_LUID existe justo para esto, y distingue dos
         //    tarjetas del mismo fabricante, cosa que el vendor ID no puede.
-        var propios = EncoderProbe.EnumerateForAdapter(luid);
+        var propios = EncoderProbe.EnumerateForAdapter(luid, Subtipo);
 
         try
         {
@@ -493,7 +515,7 @@ public sealed class H264Encoder : IVideoEncoder
         //    solo para ordenar. Se llega aqui si el filtro por LUID no devolvio
         //    nada util -- una GPU sin encoder propio, o un Windows que no
         //    soporte MFTEnum2 -- y entonces vale mas un software MFT que nada.
-        using var lista = EncoderProbe.Enumerate();
+        using var lista = EncoderProbe.Enumerate(Subtipo);
 
         foreach (var candidato in Ordenar(lista.Items, vendorId))
         {
@@ -502,7 +524,7 @@ public sealed class H264Encoder : IVideoEncoder
         }
 
         throw new VideoEncoderUnavailableException(
-            "Ningun codificador H.264 acepto la configuracion.\n" +
+            $"Ningun codificador {Nombre} acepto la configuracion.\n" +
             string.Join("\n", fallos.Select(f => "  " + f)) +
             "\n\nEn Windows Server, Media Foundation es una caracteristica opcional que no viene instalada.");
     }
@@ -615,12 +637,12 @@ public sealed class H264Encoder : IVideoEncoder
 
         try
         {
-            ApplyOutputType(_transform, Ancho, Alto, Fps, Bits);
+            ApplyOutputType(_transform, Ancho, Alto, Fps, Bits, Subtipo, Nombre);
         }
         catch (SharpGenException ex)
         {
             throw new VideoEncoderUnavailableException(
-                $"{Capabilities.Name} rechaza H.264 {Ancho}x{Alto}@{Fps} tras STREAM_CHANGE ({ex.Message.Split('\n')[0]}).\n" +
+                $"{Capabilities.Name} rechaza {Nombre} {Ancho}x{Alto}@{Fps} tras STREAM_CHANGE ({ex.Message.Split('\n')[0]}).\n" +
                 "Lo que ofrece:\n" + string.Join("\n", OfferedOutputTypes().Select(t => "  " + t)) + "\n\n" +
                 "No se acepta otra resolucion en silencio: el stream dejaria de ser el mismo en cada PC.");
         }
@@ -674,11 +696,11 @@ public sealed class H264Encoder : IVideoEncoder
         }
     }
 
-    /// <summary>SALIDA primero y entrada despues: un codificador H.264 no sabe
-    /// que entradas admite hasta saber que tiene que producir.</summary>
-    private static void Configure(IMFTransform transform, int width, int height, int fps, int bitrate)
+    /// <summary>SALIDA primero y entrada despues: un codificador no sabe que
+    /// entradas admite hasta saber que tiene que producir.</summary>
+    private void Configure(IMFTransform transform, int width, int height, int fps, int bitrate)
     {
-        ApplyOutputType(transform, width, height, fps, bitrate);
+        ApplyOutputType(transform, width, height, fps, bitrate, Subtipo, Nombre);
 
         using var entrada = MediaFactory.MFCreateMediaType();
         entrada.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
@@ -733,11 +755,13 @@ public sealed class H264Encoder : IVideoEncoder
         }
     }
 
-    private static void ApplyOutputType(IMFTransform transform, int width, int height, int fps, int bitrate)
+    private static void ApplyOutputType(
+        IMFTransform transform, int width, int height, int fps, int bitrate,
+        Guid subtipo, string nombre)
     {
         using var salida = MediaFactory.MFCreateMediaType();
         salida.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
-        salida.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.H264);
+        salida.Set(MediaTypeAttributeKeys.Subtype, subtipo);
         salida.Set(MediaTypeAttributeKeys.AvgBitrate, (uint)bitrate);
         salida.Set(MediaTypeAttributeKeys.FrameSize, Pack((uint)width, (uint)height));
         salida.Set(MediaTypeAttributeKeys.FrameRate, Pack((uint)fps, 1));
@@ -749,7 +773,7 @@ public sealed class H264Encoder : IVideoEncoder
         catch (SharpGenException ex)
         {
             throw new VideoEncoderUnavailableException(
-                $"El codificador no acepta H.264 de {width}x{height} como salida " +
+                $"El codificador no acepta {nombre} de {width}x{height} como salida " +
                 $"(perfil o bitrate fuera de rango): {ex.ResultCode}", ex);
         }
     }

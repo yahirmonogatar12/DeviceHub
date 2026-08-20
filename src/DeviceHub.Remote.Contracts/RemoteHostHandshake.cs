@@ -43,6 +43,15 @@ public sealed record RemoteHostHandshake
     /// enciende quien edite el appsettings del agente a mano.</summary>
     public bool AllowUntrusted { get; init; }
 
+    /// <summary>
+    /// H.265 en vez de H.264. Viene por aqui y no por linea de comandos porque
+    /// es configuracion del agente, igual que los pines: quien decide es el
+    /// appsettings de la maquina de planta.
+    ///
+    /// Si esa GPU no lo codifica, el host se cae a H.264 solo y lo dice.
+    /// </summary>
+    public bool UseH265 { get; init; }
+
     public string ToLine() => JsonSerializer.Serialize(this, Opciones);
 
     public static RemoteHostHandshake? Parse(string? linea)

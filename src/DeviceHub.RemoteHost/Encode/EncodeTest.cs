@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using DeviceHub.Remote.Contracts;
 using DeviceHub.RemoteHost.Capture;
 using Vortice.MediaFoundation;
 
@@ -18,7 +19,9 @@ namespace DeviceHub.RemoteHost.Encode;
 /// </summary>
 public static class EncodeTest
 {
-    public static int Run(int adapterIndex, int outputIndex, int seconds, int fps, int bitrate, string scenario, string? output)
+    public static int Run(
+        int adapterIndex, int outputIndex, int seconds, int fps, int bitrate,
+        string scenario, string? output, bool h265 = false)
     {
         MediaFactory.MFStartup(true).CheckError();
 
@@ -27,7 +30,8 @@ public static class EncodeTest
             using var capture = new DxgiDesktopCapture(adapterIndex, outputIndex);
             using var encoder = new H264Encoder(
                 capture.Device, capture.Width, capture.Height, fps, bitrate,
-                capture.AdapterLuid, capture.AdapterVendorId);
+                capture.AdapterLuid, capture.AdapterVendorId,
+                codec: h265 ? VideoCodec.H265 : VideoCodec.H264);
             using var gpu = new GpuCounters(adapterIndex);
 
             var caps = encoder.Capabilities;
@@ -112,7 +116,7 @@ public static class EncodeTest
             Console.WriteLine($"Scenario:      {scenario}");
             Console.WriteLine($"Capture:       DXGI Desktop Duplication");
             Console.WriteLine($"Adapter:       {capture.Adapter}");
-            Console.WriteLine($"Encoder:       H264");
+            Console.WriteLine($"Encoder:       {(h265 ? "H265" : "H264")}");
             Console.WriteLine($"Hardware:      {(caps.Hardware ? "TRUE" : "FALSE")}");
             Console.WriteLine($"MFT:           {caps.Name}");
             Console.WriteLine($"Async:         {(caps.Asynchronous ? "TRUE" : "FALSE")}");

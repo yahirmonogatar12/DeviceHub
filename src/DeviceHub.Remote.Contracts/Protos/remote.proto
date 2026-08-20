@@ -357,6 +357,15 @@ message RemoteCapabilities {
 enum VideoCodec {
   VIDEO_CODEC_UNSPECIFIED = 0;
   VIDEO_CODEC_H264 = 1;
+
+  // Misma calidad con un 30-40 % menos de bits en la misma iGPU. Y menos bits
+  // no es solo ancho de banda -- que en una LAN sobra -- es menos tiempo de
+  // cable por frame, y con el acuse por frame eso se paga en cada vuelta.
+  //
+  // El codec lo elige el HOST y lo declara en VideoConfig. No se negocia
+  // todavia: quien no pueda descodificarlo lo dice claro en vez de quedarse en
+  // negro, y para eso basta con leer este campo.
+  VIDEO_CODEC_H265 = 2;
 }
 
 // Como esta configurado el flujo. Se manda al empezar, al cambiar la

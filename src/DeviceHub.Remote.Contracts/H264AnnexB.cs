@@ -38,7 +38,19 @@ public static class H264AnnexB
     ///
     /// Devuelve un array vacio si la unidad no los lleva.
     /// </summary>
-    public static byte[] ParameterSets(ReadOnlySpan<byte> unidad)
+    /// <param name="hevc">
+    /// H.265 numera sus NAL de otra forma y hay que decirselo.
+    ///
+    /// La cabecera son DOS bytes en vez de uno y el tipo vive en los bits 1-6
+    /// del primero, no en los 5 de abajo. Ademas son TRES los conjuntos de
+    /// parametros -- VPS, SPS y PPS -- y no dos.
+    ///
+    /// Leer un flujo HEVC con las reglas de H.264 no da error: el tipo 32 (VPS)
+    /// enmascarado con 0x1F da 0, que no coincide con nada, asi que devolveria
+    /// un array vacio y el visor se quedaria esperando para siempre una
+    /// configuracion que si venia dentro del IDR.
+    /// </param>
+    public static byte[] ParameterSets(ReadOnlySpan<byte> unidad, bool hevc = false)
     {
         var trozos = new List<byte[]>();
 
@@ -52,9 +64,12 @@ public static class H264AnnexB
             if (nal >= unidad.Length)
                 break;
 
-            var tipo = unidad[nal] & 0x1F;
+            var tipo = hevc ? (unidad[nal] >> 1) & 0x3F : unidad[nal] & 0x1F;
 
-            if (tipo is 7 or 8)
+            // H.264: SPS 7, PPS 8. HEVC: VPS 32, SPS 33, PPS 34.
+            var esParametro = hevc ? tipo is 32 or 33 or 34 : tipo is 7 or 8;
+
+            if (esParametro)
             {
                 var codigo = p > 0 && unidad[p - 1] == 0 ? p - 1 : p;
                 var hasta = siguiente < 0 ? unidad.Length : siguiente;

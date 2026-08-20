@@ -500,7 +500,25 @@ public partial class RelayWindow : Window
                         presentador ??= new VideoPresenter(device, hwnd, ancho, alto);
                         presentador.Redimensionar(ancho, alto);
 
-                        var nuevoDecoder = new H264Decoder(device, (int)nueva.Width, (int)nueva.Height);
+                        H264Decoder nuevoDecoder;
+
+                        try
+                        {
+                            // EL CODEC LO DICE EL HOST. Alimentar HEVC a un
+                            // descodificador H.264 no falla al crearlo: falla
+                            // en el primer frame y lejos de aqui.
+                            nuevoDecoder = new H264Decoder(
+                                device, (int)nueva.Width, (int)nueva.Height, nueva.Codec);
+                        }
+                        catch (Exception ex)
+                        {
+                            // Y si esta PC no sabe ese codec, se dice. En negro y
+                            // callado es como se pierde media hora buscando en el
+                            // sitio equivocado.
+                            Nota($"Esta PC no puede descodificar {nueva.Codec}: {ex.Message}");
+                            break;
+                        }
+
                         decodificadores[pantalla] = nuevoDecoder;
 
                         if (nueva.ParameterSets.Length > 0)

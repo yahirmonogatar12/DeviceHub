@@ -54,6 +54,17 @@ public sealed class InteractiveSessionLauncher(
     private readonly bool _escritorioSeguro =
         configuracion.GetValue("DeviceHub:SecureDesktop", false);
 
+    /// <summary>
+    /// Codec de video. "h265" para probarlo en ESTA maquina.
+    ///
+    /// Apagado por defecto y por el mismo motivo que el escritorio seguro: si
+    /// la iGPU de planta codifica H.265 mas rapido, y si la PC del tecnico lo
+    /// descodifica, son preguntas que solo se responden en ese hardware.
+    /// Probarlo tiene que ser cambiar una linea y reiniciar el servicio.
+    /// </summary>
+    private readonly bool _h265 =
+        string.Equals(configuracion.GetValue("DeviceHub:Codec", "h264"), "h265", StringComparison.OrdinalIgnoreCase);
+
     private readonly Lock _puerta = new();
     private Sesion? _actual;
 
@@ -82,6 +93,11 @@ public sealed class InteractiveSessionLauncher(
     public async Task<bool> StartAsync(RemoteHostHandshake saludo, CancellationToken ct)
     {
         Stop("llega una sesion nueva");
+
+        // El codec lo pone AQUI y no quien construye el saludo: es una propiedad
+        // de ESTA maquina -- de lo que sepa hacer su GPU -- igual que el
+        // escritorio seguro, y quien lee su appsettings es este.
+        saludo = saludo with { UseH265 = _h265 };
 
         var exe = Path.Combine(AppContext.BaseDirectory, "DeviceHub.RemoteHost.exe");
 

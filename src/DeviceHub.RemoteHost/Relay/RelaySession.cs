@@ -9,6 +9,7 @@ using DeviceHub.RemoteHost.Files;
 using DeviceHub.RemoteHost.Input;
 using Grpc.Core;
 using Grpc.Net.Client;
+using Vortice.Direct3D11;
 using Vortice.MediaFoundation;
 
 namespace DeviceHub.RemoteHost.Relay;
@@ -36,6 +37,17 @@ public sealed record RelayOptions
 
     public int Adapter { get; init; }
     public int Output { get; init; }
+
+    /// <summary>
+    /// H.265 en vez de H.264. Interruptor y no constante, por lo mismo que
+    /// SecureDesktop: la pregunta -- si la iGPU de planta lo codifica mas
+    /// rapido, y si la PC del tecnico lo descodifica -- solo se responde en ESE
+    /// hardware, y probarlo tiene que ser cambiar una linea y reiniciar, no
+    /// volver a compilar.
+    ///
+    /// Si la maquina no tiene codificador HEVC se cae solo a H.264 y lo dice.
+    /// </summary>
+    public bool UsarH265 { get; init; }
 
     /// <summary>Cero o menos = hasta que alguien la corte, que es como corre una
     /// sesion de verdad.</summary>
@@ -810,6 +822,7 @@ public static class RelaySession
         opciones.Escribir(
             $"Identidad {System.Security.Principal.WindowsIdentity.GetCurrent().Name}  " +
             $"Escritorio {escritorio.Name}  Flujos {flujos.Count}  " +
+            $"Codec {(flujos[0].Codificador.Codec == VideoCodec.H265 ? "H.265" : "H.264")}  " +
             $"MFT {flujos[0].Codificador.Capabilities.Name}  " +
             $"Hardware {(flujos[0].Codificador.Capabilities.Hardware ? "TRUE" : "FALSE")}  " +
             $"Lienzo {lienzo.Ancho}x{lienzo.Alto}");
@@ -1152,7 +1165,8 @@ public static class RelaySession
                     // manda en VideoConfig; a partir de ahi el visor lo conserva.
                     if (!flujo.ConfigEnviada && frameCodificado.IsKeyFrame)
                     {
-                        var parametros = H264AnnexB.ParameterSets(frameCodificado.Payload);
+                        var parametros = H264AnnexB.ParameterSets(
+                            frameCodificado.Payload, flujo.Codificador.Codec == VideoCodec.H265);
 
                         if (parametros.Length == 0)
                             continue;   // todavia no; el siguiente IDR los traera
@@ -1162,7 +1176,7 @@ public static class RelaySession
                         config = new VideoConfig
                         {
                             ConfigVersion = flujo.Version,
-                            Codec = VideoCodec.H264,
+                            Codec = flujo.Codificador.Codec,
                             Width = (uint)frameCodificado.Width,
                             Height = (uint)frameCodificado.Height,
                             FramesPerSecond = (uint)opciones.Fps,
@@ -1423,10 +1437,9 @@ public static class RelaySession
                     Info = elegida,
                     Captura = unica,
                     BitrateBase = ControlBitrate.PorResolucion(unica.Width, unica.Height),
-                    Codificador = new H264Encoder(
-                        unica.Device, unica.Width, unica.Height, opciones.Fps,
-                        ControlBitrate.PorResolucion(unica.Width, unica.Height),
-                        unica.AdapterLuid, unica.AdapterVendorId),
+                    Codificador = Codificar(
+                        unica.Device, unica.Width, unica.Height,
+                        unica.AdapterLuid, unica.AdapterVendorId, opciones),
                     Version = ++cuenta.ConfigVersion,
                     LayoutX = 0,
                     LayoutY = 0,
@@ -1455,10 +1468,9 @@ public static class RelaySession
                     Info = pantalla,
                     Captura = captura,
                     BitrateBase = ControlBitrate.PorResolucion(captura.Width, captura.Height),
-                    Codificador = new H264Encoder(
-                        captura.Device, captura.Width, captura.Height, opciones.Fps,
-                        ControlBitrate.PorResolucion(captura.Width, captura.Height),
-                        captura.AdapterLuid, captura.AdapterVendorId),
+                    Codificador = Codificar(
+                        captura.Device, captura.Width, captura.Height,
+                        captura.AdapterLuid, captura.AdapterVendorId, opciones),
                     Version = ++cuenta.ConfigVersion,
 
                     // Coordenadas RELATIVAS al lienzo: el monitor de la izquierda
@@ -1508,6 +1520,37 @@ public static class RelaySession
     /// config_version: el visor tirara su decodificador de esa pantalla y montara
     /// otro, que es justo para lo que la version existe.
     /// </summary>
+    /// <summary>
+    /// Abre el codificador del codec pedido, y si no lo hay se cae a H.264.
+    ///
+    /// EL RESPALDO NO ES OPCIONAL. Un Windows Server sin Media Foundation, una
+    /// GPU vieja sin HEVC o una iGPU que lo tenga solo para descodificar son
+    /// casos reales, y con el interruptor puesto por descuido dejarian sin
+    /// control remoto a una PC de planta. Mejor H.264 y un aviso.
+    /// </summary>
+    private static H264Encoder Codificar(
+        ID3D11Device device, int ancho, int alto, Vortice.Luid luid, uint vendor,
+        RelayOptions opciones)
+    {
+        var bitrate = ControlBitrate.PorResolucion(ancho, alto);
+
+        if (opciones.UsarH265)
+        {
+            try
+            {
+                return new H264Encoder(
+                    device, ancho, alto, opciones.Fps, bitrate, luid, vendor,
+                    codec: VideoCodec.H265);
+            }
+            catch (Exception ex)
+            {
+                Avisar(opciones, $"Sin codificador H.265 ({ex.Message.Split('\n')[0]}); se sigue en H.264.");
+            }
+        }
+
+        return new H264Encoder(device, ancho, alto, opciones.Fps, bitrate, luid, vendor);
+    }
+
     private static bool Relevar(Flujo flujo, RelayOptions opciones, Contadores cuenta)
     {
         if (flujo.Info is not { } info)
@@ -1520,7 +1563,8 @@ public static class RelaySession
             var codificador = new H264Encoder(
                 gdi.Device, gdi.Width, gdi.Height, opciones.Fps,
                 Math.Max(flujo.BitrateDeseado, ControlBitrate.Minimo),
-                gdi.AdapterLuid, gdi.AdapterVendorId);
+                gdi.AdapterLuid, gdi.AdapterVendorId,
+                codec: flujo.Codificador.Codec);
 
             // El viejo se suelta DESPUES de que el nuevo exista: si crear el
             // nuevo falla, la pantalla sigue con lo que tenia en vez de quedarse

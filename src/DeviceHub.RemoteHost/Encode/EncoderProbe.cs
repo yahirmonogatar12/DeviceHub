@@ -119,10 +119,14 @@ public static class EncoderProbe
     /// piden ademas los sincronos y asincronos porque los MFT de hardware suelen
     /// ser asincronos y sin esa bandera no aparecen.
     /// </summary>
-    internal static EncoderList Enumerate()
+    internal static EncoderList Enumerate(Guid? salidaPedida = null)
     {
+        var salida = salidaPedida is { } g
+            ? new RegisterTypeInfo { GuidMajorType = MediaTypeGuids.Video, GuidSubtype = g }
+            : OutputH264;
+
         var coleccion = MediaFactory.MFTEnumEx(
-            TransformCategoryGuids.VideoEncoder, EnumFlags, null, OutputH264);
+            TransformCategoryGuids.VideoEncoder, EnumFlags, null, salida);
 
         var encontrados = new List<(string, bool, IMFActivate)>();
 
@@ -143,7 +147,8 @@ public static class EncoderProbe
     /// Devuelve una lista vacia si el filtro no encuentra nada; el llamante decide
     /// si cae al criterio de respaldo.
     /// </summary>
-    internal static List<(string Name, bool Hardware, IMFActivate Activate)> EnumerateForAdapter(Luid luid)
+    internal static List<(string Name, bool Hardware, IMFActivate Activate)> EnumerateForAdapter(
+        Luid luid, Guid? salidaPedida = null)
     {
         var encontrados = new List<(string, bool, IMFActivate)>();
 
@@ -157,7 +162,10 @@ public static class EncoderProbe
         BitConverter.TryWriteBytes(bytes.AsSpan(4, 4), luid.HighPart);
         filtro.SetBlob(MftEnumAdapterLuid, bytes);
 
-        var salida = OutputH264;
+        var salida = salidaPedida is { } g
+            ? new RegisterTypeInfo { GuidMajorType = MediaTypeGuids.Video, GuidSubtype = g }
+            : OutputH264;
+
         MediaFactory.MFTEnum2(
             TransformCategoryGuids.VideoEncoder, EnumFlags, null, salida, filtro,
             out var arreglo, out var cuantos);

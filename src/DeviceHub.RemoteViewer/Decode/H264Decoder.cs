@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using DeviceHub.Remote.Contracts;
 using SharpGen.Runtime;
 using Vortice.Direct3D11;
 using Vortice.MediaFoundation;
@@ -94,8 +95,20 @@ public sealed class H264Decoder : IDisposable
     private readonly bool _asincrono;
     private int _needInput;
 
-    public H264Decoder(ID3D11Device device, int width, int height)
+    /// <summary>MFVideoFormat_HEVC. Escrito a mano porque Vortice no lo expone:
+    /// es el fourcc 'HEVC' dentro del GUID base de Media Foundation.</summary>
+    private static readonly Guid Hevc = new("43564548-0000-0010-8000-00aa00389b71");
+
+    /// <summary>Que codec descodifica. Lo dice VideoConfig, y hay que hacerle
+    /// caso: alimentar HEVC a un descodificador H.264 no da error al crearlo --
+    /// falla despues, en el primer frame, y lejos de aqui.</summary>
+    public VideoCodec Codec { get; }
+
+    private Guid Subtipo => Codec == VideoCodec.H265 ? Hevc : VideoFormatGuids.H264;
+
+    public H264Decoder(ID3D11Device device, int width, int height, VideoCodec codec = VideoCodec.H264)
     {
+        Codec = codec;
         Width = width;
         Height = height;
 
@@ -104,7 +117,7 @@ public sealed class H264Decoder : IDisposable
         _deviceManager = MediaFactory.MFCreateDXGIDeviceManager();
         _deviceManager.ResetDevice(device).CheckError();
 
-        var (transform, nombre, hardware) = Select();
+        var (transform, nombre, hardware) = Select(Subtipo);
         _transform = transform;
 
         _asincrono = Flag(_transform, TransformAsync);
@@ -364,14 +377,14 @@ public sealed class H264Decoder : IDisposable
     /// que queremos: el software decodifica 1080p a costa de la CPU de la PC del
     /// tecnico, que ademas esta corriendo el dashboard.
     /// </summary>
-    private (IMFTransform, string, bool) Select()
+    private (IMFTransform, string, bool) Select(Guid subtipo)
     {
         var fallos = new List<string>();
 
         var entrada = new RegisterTypeInfo
         {
             GuidMajorType = MediaTypeGuids.Video,
-            GuidSubtype = VideoFormatGuids.H264
+            GuidSubtype = subtipo
         };
 
         var salida = new RegisterTypeInfo
@@ -468,7 +481,7 @@ public sealed class H264Decoder : IDisposable
     {
         using var entrada = MediaFactory.MFCreateMediaType();
         entrada.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
-        entrada.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.H264);
+        entrada.Set(MediaTypeAttributeKeys.Subtype, Subtipo);
         entrada.Set(MediaTypeAttributeKeys.FrameSize, Pack((uint)width, (uint)height));
         entrada.Set(MediaTypeAttributeKeys.InterlaceMode, 2u);
         transform.SetInputType(0, entrada, 0);
