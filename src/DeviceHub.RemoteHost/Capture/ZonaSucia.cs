@@ -25,6 +25,27 @@ namespace DeviceHub.RemoteHost.Capture;
 public static class ZonaSucia
 {
     /// <summary>
+    /// Junta dos cajas en una.
+    ///
+    /// NULL GANA SIEMPRE, porque null significa "toda la pantalla": si una de
+    /// las dos partes no se sabe, el resultado tampoco.
+    /// </summary>
+    public static RawRect? Unir(RawRect? a, RawRect? b)
+    {
+        if (a is not { } x)
+            return null;
+
+        if (b is not { } y)
+            return null;
+
+        return new RawRect(
+            Math.Min(x.Left, y.Left),
+            Math.Min(x.Top, y.Top),
+            Math.Max(x.Right, y.Right),
+            Math.Max(x.Bottom, y.Bottom));
+    }
+
+    /// <summary>
     /// Envuelve todos los rectangulos, alinea a par y recorta a la pantalla.
     ///
     /// `null` significa CONVIERTE TODO, y es lo que se devuelve cuando no hay

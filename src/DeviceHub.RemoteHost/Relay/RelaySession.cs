@@ -437,6 +437,12 @@ public static class RelaySession
 
                 if (reloj.Elapsed >= siguienteAviso)
                 {
+                    // Se leen AQUI y no solo al cerrar. Antes el porcentaje se
+                    // calculaba sobre contadores en cero y salia el 100 % de la
+                    // rama de "todavia no hay datos": justo el numero que haria
+                    // pensar que los rectangulos no estan sirviendo.
+                    _medidas?.Invoke(cuenta);
+
                     Medir(opciones,
                         $"{reloj.Elapsed:mm\\:ss}  capturados {cuenta.Capturados}  codificados {cuenta.Codificados}  " +
                         $"frames enviados {cuenta.Enviados}  chunks {cuenta.Trozos}  " +
@@ -846,6 +852,13 @@ public static class RelaySession
         // El hilo de red entrega los acuses por aqui. No toca los flujos
         // directamente por lo mismo de siempre: cada bomba es la unica dueña de
         // lo suyo, y esto solo abre un semaforo.
+        _medidas = c =>
+        {
+            c.PixelesConvertidos = flujos.Sum(f => f.Codificador.Conversion.Convertidos);
+            c.PixelesTotales = flujos.Sum(f => f.Codificador.Conversion.Totales);
+            c.DescartesEncoder = flujos.Sum(f => f.Codificador.Dropped);
+        };
+
         _acusar = (pantalla, frame) =>
         {
             foreach (var flujo in flujos)
@@ -1061,6 +1074,7 @@ public static class RelaySession
         finally
         {
             _acusar = null;
+            _medidas = null;
 
             // Primero se paran las bombas y se espera: disponer una captura
             // mientras su hilo esta dentro de AcquireNextFrame es como se cuelga
@@ -1345,6 +1359,10 @@ public static class RelaySession
     /// solo acababa en el visor de eventos de la PC de planta. O sea que para
     /// saber si el cuello era la iGPU habia que ir hasta la maquina.</summary>
     private static Action<string>? _medir;
+
+    /// <summary>Refresca los contadores que viven en los flujos. Los pone
+    /// Escritorio, que es quien tiene la lista.</summary>
+    private static Action<Contadores>? _medidas;
 
     /// <summary>
     /// Ejecuta un paso y, si falla, le pone NOMBRE a la excepcion.

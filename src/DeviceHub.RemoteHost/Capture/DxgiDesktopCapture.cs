@@ -220,6 +220,18 @@ public sealed class DxgiDesktopCapture : IScreenCapture
             // adquisicion y ReleaseFrame se los lleva.
             var sucia = desktopChanged ? Zona(duplication, info.TotalMetadataBufferSize) : null;
 
+            // EL PRIMER FRAME DE UN DUPLICADOR NUEVO VA ENTERO.
+            //
+            // Tras un ACCESS_LOST -- cambio de resolucion, UAC, cambio de
+            // usuario -- los rectangulos del duplicador nuevo describen cambios
+            // contra una imagen anterior que este duplicador nunca entrego. Lo
+            // que hubiera cambiado durante el corte se quedaria sin convertir.
+            if (_estrenando)
+            {
+                _estrenando = false;
+                sucia = null;
+            }
+
             return new VideoFrame(
                 texture, Width, Height, ++_frameId, ElapsedUs(), desktopChanged,
                 release: () =>
@@ -248,6 +260,9 @@ public sealed class DxgiDesktopCapture : IScreenCapture
     /// <summary>Frames en los que DXGI no dio metadatos y hubo que convertir la
     /// pantalla entera.</summary>
     public long SinMetadatos { get; private set; }
+
+    /// <summary>Este duplicador todavia no ha entregado ningun frame.</summary>
+    private bool _estrenando = true;
 
     /// <summary>
     /// La caja de lo que cambio, o null si no se sabe.
@@ -416,6 +431,10 @@ public sealed class DxgiDesktopCapture : IScreenCapture
         try
         {
             _duplication = _output.DuplicateOutput(_device);
+
+            // Duplicador nuevo: su primer frame va entero, porque sus
+            // rectangulos hablan contra una imagen que este no entrego nunca.
+            _estrenando = true;
         }
         catch (SharpGenException ex)
         {

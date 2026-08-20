@@ -102,4 +102,41 @@ public class RemoteDirtyTests
     {
         Assert.Null(ZonaSucia.Caja([new RawRect(500, 500, 500, 500)], Ancho, Alto));
     }
+
+    // -- Arrastrar lo que se salto --------------------------------------------
+
+    [Fact]
+    public void Two_boxes_join_into_one()
+    {
+        var caja = ZonaSucia.Unir(new RawRect(10, 10, 20, 20), new RawRect(100, 5, 110, 30));
+
+        Assert.Equal(new RawRect(10, 5, 110, 30), caja);
+    }
+
+    [Fact]
+    public void An_unknown_half_makes_the_whole_unknown()
+    {
+        // EL FANTASMA QUE ESTO EVITA. Un frame descartado porque el codificador
+        // no pedia entrada se llevaba su zona con el, y esos pixeles no volvian
+        // a aparecer en ninguna zona posterior: la del frame siguiente describe
+        // SUS cambios. Quedaban ventanas duplicadas en pantalla.
+        //
+        // Si de lo que se salto no se sabe la zona, lo unico correcto es
+        // convertir todo: null gana.
+        Assert.Null(ZonaSucia.Unir(new RawRect(10, 10, 20, 20), null));
+        Assert.Null(ZonaSucia.Unir(null, new RawRect(10, 10, 20, 20)));
+        Assert.Null(ZonaSucia.Unir(null, null));
+    }
+
+    [Fact]
+    public void Joining_a_chain_of_skipped_frames_keeps_them_all()
+    {
+        // Tres frames saltados seguidos: la caja final tiene que cubrir los tres.
+        RawRect? acumulado = new RawRect(100, 100, 120, 120);
+
+        acumulado = ZonaSucia.Unir(acumulado, new RawRect(500, 40, 520, 60));
+        acumulado = ZonaSucia.Unir(acumulado, new RawRect(300, 700, 310, 900));
+
+        Assert.Equal(new RawRect(100, 40, 520, 900), acumulado);
+    }
 }
