@@ -77,6 +77,29 @@ public class RemoteOutboxTests
     }
 
     [Fact]
+    public void Acks_are_not_input()
+    {
+        // La cifra de la barra existe para responder "se ve pero no se puede
+        // controlar: cual de las dos mitades falla". Con los acuses dentro no
+        // podia: son dos por frame, o sea 226 000 en una hora, y los 5 000
+        // eventos del tecnico se perdian ahi dentro. Subia sola con el raton
+        // quieto.
+        var buzon = new BuzonDeSalida();
+
+        for (var i = 0; i < 100; i++)
+            buzon.Encolar(Acuse((ulong)i));
+
+        buzon.Encolar(Tecla(0x41, true));
+        buzon.Encolar(Mover(0.5, 0.5));
+
+        Assert.Equal(2, buzon.Entrada);
+
+        // 101 y no 102: el movimiento se cuenta como enviado cuando SALE, que es
+        // lo unico honesto -- hasta entonces todavia puede fundirse con otro.
+        Assert.Equal(101, buzon.Enviados);
+    }
+
+    [Fact]
     public void Keys_are_never_coalesced()
     {
         var buzon = new BuzonDeSalida();

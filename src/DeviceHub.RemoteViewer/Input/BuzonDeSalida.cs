@@ -60,6 +60,17 @@ public sealed class BuzonDeSalida
 
     public long Enviados { get; private set; }
 
+    /// <summary>
+    /// De los enviados, cuantos eran ENTRADA de verdad.
+    ///
+    /// Aparte porque la cifra de la barra existe para responder "se ve pero no
+    /// se puede controlar: cual de las dos mitades falla", y no podia: por aqui
+    /// pasan dos acuses por cada frame, asi que en una hora los 5 000 eventos
+    /// del tecnico se escondian dentro de 232 000 paquetes. La cifra subia sola
+    /// aunque el raton no se moviera.
+    /// </summary>
+    public long Entrada { get; private set; }
+
     /// <summary>Criticos que no cupieron. Tiene que quedarse en cero: si sube,
     /// algo hundido pudo quedarse sin su KeyUp.</summary>
     public long Perdidos { get; private set; }
@@ -101,6 +112,8 @@ public sealed class BuzonDeSalida
 
         if (EsMovimiento(paquete))
         {
+            Entrada++;
+
             if (Interlocked.Exchange(ref _movimiento, sobre) is not null)
             {
                 // YA HABIA UNO, o sea que su golpecito sigue en la cola sin
@@ -120,6 +133,10 @@ public sealed class BuzonDeSalida
         if (_cola.Writer.TryWrite(sobre))
         {
             Enviados++;
+
+            if (paquete.PayloadCase == RemotePacket.PayloadOneofCase.Input)
+                Entrada++;
+
             return true;
         }
 

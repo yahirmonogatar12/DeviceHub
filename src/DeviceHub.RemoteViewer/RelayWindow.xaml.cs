@@ -792,9 +792,10 @@ public partial class RelayWindow : Window
                         // La entrada enviada va en la barra a proposito: cuando
                         // el video se ve pero no se puede controlar, esta cifra
                         // dice de un vistazo cual de las dos mitades falla.
-                        $"entrada {_salida.Enviados}" +
+                        $"entrada {_salida.Entrada}" +
                         (_salida.Perdidos == 0 ? string.Empty : $" ({_salida.Perdidos} PERDIDOS)") +
-                        $"   movimientos fundidos {_salida.Fundidos}   " +
+                        (_salida.Caducados == 0 ? string.Empty : $" ({_salida.Caducados} caducados)") +
+                        $"   paquetes {_salida.Enviados}   movimientos fundidos {_salida.Fundidos}   " +
                         $"acuses {_acuses}/{_acusesPintados}   IDR pedidos {_idrPedidos}   " +
                         (_grabacion is null ? string.Empty : $"grabando {_grabados} frames   ") +
                         $"incompletos {montadores.Values.Sum(m => m.Dropped)}   " +

@@ -536,7 +536,13 @@ public static class RelaySession
                     _medidas?.Invoke(cuenta);
 
                     Medir(opciones,
-                        $"{reloj.Elapsed:mm\\:ss}  capturados {cuenta.Capturados}  codificados {cuenta.Codificados}  " +
+                        // HORAS TOTALES, no mm:ss. Con "mm:ss" un TimeSpan de
+                        // 1:03:52 sale como "03:52": las horas no caben en el
+                        // formato y se TIRAN. En una corrida larga la linea del
+                        // host parece reiniciarse cada hora -- que es justo lo
+                        // que esa corrida esta midiendo.
+                        $"{(int)reloj.Elapsed.TotalHours:00}:{reloj.Elapsed:mm\\:ss}  " +
+                        $"capturados {cuenta.Capturados}  codificados {cuenta.Codificados}  " +
                         $"frames enviados {cuenta.Enviados}  chunks {cuenta.Trozos}  " +
                         $"{cuenta.Bytes * 8 / reloj.Elapsed.TotalSeconds / 1_000_000:0.00} Mbps  " +
                         $"keyframes {cuenta.Claves}  config {cuenta.ConfigVersion}  cola {enCola}  " +
@@ -549,7 +555,8 @@ public static class RelaySession
                         // la entrada llega de verdad al otro lado o se la traga
                         // el escritorio equivocado.
                         $"descartes {cuenta.DescartesEncoder}+{cuenta.DescartesCaptura}  " +
-                        $"entrada {_entrada?.Applied ?? 0}/{_entrada?.Rejected ?? 0}");
+                        $"entrada {_aplicadas + (_entrada?.Applied ?? 0)}/" +
+                        $"{_rechazadas + (_entrada?.Rejected ?? 0)}");
 
                     // El bitrate se DECIDE aqui, donde se ve la cola, y se
                     // APLICA en el hilo de captura. Cada 2 s y no por frame: un
@@ -978,7 +985,7 @@ public static class RelaySession
         // composicion. Con una sola pantalla el lienzo es esa pantalla.
         var lienzo = flujos[0].Lienzo;
 
-        _entrada = new InputInjector(lienzo.Ancho, lienzo.Alto, lienzo.X, lienzo.Y);
+        RelevarInyector(new InputInjector(lienzo.Ancho, lienzo.Alto, lienzo.X, lienzo.Y));
 
         // El hilo de red entrega los acuses por aqui. No toca los flujos
         // directamente por lo mismo de siempre: cada bomba es la unica dueña de
@@ -1942,6 +1949,27 @@ public static class RelaySession
         => Stopwatch.GetTimestamp() * 1_000_000L / Stopwatch.Frequency;
 
     private static InputInjector? _entrada;
+
+    /// <summary>
+    /// Entrada aplicada y rechazada por los inyectores ANTERIORES.
+    ///
+    /// El inyector se rehace en cada salto de escritorio y en cada cambio de
+    /// pantalla, y con el se iban sus cuentas a cero. Esa cifra es la que
+    /// responde "la entrada llega de verdad al otro lado", y en una sesion larga
+    /// -- donde mas falta hace -- contaba solo desde el ultimo cambio.
+    /// </summary>
+    private static long _aplicadas, _rechazadas;
+
+    private static void RelevarInyector(InputInjector nuevo)
+    {
+        if (_entrada is { } viejo)
+        {
+            _aplicadas += viejo.Applied;
+            _rechazadas += viejo.Rejected;
+        }
+
+        _entrada = nuevo;
+    }
 
     /// <summary>
     /// Abre la captura, con GDI de respaldo cuando DXGI se niega.
