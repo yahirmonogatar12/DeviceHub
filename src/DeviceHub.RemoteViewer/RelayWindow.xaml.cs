@@ -498,7 +498,12 @@ public partial class RelayWindow : Window
                         // lo compone el DWM hasta que llega un WM_SIZE, y al
                         // cambiar de monitor la ventana no cambia de tamano: el
                         // WM_SIZE no llega y la imagen se queda clavada.
-                        presentador ??= new VideoPresenter(device, hwnd, ancho, alto);
+                        if (presentador is null)
+                        {
+                            presentador = new VideoPresenter(device, hwnd, ancho, alto);
+                            Nota(presentador.Diagnostico);
+                        }
+
                         presentador.Redimensionar(ancho, alto);
 
                         H264Decoder nuevoDecoder;

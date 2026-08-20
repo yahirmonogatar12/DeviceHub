@@ -39,6 +39,30 @@ public sealed class VideoPresenter : IDisposable
     /// <summary>Donde se acumula lo que pinta cada pantalla.</summary>
     private ID3D11Texture2D _lienzo;
 
+    private readonly bool _desgarroPermitido;
+    private readonly SwapChainFlags _banderas;
+    private uint _colaDeFrames;
+
+    /// <summary>Que quedo puesto de verdad, para la barra del tecnico.</summary>
+    public string Diagnostico { get; } = string.Empty;
+
+    private static IDXGISwapChain1 CrearCadena(
+        IDXGIFactory2 factory, ID3D11Device device, IntPtr hwnd,
+        int ancho, int alto, SwapChainFlags banderas)
+        => factory.CreateSwapChainForHwnd(device, hwnd, new SwapChainDescription1
+        {
+            Width = (uint)ancho,
+            Height = (uint)alto,
+            Format = Format.B8G8R8A8_UNorm,
+            BufferCount = 2,
+            BufferUsage = Usage.RenderTargetOutput,
+            SwapEffect = SwapEffect.FlipDiscard,
+            Scaling = Scaling.Stretch,
+            AlphaMode = AlphaMode.Ignore,
+            SampleDescription = new SampleDescription(1, 0),
+            Flags = banderas
+        });
+
     /// <summary>Un procesador de video POR PANTALLA: cada uno se crea con el
     /// tamano de SU flujo, y ese tamano forma parte de su configuracion.</summary>
     private readonly Dictionary<uint, Pantalla> _pantallas = [];
@@ -85,23 +109,68 @@ public sealed class VideoPresenter : IDisposable
         using var adapter = dxgiDevice.GetAdapter();
         using var factory = adapter.GetParent<IDXGIFactory2>();
 
+        // UN FRAME EN COLA, NO TRES.
+        //
+        // Despues de Present hay otra cola que no es nuestra: DXGI guarda hasta
+        // TRES frames antes de pasarlos al DWM. Con eso, el visor puede creer
+        // que ya pinto el 102 mientras el tecnico sigue viendo el 100 -- dos
+        // frames de retraso que no salen en ninguna de nuestras medidas, porque
+        // ocurren despues de que soltemos el frame.
+        //
+        // A 60 Hz son 33 ms escondidos. Mas de lo que cuesta la red entera en
+        // esta planta.
+        var colaAntes = 0u;
+
+        using (var latencia = _device.QueryInterfaceOrNull<IDXGIDevice1>())
+        {
+            if (latencia is not null)
+            {
+                latencia.GetMaximumFrameLatency(out colaAntes);
+                latencia.SetMaximumFrameLatency(1);
+                latencia.GetMaximumFrameLatency(out _colaDeFrames);
+            }
+        }
+
+
         // El swapchain se crea del tamano del LIENZO y no se recrea nunca:
         // Scaling.Stretch deja que DXGI escale al tamano de la ventana, y
         // ResizeBuffers se encarga de los cambios de resolucion. Un swapchain
         // NUEVO sobre el mismo HWND no lo compone el DWM hasta que llega un
         // WM_SIZE, y esa fue la imagen congelada al cambiar de monitor.
-        _swapChain = factory.CreateSwapChainForHwnd(_device, hwnd, new SwapChainDescription1
+        // Y QUE NO ESPERE AL RETRAZO VERTICAL.
+        //
+        // Present(0) por si solo no basta: en el modelo flip, sin permitir
+        // desgarro, DXGI sigue sincronizando el volteo con el monitor. Son otros
+        // 16 ms a 60 Hz, y el desgarro en una pantalla remota se ve menos que el
+        // retraso: lo que se mira son ventanas y texto, no panoramicas.
+        //
+        // SE INTENTA EN VEZ DE PREGUNTAR. CheckFeatureSupport devuelve el
+        // resultado por un buffer de salida y este proyecto no compila con
+        // punteros -- es el precedente de la Fase 2 -- asi que preguntarlo
+        // exigiria confiar en un detalle de marshalling que, si falla, deja el
+        // desgarro apagado en silencio y para siempre. Crear el swapchain no
+        // deja lugar a dudas: nace o no nace.
+        _banderas = SwapChainFlags.AllowTearing;
+
+        try
         {
-            Width = (uint)ancho,
-            Height = (uint)alto,
-            Format = Format.B8G8R8A8_UNorm,
-            BufferCount = 2,
-            BufferUsage = Usage.RenderTargetOutput,
-            SwapEffect = SwapEffect.FlipDiscard,
-            Scaling = Scaling.Stretch,
-            AlphaMode = AlphaMode.Ignore,
-            SampleDescription = new SampleDescription(1, 0)
-        });
+            _swapChain = CrearCadena(factory, _device, hwnd, ancho, alto, _banderas);
+        }
+        catch (SharpGen.Runtime.SharpGenException)
+        {
+            _banderas = SwapChainFlags.None;
+            _swapChain = CrearCadena(factory, _device, hwnd, ancho, alto, _banderas);
+        }
+
+        _desgarroPermitido = _banderas == SwapChainFlags.AllowTearing;
+
+        // Se cuenta lo que de verdad quedo puesto, no lo que se intento. Las dos
+        // cosas dependen del driver y del Windows de la PC del tecnico, y
+        // apagadas en silencio son invisibles: la sesion va bien, solo que con
+        // dos o tres frames de retraso que ninguna medida nuestra recoge.
+        Diagnostico =
+            $"cola DXGI {colaAntes} -> {_colaDeFrames}, " +
+            $"desgarro {(_desgarroPermitido ? "permitido" : "no disponible")}";
 
         // Que Alt+Enter no se lleve la ventana a pantalla completa por su cuenta.
         factory.MakeWindowAssociation(hwnd, WindowAssociationFlags.IgnoreAll);
@@ -144,7 +213,7 @@ public sealed class VideoPresenter : IDisposable
         _lienzo.Dispose();
         _lienzo = CrearLienzo(ancho, alto);
 
-        _swapChain.ResizeBuffers(2, (uint)ancho, (uint)alto, Format.B8G8R8A8_UNorm, SwapChainFlags.None);
+        _swapChain.ResizeBuffers(2, (uint)ancho, (uint)alto, Format.B8G8R8A8_UNorm, _banderas);
     }
 
     /// <summary>
@@ -258,9 +327,10 @@ public sealed class VideoPresenter : IDisposable
         if (guardarEn is not null)
             Guardar(trasera, guardarEn);
 
-        // Intervalo 0: el ritmo lo marca el reproductor, no el monitor. Esperar
-        // al vsync aqui sumaria hasta 16 ms de retraso a cada frame.
-        _swapChain.Present(0, PresentFlags.None);
+        // Intervalo 0 Y permitiendo desgarro: el ritmo lo marca lo que llega del
+        // host, no el monitor del tecnico. Solo con el intervalo a 0, el modelo
+        // flip sigue esperando al retrazo vertical para voltear.
+        _swapChain.Present(0, _desgarroPermitido ? PresentFlags.AllowTearing : PresentFlags.None);
     }
 
     /// <summary>Textura de lectura para las capturas. Se crea la primera vez y se
