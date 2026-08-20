@@ -11,7 +11,6 @@ using Contracts = DeviceHub.Remote.Contracts;
 using DeviceHub.Remote.Contracts;
 using DeviceHub.RemoteViewer.Decode;
 using DeviceHub.RemoteViewer.Input;
-using DeviceHub.RemoteViewer.Input;
 using DeviceHub.RemoteViewer.Render;
 using Grpc.Core;
 using Grpc.Net.Client;
@@ -102,8 +101,25 @@ public partial class RelayWindow : Window
         // se tragaria la tecla Windows del tecnico tambien cuando esta en sus
         // propias aplicaciones, que es lo contrario de lo que se quiere.
         Activated += (_, _) => EngancharTeclado();
-        Deactivated += (_, _) => SoltarTeclado();
-        Closed += (_, _) => SoltarTeclado();
+
+        // AL PERDER EL FOCO SE SUELTA EN LOS DOS LADOS.
+        //
+        // Soltar solo el gancho local dejaba teclas pegadas en la PC remota:
+        // mantienes Ctrl, haces clic en otra ventana tuya, sueltas Ctrl -- y ese
+        // KeyUp ya no lo ve el visor. El host recibio el Down y nunca recibe el
+        // Up, y como la conexion sigue viva no entra nada de la logica de
+        // reconexion. Ese Ctrl se queda hundido hasta que alguien lo note.
+        Deactivated += (_, _) =>
+        {
+            SoltarTeclado();
+            PedirSoltarEntrada();
+        };
+
+        Closed += (_, _) =>
+        {
+            SoltarTeclado();
+            PedirSoltarEntrada();
+        };
     }
 
     /// <summary>
@@ -333,7 +349,11 @@ public partial class RelayWindow : Window
                 Capabilities = new RemoteCapabilities
                 {
                     MaxProtocolVersion = RemoteSessionProtocol.Version,
-                    Codecs = { VideoCodec.H264 },
+                    // LOS DOS, y ahora es verdad: el visor monta el
+                    // descodificador que diga VideoConfig. Anunciar solo H.264
+                    // mientras se descodifica H.265 es un contrato que miente, y
+                    // muerde el dia que el relay negocie de verdad con esto.
+                    Codecs = { VideoCodec.H264, VideoCodec.H265 },
                     SupportsCursor = true,
                     SupportsInput = true
                 }

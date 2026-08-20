@@ -85,7 +85,7 @@ public sealed class RemoteRelayGrpcService(
 
         // AUTENTICACION. O un ticket de un solo uso, o el token de reconexion que
         // este servidor emitio antes. Nada mas entra.
-        var (autorizado, motivoAuth, token, hasta) = Autenticar(hola, papel, conexion);
+        var (autorizado, motivoAuth, token, hasta, usuario) = Autenticar(hola, papel, conexion);
 
         if (!autorizado)
         {
@@ -125,7 +125,7 @@ public sealed class RemoteRelayGrpcService(
         // REQUESTED y STARTED solo dicen que se pidio permiso.
         await AuditarAsync(
             DeviceHub.Server.Data.AuditActions.RemoteConnected,
-            hola.Hello.MachineId, hola.Hello.MachineId,
+            hola.Hello.MachineId, usuario,
             $"sesion {sesion.Id} papel {papel} estado {sesion.State}", contexto.Peer);
 
         var bomba = conexion.PumpAsync(new StreamWriter(salida), cancelacion);
@@ -220,7 +220,7 @@ public sealed class RemoteRelayGrpcService(
                 cerroOrdenado
                     ? DeviceHub.Server.Data.AuditActions.RemoteEnd
                     : DeviceHub.Server.Data.AuditActions.RemoteFailed,
-                hola.Hello.MachineId, hola.Hello.MachineId,
+                hola.Hello.MachineId, usuario,
                 $"sesion {sesion.Id} papel {papel} motivo {motivo} {detalle}".TrimEnd(),
                 contexto.Peer);
 
@@ -278,7 +278,18 @@ public sealed class RemoteRelayGrpcService(
     /// adivinables, y aceptarlos convertiria la reconexion en una puerta sin
     /// llave.
     /// </summary>
-    private (bool Ok, string Motivo, string Token, DateTimeOffset Hasta) Autenticar(
+    /// <param name="Usuario">
+    /// QUIEN abrio la sesion, no contra que maquina.
+    ///
+    /// Salia de aqui y se tiraba, y la auditoria acababa registrando el
+    /// machine_id en la columna del usuario: una fila que dice que la maquina se
+    /// conecto a si misma. En un registro que existe para responder "quien vio
+    /// esa pantalla", eso es peor que no tener la fila.
+    ///
+    /// Vacio en el host: la sesion la abre un tecnico, y el host es la PC
+    /// controlada, que no es nadie.
+    /// </param>
+    private (bool Ok, string Motivo, string Token, DateTimeOffset Hasta, string Usuario) Autenticar(
         RemotePacket paquete, RemoteRole papel, RelayConnection conexion)
     {
         var hola = paquete.Hello;
@@ -288,20 +299,20 @@ public sealed class RemoteRelayGrpcService(
             var veredicto = leases.TryReconnect(hola.ReconnectToken, papel, paquete.SessionId, out var lease);
 
             if (veredicto != LeaseRejection.Accepted)
-                return (false, veredicto.ToString(), string.Empty, default);
+                return (false, veredicto.ToString(), string.Empty, default, string.Empty);
 
             // Se ROTA: el token que acaba de usarse deja de valer aqui mismo.
             var (nuevo, renovado) = leases.Establish(
                 lease!.SessionId, papel, lease.MachineId, lease.UserId, conexion);
 
-            return (true, "reconexion", nuevo, renovado.ReconnectUntil);
+            return (true, "reconexion", nuevo, renovado.ReconnectUntil, lease.UserId ?? string.Empty);
         }
 
         var rechazo = tickets.TryConsume(
             hola.Ticket, papel, paquete.SessionId, hola.MachineId, out var ticket);
 
         if (rechazo != TicketRejection.Accepted)
-            return (false, rechazo.ToString(), string.Empty, default);
+            return (false, rechazo.ToString(), string.Empty, default, string.Empty);
 
         // El ticket queda consumido para siempre. A partir de aqui la
         // reconexion la sostiene el lease: convertir el ticket de arranque en
@@ -309,7 +320,7 @@ public sealed class RemoteRelayGrpcService(
         var (emitido, primero) = leases.Establish(
             ticket!.SessionId, papel, ticket.TargetMachineId, ticket.UserId, conexion);
 
-        return (true, "ticket", emitido, primero.ReconnectUntil);
+        return (true, "ticket", emitido, primero.ReconnectUntil, ticket.UserId ?? string.Empty);
     }
 
     // -- Validacion ---------------------------------------------------------

@@ -55,7 +55,19 @@ public sealed class BuzonDeSalida
     /// <summary>Se levanta cuando hay que pedirle al host que suelte lo hundido.
     /// NO se encola: el motivo mas comun para necesitarlo es que la cola acaba
     /// de fallar, y mandarlo por ahi seria pedirselo a quien no puede.</summary>
-    public void PedirSoltar() => Interlocked.Exchange(ref _soltarPendiente, 1);
+    public void PedirSoltar()
+    {
+        Interlocked.Exchange(ref _soltarPendiente, 1);
+
+        // Y SE DESPIERTA AL HILO DE ENVIO. EsperarAsync solo mira la cola, asi
+        // que una bandera a secas no lo saca de la espera: el rescate se
+        // quedaba ahi hasta el siguiente latido, o sea hasta un segundo.
+        //
+        // Se nota justo donde mas duele, en Reiniciar: vacia la cola, tira el
+        // movimiento y pide soltar -- sobre una cola que acaba de quedarse
+        // vacia, asi que no hay nada que despierte a nadie.
+        _cola.Writer.TryWrite(Golpecito);
+    }
 
     public bool Encolar(RemotePacket paquete)
     {

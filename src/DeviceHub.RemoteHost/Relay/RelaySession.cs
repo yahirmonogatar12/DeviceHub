@@ -202,7 +202,7 @@ public static class RelaySession
                 Capabilities = new RemoteCapabilities
                 {
                     MaxProtocolVersion = RemoteSessionProtocol.Version,
-                    Codecs = { VideoCodec.H264 },
+                    Codecs = { VideoCodec.H264, VideoCodec.H265 },
                     SupportsCursor = true,
                     SupportsInput = true
                 }
@@ -276,6 +276,11 @@ public static class RelaySession
     /// otros dos modos siguen ahi para una red que de verdad no de.
     /// </summary>
     private static double _calidad = ControlBitrate.CalidadFiel;
+
+    /// <summary>Codec de arranque. H.265 por defecto: misma calidad con un
+    /// 30-40 % menos de bits, y es lo que usa RustDesk en esta planta. Si la GPU
+    /// no lo tiene, Codificar se cae a H.264 sola y lo dice.</summary>
+    private static readonly VideoCodec CodecPorDefecto = VideoCodec.H265;
 
     /// <summary>Numeracion de frames de toda la SESION. No se reinicia al rehacer
     /// la captura: ver el comentario en la llamada a Split.</summary>
@@ -847,7 +852,7 @@ public static class RelaySession
         // vuelta fija _codec para que la comparacion de mas abajo no se dispare
         // sola en el primer medio segundo.
         if (_codec == VideoCodec.Unspecified)
-            _codec = opciones.UsarH265 ? VideoCodec.H265 : VideoCodec.H264;
+            _codec = opciones.UsarH265 ? VideoCodec.H265 : CodecPorDefecto;
 
         var codecPedido = _codec;
 
@@ -1852,10 +1857,19 @@ public static class RelaySession
         if (salida.TryWrite(envoltorio))
             return;
 
+        // EL PLAZO TIENE QUE LLEGARLE AL WriteAsync, no solo al Wait.
+        //
+        // Con Wait(2s) el que se rendia era el que esperaba: el WriteAsync
+        // seguia vivo por dentro, con su token intacto, aguardando hueco. Se
+        // creia haber desistido y en realidad quedaba un escritor pendiente, y
+        // varios podian acumularse y salir todos tarde y a destiempo.
+        using var plazo = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        plazo.CancelAfter(TimeSpan.FromSeconds(2));
+
         try
         {
-            salida.WriteAsync(envoltorio, cancellationToken)
-                .AsTask().Wait(TimeSpan.FromSeconds(2), cancellationToken);
+            salida.WriteAsync(envoltorio, plazo.Token).AsTask().GetAwaiter().GetResult();
         }
         catch (OperationCanceledException)
         {

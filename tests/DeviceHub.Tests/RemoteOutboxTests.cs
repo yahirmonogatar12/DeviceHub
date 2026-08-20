@@ -138,4 +138,42 @@ public class RemoteOutboxTests
         Assert.Single(salieron);
         Assert.Equal(HostAction.Types.Kind.HostActionReleaseInput, salieron[0].HostAction.Kind);
     }
+
+    [Fact]
+    public async Task Asking_for_a_release_wakes_the_sender()
+    {
+        // ESTO NO LO COGIAN LAS OTRAS PRUEBAS porque llaman a TryTomar
+        // directamente, y el hilo de envio real espera en EsperarAsync.
+        //
+        // PedirSoltar solo levantaba una bandera, y EsperarAsync solo mira la
+        // cola: el rescate se quedaba dormido hasta el siguiente latido, o sea
+        // hasta un segundo. Y se notaba justo en Reiniciar, que deja la cola
+        // vacia antes de pedirlo.
+        var buzon = new BuzonDeSalida();
+
+        buzon.PedirSoltar();
+
+        var espera = buzon.EsperarAsync(CancellationToken.None).AsTask();
+
+        Assert.True(espera.IsCompleted, "PedirSoltar tiene que despertar al hilo de envio");
+        Assert.True(await espera);
+    }
+
+    [Fact]
+    public async Task Restarting_also_wakes_the_sender()
+    {
+        var buzon = new BuzonDeSalida();
+
+        buzon.Encolar(Tecla(0x41, true));
+        buzon.Reiniciar();
+
+        var espera = buzon.EsperarAsync(CancellationToken.None).AsTask();
+
+        Assert.True(espera.IsCompleted);
+        Assert.True(await espera);
+
+        // Y lo que sale es el rescate, no lo viejo.
+        Assert.True(buzon.TryTomar(Sesion, out var primero));
+        Assert.Equal(HostAction.Types.Kind.HostActionReleaseInput, primero.HostAction.Kind);
+    }
 }
