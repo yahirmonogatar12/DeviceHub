@@ -52,20 +52,57 @@ No se encontro Inno Setup 6. Instalalo con:
 if (-not $SkipPublish) {
     Write-Host "Publicando componentes $Version..." -ForegroundColor Cyan
 
+    # RemoteHost va con el agente y RemoteViewer con el dashboard, en la MISMA
+    # carpeta: asi comparten los archivos del runtime en vez de duplicar .NET
+    # entero. Mismo criterio que deploy\publish.ps1.
+    #
+    # INVARIANTE: quienes comparten carpeta van con el mismo RID, el mismo
+    # TargetFramework y el mismo self-contained. Aqui esta garantizado porque el
+    # bucle usa los mismos parametros para todos. Publicar uno aparte con otra
+    # configuracion deja los archivos del runtime sobreescritos y una app que
+    # falla al arrancar sin que el error diga por que.
     $proyectos = @{
-        'server'    = 'src\DeviceHub.Server'
-        'agent'     = 'src\DeviceHub.Agent'
-        'dashboard' = 'src\DeviceHub.Dashboard'
+        'server'    = @('src\DeviceHub.Server')
+        'agent'     = @('src\DeviceHub.Agent', 'src\DeviceHub.RemoteHost')
+        'dashboard' = @('src\DeviceHub.Dashboard', 'src\DeviceHub.RemoteViewer')
     }
 
     foreach ($nombre in $proyectos.Keys) {
-        Write-Host "  $nombre" -ForegroundColor DarkGray
+        # Se vacia la carpeta ANTES de publicar en ella, y una sola vez para los
+        # dos proyectos que la comparten. `dotnet publish` sobreescribe lo que
+        # vuelve a generar, pero no borra lo que dejo de existir: un DLL de un
+        # proyecto renombrado se quedaria ahi y acabaria dentro del instalador,
+        # porque los .iss empaquetan la carpeta entera con comodin.
+        $destino = Join-Path $root "artifacts\$nombre"
 
-        dotnet publish (Join-Path $root $proyectos[$nombre]) `
-            --configuration Release --runtime win-x64 --self-contained true `
-            -p:Version=$Version --output (Join-Path $root "artifacts\$nombre") --nologo -v q
+        if (Test-Path $destino) {
+            try {
+                Remove-Item "$destino\*" -Recurse -Force -ErrorAction Stop
+            }
+            catch {
+                # El error de Windows nombra el archivo pero no dice que hacer, y
+                # casi siempre es una de estas apps abierta desde artifacts.
+                throw @"
+No se pudo vaciar $destino porque algo lo tiene abierto.
 
-        if ($LASTEXITCODE -ne 0) { throw "Fallo la publicacion de $nombre" }
+  $($_.Exception.Message)
+
+Cierra lo que este corriendo desde ahi y reintenta:
+
+  Get-Process DeviceHub.Agent, DeviceHub.Dashboard, DeviceHub.RemoteHost, DeviceHub.RemoteViewer -ErrorAction SilentlyContinue | Stop-Process -Force
+"@
+            }
+        }
+
+        foreach ($proyecto in $proyectos[$nombre]) {
+            Write-Host "  $proyecto" -ForegroundColor DarkGray
+
+            dotnet publish (Join-Path $root $proyecto) `
+                --configuration Release --runtime win-x64 --self-contained true `
+                -p:Version=$Version --output (Join-Path $root "artifacts\$nombre") --nologo -v q
+
+            if ($LASTEXITCODE -ne 0) { throw "Fallo la publicacion de $proyecto" }
+        }
     }
 }
 

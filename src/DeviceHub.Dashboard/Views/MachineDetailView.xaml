@@ -48,12 +48,25 @@
 
                 <!-- Acciones -->
                 <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
-                    <Button Content="&#x1F5A5;  Controlar PC" Style="{StaticResource BtnPrimary}"
+                    <!-- Dos motores, dos botones. Lo unico que el dashboard
+                         sabe de ellos es su NOMBRE: como se lanza cada uno vive
+                         en el servidor, que es la frontera que importa.
+
+                         RustDesk se oculta si esa PC no lo tiene instalado;
+                         el motor propio no necesita nada alli. -->
+                    <Button Content="&#x1F5A5;  Controlar (DeviceHub)" Style="{StaticResource BtnPrimary}"
                             Margin="0,0,8,0" Command="{Binding RemoteControlCommand}"
+                            CommandParameter="devicehub" />
+
+                    <Button Content="&#x1F5A5;  Controlar (RustDesk)" Style="{StaticResource BtnGhost}"
+                            Margin="0,0,8,0" Command="{Binding RemoteControlCommand}"
+                            CommandParameter="rustdesk"
                             Visibility="{Binding SelectedMachine.RemoteAvailable, Converter={StaticResource BoolToVis}}" />
                     <Button Content="Cerrar remoto" Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
-                            Command="{Binding EndRemoteSessionCommand}"
-                            Visibility="{Binding SelectedMachine.RemoteAvailable, Converter={StaticResource BoolToVis}}" />
+                            Command="{Binding EndRemoteSessionCommand}" />
+
+                    <Button Content="&#x25B6;  Terminal" Style="{StaticResource BtnGhost}"
+                            Command="{Binding OpenTerminalCommand}" Margin="0,0,8,0" />
 
                     <Button Content="Ping" Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
                             Command="{Binding PingCommand}" />
@@ -63,6 +76,11 @@
                         <MenuItem Header="Mas acciones  &#x25BE;" Style="{StaticResource MenuAccionesRaiz}">
                             <MenuItem Header="Reiniciar PC" Style="{StaticResource MenuAccion}"
                                       Command="{Binding RestartMachineCommand}" />
+                            <!-- Para una PC que dejo de conectar porque su token
+                                 ya no vale. Aqui dentro y no en la fila de
+                                 botones: no es una accion de todos los dias. -->
+                            <MenuItem Header="Reasociar maquina" Style="{StaticResource MenuAccion}"
+                                      Command="{Binding AuthorizeReenrollmentCommand}" />
                             <Separator Margin="8,4" Background="{StaticResource Line}" />
                             <MenuItem Header="Apagar PC" Style="{StaticResource MenuAccionPeligro}"
                                       Command="{Binding ShutdownMachineCommand}" />

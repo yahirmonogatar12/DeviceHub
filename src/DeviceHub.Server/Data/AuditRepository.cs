@@ -13,10 +13,24 @@ public static class AuditActions
     public const string ServiceRestart = "SERVICE_RESTART";
     public const string MachineReboot = "MACHINE_REBOOT";
     public const string MachineShutdown = "MACHINE_SHUTDOWN";
+    public const string RemoteRequested = "REMOTE_SESSION_REQUESTED";
     public const string RemoteStart = "REMOTE_SESSION_STARTED";
     public const string RemoteEnd = "REMOTE_SESSION_ENDED";
+
+    /// <summary>
+    /// Fase 17. Los dos que faltaban, y no son adorno: REQUESTED y STARTED los
+    /// escribe quien AUTORIZA, asi que solo prueban que alguien pidio permiso.
+    /// CONNECTED lo escribe el relay cuando los dos extremos estan de verdad
+    /// hablando -- es la unica linea que demuestra que alguien vio esa pantalla.
+    /// </summary>
+    public const string RemoteConnected = "REMOTE_SESSION_CONNECTED";
+
+    /// <summary>Una sesion que murio sin cierre ordenado. Sin esto, una sesion
+    /// rota y una cerrada a mano son indistinguibles en la auditoria.</summary>
+    public const string RemoteFailed = "REMOTE_SESSION_FAILED";
     public const string MachineMoved = "MACHINE_MOVED";
     public const string IdentityResolved = "IDENTITY_CONFLICT_RESOLVED";
+    public const string ReenrollmentAuthorized = "REENROLLMENT_AUTHORIZED";
     public const string EnrollmentCodeCreated = "ENROLLMENT_CODE_CREATED";
     public const string LoginFailed = "LOGIN_FAILED";
     public const string LoginThrottled = "LOGIN_THROTTLED";

@@ -55,6 +55,11 @@ builder.Services.AddSingleton(sp => new UpdateService(
 // Unico punto donde el agente elige motor remoto. Todo lo especifico de RustDesk
 // (rutas, TOML, --get-id) vive dentro de esta implementacion.
 builder.Services.AddSingleton<IRemoteAgentDetector, RustDeskDetector>();
+
+// Fase 7: un solo lanzador para todo el proceso. Singleton porque su estado ES
+// "que host hay corriendo ahora mismo", y de eso solo puede haber una respuesta.
+builder.Services.AddSingleton<InteractiveSessionLauncher>();
+
 builder.Services.AddSingleton(sp => new MachineIdentity(
     sp.GetRequiredService<IOptions<AgentOptions>>().Value.DataDirectory,
     sp.GetRequiredService<ILogger<MachineIdentity>>()));

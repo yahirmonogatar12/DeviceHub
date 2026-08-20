@@ -319,6 +319,27 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Fase 23. Los RPC de terminal existian desde la Fase 15 y no habia forma de
+    /// usarlos: no habia terminal en ninguna interfaz.
+    ///
+    /// Va en el dashboard y no en el visor remoto porque la terminal se autentica
+    /// con el JWT del tecnico contra AdminService, y el visor solo habla con el
+    /// relay -- darle credenciales de administrador seria ampliar lo que puede
+    /// hacer un proceso que ya recibe datos de la PC controlada.
+    /// </summary>
+    [RelayCommand]
+    private void OpenTerminal()
+    {
+        if (SelectedMachine is null)
+            return;
+
+        new Views.TerminalWindow(_client, SelectedMachine.MachineId, SelectedMachine.MachineCode)
+        {
+            Owner = Application.Current.MainWindow
+        }.Show();
+    }
+
     [RelayCommand]
     private Task ApproveHardwareAsync()
         => ResolveAsync(ResolveConflictRequest.Types.Resolution.ApproveNewHardware,
@@ -328,6 +349,38 @@ public sealed partial class MainViewModel : ObservableObject
     private Task IssueNewIdentityAsync()
         => ResolveAsync(ResolveConflictRequest.Types.Resolution.IssueNewIdentity,
             "Se invalidara el token: AMBOS agentes necesitaran un recovery code. Continuar?");
+
+    /// <summary>
+    /// La salida cuando una PC dejo de conectar porque su token ya no vale.
+    ///
+    /// Antes esto obligaba a ir fisicamente hasta la maquina a editar
+    /// machine.json. El agente lo intenta cada minuto por su cuenta, asi que
+    /// entra sola en cuanto se pulsa aqui.
+    /// </summary>
+    [RelayCommand]
+    private async Task AuthorizeReenrollmentAsync()
+    {
+        if (SelectedMachine is null)
+            return;
+
+        if (MessageBox.Show(
+                $"{SelectedMachine.MachineCode} podra reasociarse sin recovery code durante 10 minutos.\n\n" +
+                "Solo para una PC que dejo de conectar. Continuar?",
+                "Reasociar maquina", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            Detail = await _client.AuthorizeReenrollmentAsync(SelectedMachine.MachineId, CancellationToken.None);
+            StatusMessage = $"{SelectedMachine.MachineCode} puede reasociarse durante 10 minutos";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = Describe(ex);
+        }
+    }
 
     private async Task ResolveAsync(ResolveConflictRequest.Types.Resolution resolution, string confirmation)
     {
@@ -346,7 +399,14 @@ public sealed partial class MainViewModel : ObservableObject
                 Resolution = resolution
             }, CancellationToken.None);
 
-            StatusMessage = "Conflicto resuelto";
+            // La fila local, al dia. El stream traera lo mismo cuando el agente
+            // vuelva a conectar, pero hasta entonces el aviso seguiria en rojo.
+            SelectedMachine.ConflictoResuelto();
+            RefreshCounts();
+
+            StatusMessage = resolution == ResolveConflictRequest.Types.Resolution.IssueNewIdentity
+                ? "Identidad nueva emitida. Esa PC necesita un recovery code para volver."
+                : "Hardware aprobado. El agente entra solo en su proximo intento, hasta un minuto.";
         }
         catch (Exception ex)
         {

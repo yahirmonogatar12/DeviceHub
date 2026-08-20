@@ -25,6 +25,16 @@ public sealed class AgentOptions
     public int HeartbeatSeconds { get; set; } = 30;
 
     /// <summary>
+    /// Fase 7. El host de control remoto no valida el certificado del relay.
+    ///
+    /// Escotilla de laboratorio, apagada por defecto: normalmente el host recibe
+    /// los pines SPKI del agente por el named pipe y valida con ellos, que es
+    /// mas fuerte que la cadena de CA para un certificado autofirmado. Solo hace
+    /// falta encenderla en una PC donde el agente todavia no tenga pines.
+    /// </summary>
+    public bool RemoteAllowUntrusted { get; set; }
+
+    /// <summary>
     /// Recurso compartido con update.json y los paquetes (Fase 16).
     /// Vacio = no se auto-actualiza.
     /// </summary>

@@ -9,6 +9,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DeviceHub.Contracts\DeviceHub.Contracts.csproj" />
+    <!-- Solo por el saludo del named pipe (Fase 7). No arrastra nada nativo: el
+         ensamblado ya viaja en esta misma carpeta porque RemoteHost se publica
+         junto al agente. -->
+    <ProjectReference Include="..\DeviceHub.Remote.Contracts\DeviceHub.Remote.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>

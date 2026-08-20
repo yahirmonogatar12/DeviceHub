@@ -8,6 +8,7 @@ using DeviceHub.Agent.Remote;
 using DeviceHub.Agent.Security;
 using DeviceHub.Agent.Updater;
 using DeviceHub.Contracts;
+using DeviceHub.Remote.Contracts;
 using Grpc.Core;
 using Grpc.Net.Client;
 
@@ -19,6 +20,7 @@ public sealed class Worker(
     PinnedChannelFactory channelFactory,
     CommandRunner runner,
     IRemoteAgentDetector remoteDetector,
+    InteractiveSessionLauncher hostLauncher,
     UpdateService updates,
     ILogger<Worker> logger) : BackgroundService
 {
@@ -81,6 +83,32 @@ public sealed class Worker(
             {
                 break;
             }
+            catch (RpcException ex) when (ex.StatusCode == StatusCode.Unauthenticated)
+            {
+                // El servidor no reconoce el token. Pasa cuando un administrador
+                // emite identidad nueva desde el dashboard: la fila se queda con
+                // token_hash NULL y esta PC no volvia sola NUNCA, porque
+                // EnsureRegisteredAsync se salta el registro en cuanto hay un
+                // token guardado -- aunque sea uno muerto. La unica salida era ir
+                // fisicamente a la maquina a editar machine.json.
+                var espera = DescartarToken($"El servidor rechazo el token ({ex.Status.Detail})")
+                    ? Jitter(TimeSpan.FromSeconds(5))
+                    : TimeSpan.FromMinutes(5);
+
+                await SafeDelay(espera, stoppingToken);
+            }
+            catch (RpcException ex) when (ex.StatusCode == StatusCode.PermissionDenied)
+            {
+                // Registro rechazado: sin codigo valido y sin permiso vivo. Se
+                // reintenta cada minuto -- ni mas, porque solo lo arregla una
+                // persona, ni menos, porque en cuanto esa persona pulse el boton
+                // del dashboard esta PC tiene que volver sin que nadie la toque.
+                logger.LogError(
+                    "Registro rechazado: {Detail}. Autoriza la reasociacion de {MachineId} en el dashboard",
+                    ex.Status.Detail, _identity.MachineId);
+
+                await SafeDelay(Jitter(TimeSpan.FromMinutes(1)), stoppingToken);
+            }
             catch (RpcException ex) when (ex.StatusCode == StatusCode.FailedPrecondition)
             {
                 // Conflicto de identidad: lo resuelve un administrador, no el reintento.
@@ -141,15 +169,45 @@ public sealed class Worker(
         }
     }
 
+    /// <summary>
+    /// Tira el token guardado para que el siguiente intento vuelva a registrarse.
+    /// Devuelve si merece la pena reintentar pronto.
+    ///
+    /// EL machineId NO SE TOCA. Es lo que ata esta PC a su historial, a su
+    /// ubicacion y al recovery code que el administrador emitio apuntando a ella.
+    /// El arreglo manual que se venia haciendo -- borrar machine.json entero --
+    /// genera un GUID nuevo, y entonces el recovery code sale rechazado y la
+    /// maquina vuelve como duplicada.
+    ///
+    /// Esto no debilita nada: registrarse sigue exigiendo un codigo valido y sin
+    /// consumir. Un agente sin token no entra a ningun sitio, asi que descartarlo
+    /// no le da acceso a nada que no tuviera.
+    /// </summary>
+    private bool DescartarToken(string motivo)
+    {
+        if (string.IsNullOrWhiteSpace(_identity.ProtectedToken))
+            return false;   // ya se descarto; lo que falla ahora es el registro
+
+        logger.LogWarning(
+            "{Motivo}. Se descarta y se reintenta el registro. Si no hay codigo configurado, hace falta " +
+            "autorizar la reasociacion de {MachineId} desde el dashboard", motivo, _identity.MachineId);
+
+        _identity.ProtectedToken = null;
+        identityStore.Save(_identity);
+        return true;
+    }
+
     private async Task EnsureRegisteredAsync(GrpcChannel channel, CancellationToken ct)
     {
         if (!string.IsNullOrWhiteSpace(_identity.ProtectedToken))
             return;
 
-        if (string.IsNullOrWhiteSpace(_options.EnrollmentCode))
-            throw new InvalidOperationException(
-                "Sin token y sin codigo de enrolamiento. Genera uno en el dashboard (Admin -> Create enrollment code).");
-
+        // Sin codigo se intenta IGUAL, con el campo vacio. El servidor lo acepta
+        // solo si un administrador autorizo la reasociacion de esta maquina hace
+        // pocos minutos; si no, contesta PermissionDenied y se reintenta luego.
+        //
+        // Esa es la diferencia entre una PC que vuelve sola en cuanto alguien
+        // pulsa un boton y una a la que hay que ir fisicamente.
         var fingerprint = Fingerprint.Collect();
         var client = new AgentService.AgentServiceClient(channel);
 
@@ -177,9 +235,19 @@ public sealed class Worker(
 
     private async Task RunSessionAsync(GrpcChannel channel, CancellationToken stoppingToken)
     {
-        var token = MachineIdentity.Unprotect(_identity.ProtectedToken)
-            ?? throw new InvalidOperationException(
+        var token = MachineIdentity.Unprotect(_identity.ProtectedToken);
+
+        if (token is null)
+        {
+            // DPAPI con ambito LocalMachine no descifra lo que cifro otra
+            // instalacion de Windows: pasa al restaurar una imagen o al
+            // reinstalar el sistema conservando ProgramData. El token es
+            // irrecuperable, y guardarlo solo sirve para no volver nunca.
+            DescartarToken("El token guardado no se puede descifrar (DPAPI)");
+
+            throw new InvalidOperationException(
                 "Token ilegible (DPAPI). Hace falta un recovery code emitido por un administrador.");
+        }
 
         var client = new AgentService.AgentServiceClient(channel);
         var headers = new Metadata
@@ -315,6 +383,12 @@ public sealed class Worker(
                 continue;
             }
 
+            if (message.PayloadCase == ServerMessage.PayloadOneofCase.RemoteHost)
+            {
+                await HandleRemoteHostAsync(message.RemoteHost, ct);
+                continue;
+            }
+
             if (message.PayloadCase != ServerMessage.PayloadOneofCase.Config)
                 continue;
 
@@ -372,6 +446,46 @@ public sealed class Worker(
         // proceso muriera en medio, el comando se ejecutaria dos veces.
         _commands.Record(result);
         await outbound.WriteAsync(new AgentMessage { CommandResult = result }, ct);
+    }
+
+    /// <summary>
+    /// Fase 7. El servidor pide arrancar el host de control remoto en la sesion
+    /// interactiva.
+    ///
+    /// Ni el ticket ni la direccion se registran en el log: la direccion es la
+    /// del propio agente y el ticket es la credencial que da acceso a la
+    /// pantalla. Del ticket solo se sabe que llego.
+    /// </summary>
+    private async Task HandleRemoteHostAsync(RemoteHostControl control, CancellationToken ct)
+    {
+        if (control.Action == RemoteHostControl.Types.Action.Stop)
+        {
+            hostLauncher.Stop($"lo pidio el servidor (sesion {control.SessionId})");
+            return;
+        }
+
+        if (control.Action != RemoteHostControl.Types.Action.Start)
+            return;
+
+        if (string.IsNullOrWhiteSpace(control.SessionId) || string.IsNullOrWhiteSpace(control.HostTicket))
+        {
+            logger.LogWarning("Orden de arranque remoto incompleta; se ignora");
+            return;
+        }
+
+        await hostLauncher.StartAsync(new RemoteHostHandshake
+        {
+            SessionId = control.SessionId,
+            Ticket = control.HostTicket,
+            ServerAddress = _options.ServerAddress,
+            MachineId = _identity.MachineId,
+
+            // El host valida el certificado del relay con los MISMOS pines que
+            // el agente. Son dos canales gRPC distintos contra el mismo
+            // servidor: no hay razon para que uno confie menos que el otro.
+            PinnedKeys = [.. _identity.PinnedKeys],
+            AllowUntrusted = _options.RemoteAllowUntrusted
+        }, ct);
     }
 
     private Heartbeat BuildHeartbeat()

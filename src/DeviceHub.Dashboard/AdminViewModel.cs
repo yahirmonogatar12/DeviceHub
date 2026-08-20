@@ -156,15 +156,20 @@ public sealed partial class MainViewModel
     [ObservableProperty]
     private ServiceRow? _selectedService;
 
+
     /// <summary>
-    /// Control remoto (Fase 10). El servidor autoriza, registra la sesion y
-    /// devuelve QUE ejecutar; aqui solo se lanza el cliente local.
+    /// UN SOLO camino, aunque haya dos botones. Fase 8.
     ///
-    /// Nada de esto nombra a RustDesk: si la Fase 18 cambia de motor, este
-    /// metodo no se toca.
+    /// La frontera no era cuantos botones hay: era que el dashboard no montara
+    /// los argumentos de cada motor a mano, como hacia antes. `motor` es un
+    /// NOMBRE opaco que viaja al servidor; de ahi vuelve QUE ejecutar y, si hace
+    /// falta, que escribirle por stdin. Aqui no se sabe que hace ninguno de los
+    /// dos, solo se ofrece elegir.
+    ///
+    /// Vacio = el que el servidor tenga configurado.
     /// </summary>
     [RelayCommand]
-    private async Task RemoteControlAsync()
+    private async Task RemoteControlAsync(string? motor)
     {
         if (SelectedMachine is null)
             return;
@@ -174,22 +179,47 @@ public sealed partial class MainViewModel
         try
         {
             CommandFeedback = "Abriendo sesion remota...";
-            session = await _client.StartRemoteSessionAsync(SelectedMachine.MachineId, CancellationToken.None);
+            session = await _client.StartRemoteSessionAsync(
+                SelectedMachine.MachineId, motor ?? string.Empty, CancellationToken.None);
 
             var ejecutable = ResolverCliente(session.LaunchTarget)
                 ?? throw new FileNotFoundException(
-                    $"No se encontro {session.LaunchTarget} en esta PC.\n\n" +
-                    "El cliente de control remoto se ejecuta AQUI, no en la maquina controlada:\n" +
-                    "instalalo en este equipo y vuelve a intentarlo.");
+                    $"No se encontro {session.LaunchTarget} en esta PC." + Environment.NewLine +
+                    Environment.NewLine +
+                    "El cliente de control remoto se ejecuta AQUI, no en la maquina controlada:" +
+                    Environment.NewLine + "instalalo en este equipo y vuelve a intentarlo.");
 
-            System.Diagnostics.Process.Start(
+            // Solo se redirige stdin cuando hay algo que mandar por ahi. Con
+            // UseShellExecute=true no se puede escribir al proceso, asi que los
+            // motores sin secreto conservan el lanzamiento de siempre.
+            var conSecreto = session.ViewerSecret.Length > 0;
+
+            var proceso = System.Diagnostics.Process.Start(
                 new System.Diagnostics.ProcessStartInfo(ejecutable, session.LaunchArguments)
                 {
-                    UseShellExecute = true
-                });
+                    UseShellExecute = !conSecreto,
+                    RedirectStandardInput = conSecreto
+                })
+                ?? throw new InvalidOperationException("No se pudo lanzar el cliente remoto.");
+
+            if (conSecreto)
+            {
+                // Por stdin y no por argumentos: los argumentos de un proceso los
+                // lee cualquier usuario de esta PC.
+                await proceso.StandardInput.WriteLineAsync(session.ViewerSecret);
+                proceso.StandardInput.Close();
+            }
 
             _remoteSessionId = session.SessionId;
-            CommandFeedback = $"Sesion remota abierta sobre {SelectedMachine.MachineCode}";
+
+            // host_notified viene en falso cuando el motor necesitaba arrancar el
+            // otro extremo y el agente no estaba conectado. La sesion es valida,
+            // pero no va a contestar nadie: mas vale decirlo que dejar al tecnico
+            // mirando una ventana negra.
+            CommandFeedback = session.HostNotified || session.ViewerSecret.Length == 0
+                ? $"Sesion remota abierta sobre {SelectedMachine.MachineCode}"
+                : $"Sesion abierta sobre {SelectedMachine.MachineCode}, pero su agente no esta " +
+                  "conectado: nadie va a atender del otro lado.";
         }
         catch (Exception ex)
         {
@@ -221,6 +251,18 @@ public sealed partial class MainViewModel
 
         var nombre = Path.GetFileName(target);
 
+        // Primero JUNTO AL DASHBOARD. Los clientes propios se publican en esta
+        // misma carpeta y no se registran en ningun sitio, asi que buscarlos en
+        // las claves de desinstalacion no los encontraria nunca.
+        var alLado = Path.Combine(AppContext.BaseDirectory, nombre);
+
+        if (File.Exists(alLado))
+            return alLado;
+
+        // Y despues en las claves de desinstalacion. Esto SI nombra un producto,
+        // y es el unico sitio del dashboard donde pasa: es una busqueda de
+        // instalacion de terceros, no logica de motor. Cuando haya un segundo
+        // motor externo, esta lista se movera a configuracion.
         foreach (var clave in new[]
                  {
                      @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\RustDesk",

@@ -155,9 +155,26 @@ builder.Services.AddSingleton<AuditRepository>();
 builder.Services.AddSingleton<RateLimiter>();
 
 // Unico punto donde se elige el motor remoto. La Fase 18 cambia esta linea.
+// LOS MOTORES DE CONTROL REMOTO. Fase 8.
+//
+// Se registran los DOS y el dashboard ofrece un boton por cada uno; cual manda
+// cuando nadie elige lo dice DeviceHub:RemoteProvider en appsettings.json.
+//
+// Por configuracion y no por tipo fijo: el motor por defecto es una decision de
+// despliegue -- puede ser distinta por planta -- y obligar a recompilar el
+// servidor para eso convierte una eleccion en un release.
 builder.Services.AddSingleton<IRemoteProvider, RustDeskProvider>();
+builder.Services.AddSingleton<IRemoteProvider, DeviceHubRemoteProvider>();
+
+builder.Services.AddSingleton(sp => new RemoteProviderCatalog(
+    sp.GetRequiredService<IEnumerable<IRemoteProvider>>(),
+    builder.Configuration["DeviceHub:RemoteProvider"] ?? "rustdesk"));
 builder.Services.AddSingleton<UserRepository>();
 builder.Services.AddSingleton<ConnectionRegistry>();
+builder.Services.AddSingleton<RemoteSessionRegistry>();
+builder.Services.AddSingleton<RemoteTicketRegistry>();
+builder.Services.AddSingleton<ReenrollmentGrants>();
+builder.Services.AddSingleton<RemoteLeaseRegistry>();
 builder.Services.AddSingleton<MachineBroadcaster>();
 builder.Services.AddSingleton(jwtKeyProvider);
 builder.Services.AddSingleton(new ServerPins([PublicKeyPin.Compute(certificate)]));
@@ -179,6 +196,7 @@ builder.Services
 builder.Services.AddAuthorization();
 
 builder.Services.AddHostedService<MetricsRetentionService>();
+builder.Services.AddHostedService<RemoteSessionReporter>();
 
 var app = builder.Build();
 
@@ -202,6 +220,11 @@ app.UseAuthorization();
 
 app.MapGrpcService<AgentGrpcService>();
 app.MapGrpcService<AdminGrpcService>();
+
+// Relay del motor propio. Mismo puerto y mismo certificado que el resto: lo que
+// cambia es que RemoteHost y RemoteViewer abren su PROPIA conexion, asi que un
+// keyframe atascado no retrasa el heartbeat de ningun agente.
+app.MapGrpcService<RemoteRelayGrpcService>();
 
 app.Logger.LogInformation("DeviceHub Server escuchando en https://0.0.0.0:{Port} (HTTP/2)", options.Port);
 

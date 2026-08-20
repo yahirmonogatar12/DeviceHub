@@ -1,0 +1,398 @@
+<Window x:Class="DeviceHub.RemoteViewer.RelayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:render="clr-namespace:DeviceHub.RemoteViewer.Render"
+        Title="DeviceHub - Sesion remota" Height="700" Width="1180"
+        Background="#1B1B1B" WindowStartupLocation="CenterScreen">
+
+    <!-- GRIS NEUTRO Y ROJO, como AnyDesk, y no el azul de DeviceHub.
+
+         No es capricho de marca: alrededor del escritorio remoto va NEGRO. Un
+         azul saturado detras de una pantalla ajena tine lo que se mira: el ojo
+         compara contra el marco, y en una PC de planta se acaba discutiendo si
+         el MES se ve mas apagado de lo que esta. El negro no compite con nada.
+
+         El rojo es de acento y solo aparece donde hay algo encendido: grabando,
+         o un boton pulsado. -->
+    <Window.Resources>
+        <SolidColorBrush x:Key="Barra"     Color="#2D2D2D" />
+        <SolidColorBrush x:Key="Panel"     Color="#232323" />
+        <SolidColorBrush x:Key="Hueco"     Color="#181818" />
+        <SolidColorBrush x:Key="Linea"     Color="#3C3C3C" />
+        <SolidColorBrush x:Key="Realce"    Color="#3A3A3A" />
+        <SolidColorBrush x:Key="Letra"     Color="#DCDCDC" />
+        <SolidColorBrush x:Key="LetraTenue" Color="#8C8C8C" />
+        <SolidColorBrush x:Key="Acento"    Color="#EF443B" />
+
+
+        <!-- LOS ICONOS SON DIBUJOS, NO UNA FUENTE.
+
+             La tentacion era Segoe MDL2 Assets, que es lo que usa Windows: una
+             letra por icono y listo. Pero un punto de codigo equivocado no da
+             error, da un cuadrito vacio, y eso solo se descubre ejecutando en la
+             PC donde este esa version de la fuente. Con geometrias no hay nada
+             que adivinar: lo que se dibuja es lo que se ve, en cualquier Windows
+             y sin depender de que una fuente este instalada.
+
+             Todos en una caja de 16x16 para que encajen igual en la barra y en
+             el hueco del icono de un menu, que mide justo eso. -->
+        <GeometryGroup x:Key="IcoCamara">
+            <RectangleGeometry Rect="1,4.5,14,8.5" RadiusX="1.5" RadiusY="1.5" />
+            <RectangleGeometry Rect="5.2,2.6,5.6,2.2" RadiusX="0.8" RadiusY="0.8" />
+            <EllipseGeometry Center="8,8.8" RadiusX="2.5" RadiusY="2.5" />
+        </GeometryGroup>
+
+        <EllipseGeometry x:Key="IcoPunto" Center="8,8" RadiusX="4.3" RadiusY="4.3" />
+
+        <GeometryGroup x:Key="IcoMonitor">
+            <RectangleGeometry Rect="1.5,3,13,8.5" RadiusX="1" RadiusY="1" />
+            <LineGeometry StartPoint="8,11.5" EndPoint="8,13.8" />
+            <LineGeometry StartPoint="5.5,13.8" EndPoint="10.5,13.8" />
+        </GeometryGroup>
+
+        <!-- Las cuatro esquinas, que es el icono de encajar de toda la vida. -->
+        <PathGeometry x:Key="IcoEncajar"
+                      Figures="M2,5.5 L2,2 L5.5,2 M10.5,2 L14,2 L14,5.5 M14,10.5 L14,14 L10.5,14 M5.5,14 L2,14 L2,10.5" />
+
+        <PathGeometry x:Key="IcoCarpeta"
+                      Figures="M1.5,12.5 L1.5,4 L6.2,4 L7.7,5.8 L14.5,5.8 L14.5,12.5 Z" />
+
+        <GeometryGroup x:Key="IcoBarras">
+            <RectangleGeometry Rect="2,9,2.6,5" />
+            <RectangleGeometry Rect="6.7,6,2.6,8" />
+            <RectangleGeometry Rect="11.4,2.5,2.6,11.5" />
+        </GeometryGroup>
+
+        <PathGeometry x:Key="IcoRayo" Figures="M9.2,1.5 L4,9 L7.4,9 L6.8,14.5 L12,7 L8.6,7 Z" />
+
+        <GeometryGroup x:Key="IcoCandado">
+            <RectangleGeometry Rect="3.5,7,9,7" RadiusX="1" RadiusY="1" />
+            <PathGeometry Figures="M5.6,7 L5.6,4.8 A2.4,2.4 0 0 1 10.4,4.8 L10.4,7" />
+        </GeometryGroup>
+
+        <GeometryGroup x:Key="IcoTeclas">
+            <RectangleGeometry Rect="1.5,4,13,8" RadiusX="1" RadiusY="1" />
+            <LineGeometry StartPoint="4.2,9.6" EndPoint="11.8,9.6" />
+            <LineGeometry StartPoint="4.2,6.8" EndPoint="4.3,6.8" />
+            <LineGeometry StartPoint="6.7,6.8" EndPoint="6.8,6.8" />
+            <LineGeometry StartPoint="9.2,6.8" EndPoint="9.3,6.8" />
+            <LineGeometry StartPoint="11.7,6.8" EndPoint="11.8,6.8" />
+        </GeometryGroup>
+
+        <PathGeometry x:Key="IcoReiniciar"
+                      Figures="M13,8 A5,5 0 1 1 11.2,4.2 M11.2,1.4 L11.2,4.6 L8,4.6" />
+
+        <!-- El trazo fino y la punta redonda son lo que los hace parecer iconos y
+             no diagramas. El color se queda fijo: al pasar el raton cambia el
+             FONDO del boton, como en AnyDesk, no el icono. -->
+        <Style x:Key="Icono" TargetType="Path">
+            <Setter Property="Stroke" Value="{StaticResource Letra}" />
+            <Setter Property="StrokeThickness" Value="1.3" />
+            <Setter Property="StrokeStartLineCap" Value="Round" />
+            <Setter Property="StrokeEndLineCap" Value="Round" />
+            <Setter Property="StrokeLineJoin" Value="Round" />
+            <Setter Property="Width" Value="16" />
+            <Setter Property="Height" Value="16" />
+            <Setter Property="Stretch" Value="None" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+        </Style>
+
+        <!-- Los macizos: barras, punto y rayo se rellenan en vez de perfilarse.
+             Perfilados a este tamano se ven sucios. -->
+        <Style x:Key="IconoMacizo" TargetType="Path" BasedOn="{StaticResource Icono}">
+            <Setter Property="Stroke" Value="{x:Null}" />
+            <Setter Property="Fill" Value="{StaticResource Letra}" />
+        </Style>
+
+        <!-- Focusable=False en TODOS: si un boton se queda el foco, la barra
+             espaciadora lo vuelve a pulsar en vez de viajar a la PC remota. -->
+        <Style TargetType="Button">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Foreground" Value="{StaticResource Letra}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Padding" Value="11,5" />
+            <Setter Property="Margin" Value="0,0,2,0" />
+            <Setter Property="FontSize" Value="12" />
+
+            <!-- Plantilla propia porque el boton de serie trae su propio marco
+                 con degradado, y ese marco no se quita con Background: se
+                 quedaria un boton claro con relieve sobre una barra oscura. -->
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Fondo" Background="{TemplateBinding Background}"
+                                CornerRadius="3" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Fondo" Property="Background" Value="{StaticResource Realce}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Fondo" Property="Background" Value="{StaticResource Acento}" />
+                                <Setter Property="Foreground" Value="#FFFFFF" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="#6A6A6A" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- YA NO HAY ComboBox EN LA BARRA, y esa es la razon de que esto sea un
+             menu y no un desplegable.
+
+             La plantilla del ComboBox de Windows no pinta ni la caja cerrada ni
+             el popup con el Background del control: los saca de sus propios
+             pinceles de tema, que son claros. Con la barra oscura eso deja dos
+             recuadros blancos en medio, y el intento de arreglarlo con letra
+             clara acabo en blanco sobre blanco. El MenuItem si obedece, asi que
+             la escala y el monitor pasan a ser menus como Acciones. -->
+        <Style TargetType="MenuItem">
+            <Setter Property="Background" Value="{StaticResource Barra}" />
+            <Setter Property="Foreground" Value="{StaticResource Letra}" />
+            <Setter Property="Padding" Value="10,5" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+
+        <Style TargetType="Separator">
+            <Setter Property="Background" Value="{StaticResource Linea}" />
+            <Setter Property="Margin" Value="0,3" />
+        </Style>
+
+        <Style TargetType="ListBoxItem">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource Letra}" />
+            <Setter Property="Padding" Value="4,2" />
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="{StaticResource Acento}" />
+                    <Setter Property="Foreground" Value="#FFFFFF" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <DockPanel>
+
+        <!-- Una franja fina y de un solo color, con una linea abajo que la separa
+             del negro. Sin el borde, la barra y el hueco del video se funden y no
+             se sabe donde acaba el visor y empieza la PC remota. -->
+        <Border DockPanel.Dock="Top" Background="{StaticResource Barra}"
+                BorderBrush="{StaticResource Linea}" BorderThickness="0,0,0,1" Padding="6,3">
+            <DockPanel>
+
+                <!-- El nombre de la sesion a la derecha del todo, como la barra
+                     de AnyDesk lleva el ID: es lo que se mira para saber CONTRA
+                     QUE maquina se esta actuando antes de tocar nada. -->
+                <TextBlock x:Name="Aviso" DockPanel.Dock="Right" VerticalAlignment="Center"
+                           FontFamily="Consolas" FontSize="11" Margin="12,0,6,0"
+                           Foreground="{StaticResource LetraTenue}" Text="" />
+
+                <StackPanel Orientation="Horizontal">
+                    <Button x:Name="BotonCaptura" Click="Capturar"
+                            ToolTip="Crear captura de pantalla">
+                        <Path Style="{StaticResource Icono}" Data="{StaticResource IcoCamara}" />
+                    </Button>
+
+                    <Button x:Name="BotonGrabar" Click="AlternarGrabacion"
+                            ToolTip="Grabar la sesion">
+                        <Path x:Name="IconoGrabar" Style="{StaticResource IconoMacizo}"
+                              Data="{StaticResource IcoPunto}" />
+                    </Button>
+
+                    <Border Width="1" Background="{StaticResource Linea}" Margin="6,5" />
+
+                    <Menu Background="Transparent" VerticalAlignment="Center">
+                        <!-- Dos botones y no uno, igual que AnyDesk: el monitor
+                             elige QUE se ve y las esquinas COMO se ve. Juntarlos
+                             haria un menu de once entradas de dos temas
+                             distintos. -->
+                        <MenuItem x:Name="MenuPantallas" IsEnabled="False" ToolTip="Pantalla remota">
+                            <MenuItem.Header>
+                                <Path Style="{StaticResource Icono}" Data="{StaticResource IcoMonitor}" />
+                            </MenuItem.Header>
+                        </MenuItem>
+
+                        <MenuItem x:Name="MenuEscala" ToolTip="Vista">
+                            <MenuItem.Header>
+                                <Path Style="{StaticResource Icono}" Data="{StaticResource IcoEncajar}" />
+                            </MenuItem.Header>
+
+                            <MenuItem IsHitTestVisible="False" Focusable="False">
+                                <MenuItem.Header>
+                                    <TextBlock Text="Vista" Foreground="{StaticResource LetraTenue}" FontSize="11" />
+                                </MenuItem.Header>
+                            </MenuItem>
+                            <MenuItem Header="Ajustado" Tag="0" IsCheckable="True" IsChecked="True" Click="ElegirEscala" />
+                            <MenuItem Header="Tamano original" Tag="1" IsCheckable="True" Click="ElegirEscala" />
+                            <MenuItem Header="50 %" Tag="0.5" IsCheckable="True" Click="ElegirEscala" />
+                            <MenuItem Header="150 %" Tag="1.5" IsCheckable="True" Click="ElegirEscala" />
+                            <MenuItem Header="200 %" Tag="2" IsCheckable="True" Click="ElegirEscala" />
+
+                            <Separator />
+
+                            <MenuItem IsHitTestVisible="False" Focusable="False">
+                                <MenuItem.Header>
+                                    <TextBlock Text="Codec" Foreground="{StaticResource LetraTenue}" FontSize="11" />
+                                </MenuItem.Header>
+                            </MenuItem>
+
+                            <!-- La marca la pone lo que VUELVE en VideoConfig, no
+                                 lo que se pulso: si esa GPU no puede con H.265,
+                                 el host se queda en H.264 y aqui tiene que verse
+                                 eso y no el deseo. -->
+                            <MenuItem x:Name="MenuH264" Header="H.264" Tag="h264"
+                                      IsCheckable="True" IsChecked="True" Click="ElegirCodec" />
+                            <MenuItem x:Name="MenuH265" Header="H.265  (menos ancho de banda)" Tag="h265"
+                                      IsCheckable="True" Click="ElegirCodec" />
+
+                            <Separator />
+
+                            <MenuItem IsHitTestVisible="False" Focusable="False">
+                                <MenuItem.Header>
+                                    <TextBlock Text="Calidad" Foreground="{StaticResource LetraTenue}" FontSize="11" />
+                                </MenuItem.Header>
+                            </MenuItem>
+
+                            <!-- Cuantos bits se le dan a la imagen. Estaba fijo
+                                 en Equilibrado, y en 1080p a 42 FPS eso son 33
+                                 kbit por frame contra los 160 que gasta RustDesk
+                                 en la misma PC: al mover una ventana se notaba. -->
+                            <MenuItem x:Name="MenuCalidadFiel" Header="Fiel al original" Tag="1.5"
+                                      IsCheckable="True" IsChecked="True" Click="ElegirCalidad" />
+                            <MenuItem x:Name="MenuCalidadMedia" Header="Equilibrado" Tag="0.67"
+                                      IsCheckable="True" Click="ElegirCalidad" />
+                            <MenuItem x:Name="MenuCalidadRapida" Header="De rapida reaccion" Tag="0.5"
+                                      IsCheckable="True" Click="ElegirCalidad" />
+                        </MenuItem>
+                    </Menu>
+
+                    <Border Width="1" Background="{StaticResource Linea}" Margin="6,5" />
+
+                    <Button x:Name="BotonArchivos" Click="AlternarArchivos"
+                            ToolTip="Transferencia de archivos">
+                        <Path Style="{StaticResource Icono}" Data="{StaticResource IcoCarpeta}" />
+                    </Button>
+
+                    <Button x:Name="BotonDatos" Click="AlternarDatos"
+                            ToolTip="Medidas de la sesion (Ctrl + Mayus + F12)">
+                        <Path Style="{StaticResource IconoMacizo}" Data="{StaticResource IcoBarras}" />
+                    </Button>
+
+                    <Menu Background="Transparent" VerticalAlignment="Center">
+                        <MenuItem ToolTip="Acciones">
+                            <MenuItem.Header>
+                                <Path Style="{StaticResource IconoMacizo}" Data="{StaticResource IcoRayo}" />
+                            </MenuItem.Header>
+
+                            <MenuItem IsHitTestVisible="False" Focusable="False">
+                                <MenuItem.Header>
+                                    <TextBlock Text="Acciones" Foreground="{StaticResource LetraTenue}" FontSize="11" />
+                                </MenuItem.Header>
+                            </MenuItem>
+
+                            <MenuItem Header="Ctrl + Alt + Supr" Click="EnviarCtrlAltSupr">
+                                <MenuItem.Icon>
+                                    <Path Style="{StaticResource Icono}" Data="{StaticResource IcoTeclas}" />
+                                </MenuItem.Icon>
+                            </MenuItem>
+
+                            <MenuItem Header="Bloquear la PC remota" Click="BloquearRemota">
+                                <MenuItem.Icon>
+                                    <Path Style="{StaticResource Icono}" Data="{StaticResource IcoCandado}" />
+                                </MenuItem.Icon>
+                            </MenuItem>
+
+                            <MenuItem Header="Soltar teclas y botones pegados" Click="SoltarEntradaRemota" />
+
+                            <MenuItem x:Name="MenuCongelar" Header="Congelar entrada local"
+                                      IsCheckable="True" Click="CongelarEntrada" />
+
+                            <!-- Se puede apagar, y hace falta que se pueda: con esto
+                                 puesto, Alt+Tab ya no saca al tecnico del visor. -->
+                            <MenuItem x:Name="MenuTeclas" Header="Enviar Windows y Alt+Tab a la PC remota"
+                                      IsCheckable="True" IsChecked="True" Click="AlternarTeclas" />
+
+                            <Separator />
+
+                            <MenuItem Header="Reiniciar la PC remota..." Click="ReiniciarRemota">
+                                <MenuItem.Icon>
+                                    <Path Style="{StaticResource Icono}" Data="{StaticResource IcoReiniciar}" />
+                                </MenuItem.Icon>
+                            </MenuItem>
+                        </MenuItem>
+                    </Menu>
+                </StackPanel>
+
+            </DockPanel>
+        </Border>
+
+        <!-- Al lado del video, nunca encima: un HwndHost dibuja fuera del arbol
+             visual de WPF y cualquier XAML superpuesto quedaria tapado. -->
+        <Border x:Name="BarraEstado" DockPanel.Dock="Bottom" Background="{StaticResource Panel}"
+                BorderBrush="{StaticResource Linea}" BorderThickness="0,1,0,0" Padding="10,5">
+            <TextBlock x:Name="Estado" FontFamily="Consolas" FontSize="11"
+                       Foreground="{StaticResource LetraTenue}" TextWrapping="Wrap"
+                       Text="Conectando..." />
+        </Border>
+
+        <!-- Al lado del video, nunca encima, por el mismo airspace de siempre. -->
+        <Border x:Name="PanelArchivos" DockPanel.Dock="Right" Width="360"
+                Background="{StaticResource Panel}" BorderBrush="{StaticResource Linea}"
+                BorderThickness="1,0,0,0" Padding="10" Visibility="Collapsed">
+            <DockPanel>
+                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                    <Button DockPanel.Dock="Left" Content="&#x2191;" Width="30" Margin="0,0,6,0"
+                            Click="SubirCarpeta" ToolTip="Carpeta superior" />
+                    <TextBox x:Name="RutaRemota" FontFamily="Consolas" FontSize="12"
+                             Background="{StaticResource Hueco}" Foreground="{StaticResource Letra}"
+                             CaretBrush="{StaticResource Letra}" BorderThickness="0"
+                             Padding="6,4" KeyDown="RutaEscrita" />
+                </DockPanel>
+
+                <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                    <ProgressBar x:Name="Progreso" Height="6" Margin="0,0,0,6"
+                                 Background="{StaticResource Hueco}" Foreground="{StaticResource Acento}"
+                                 BorderThickness="0" />
+                    <TextBlock x:Name="EstadoArchivos" FontFamily="Consolas" FontSize="11"
+                               Foreground="{StaticResource LetraTenue}" TextWrapping="Wrap" Text="" />
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button Content="Descargar" Click="Descargar" />
+                        <Button Content="Subir..." Click="Subir" />
+                    </StackPanel>
+
+                    <!-- Portapapeles de archivos. Traer se habilita solo cuando
+                         la PC remota anuncia que copiaron algo. -->
+                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                        <Button x:Name="BotonTraer" Content="Traer copiado" Click="Traer"
+                                IsEnabled="False" />
+                        <Button Content="Llevar copiado" Click="Llevar" />
+                    </StackPanel>
+                </StackPanel>
+
+                <ListBox x:Name="Archivos" Background="{StaticResource Hueco}"
+                         Foreground="{StaticResource Letra}"
+                         BorderThickness="0" FontFamily="Consolas" FontSize="12"
+                         DisplayMemberPath="Etiqueta" MouseDoubleClick="AbrirEntrada" />
+            </DockPanel>
+        </Border>
+
+        <!-- ScrollChanged ADEMAS de SizeChanged, y no por gusto: las barras de
+             desplazamiento entran y salen solas, y al hacerlo cambian el hueco
+             util sin que el ScrollViewer cambie de tamano. SizeChanged no se
+             entera de eso; ScrollChanged si. -->
+        <ScrollViewer x:Name="Lienzo" Background="Black" SizeChanged="Ajustar"
+                      ScrollChanged="Ajustar"
+                      HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+            <!-- Un minimo, no un tamano: sin el, el ScrollViewer mide 0x0 y el
+                 HWND del video no llega a crearse. El tamano real lo pone
+                 Ajustar() en cuanto se conoce la resolucion remota. -->
+            <render:VideoSurface x:Name="Video" MinWidth="320" MinHeight="180"
+                                 HorizontalAlignment="Center" VerticalAlignment="Center" />
+        </ScrollViewer>
+
+    </DockPanel>
+</Window>

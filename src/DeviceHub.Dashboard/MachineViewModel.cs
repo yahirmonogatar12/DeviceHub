@@ -24,6 +24,23 @@ public sealed class MachineViewModel(MachineSummary summary) : ObservableObject
 
     public bool HasConflict => _summary.IdentityState == IdentityState.Conflict;
 
+    /// <summary>
+    /// El servidor ya resolvio el conflicto; esta fila todavia no lo sabe.
+    ///
+    /// La lista se entera por el stream de WatchMachines, y ese solo trae
+    /// novedades cuando el agente vuelve a hablar -- lo que con una PC apagada
+    /// puede tardar horas. Sin esto el aviso rojo se queda en pantalla despues de
+    /// pulsar el boton, y parece que el boton no hizo nada.
+    /// </summary>
+    public void ConflictoResuelto()
+    {
+        if (!HasConflict)
+            return;
+
+        _summary.IdentityState = IdentityState.Ok;
+        OnPropertyChanged(nameof(HasConflict));
+    }
+
     /// <summary>Si se puede controlar. Con que motor y con que ID es cosa del
     /// servidor: al tecnico le basta el boton.</summary>
     public bool RemoteAvailable => _summary.RemoteAvailable;

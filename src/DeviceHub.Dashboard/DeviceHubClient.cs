@@ -83,6 +83,15 @@ public sealed class DeviceHubClient : IDisposable
         _client = new AdminService.AdminServiceClient(_channel);
     }
 
+    /// <summary>La misma direccion del servidor que usa el dashboard. El relay
+    /// vive en ese puerto: no hay que configurar nada aparte.</summary>
+    public string ServerAddress => $"https://{_settings.ServerHost}:{_settings.ServerPort}";
+
+    /// <summary>El pin con el que ESTE dashboard valida al servidor. Se le pasa
+    /// al visor para que valide igual: no es secreto, es el hash de una clave
+    /// publica.</summary>
+    public string ServerPin => _settings.ServerPin;
+
     public string Username { get; private set; } = string.Empty;
     public string Role { get; private set; } = string.Empty;
     public bool IsAdministrator => Role == "administrator";
@@ -118,14 +127,73 @@ public sealed class DeviceHubClient : IDisposable
     public Task<MachineDetail> ResolveConflictAsync(ResolveConflictRequest request, CancellationToken ct)
         => _client.ResolveIdentityConflictAsync(request, _auth, cancellationToken: ct).ResponseAsync;
 
+    public Task<MachineDetail> AuthorizeReenrollmentAsync(string machineId, CancellationToken ct)
+        => _client.AuthorizeReenrollmentAsync(
+            new MachineRef { MachineId = machineId }, _auth, cancellationToken: ct).ResponseAsync;
+
+    /// <summary>
+    /// Fase 6. Autoriza una sesion del motor propio y trae sus dos tickets.
+    ///
+    /// Reutiliza el JWT que ya tiene este cliente: por eso esto vive en el
+    /// dashboard y no en un ejecutable aparte, que tendria que volver a pedir la
+    /// contrasena y necesitaria una consola para hacerlo.
+    /// </summary>
+    public Task<IssueRemoteTicketsResponse> IssueRemoteTicketsAsync(
+        string machineId, CancellationToken ct)
+        => _client.IssueRemoteTicketsAsync(
+            new IssueRemoteTicketsRequest
+            {
+                TargetMachineId = machineId,
+                ViewerMachineId = Environment.MachineName
+            },
+            _auth, cancellationToken: ct).ResponseAsync;
+
     public Task<AuditList> ListAuditAsync(string machineId, CancellationToken ct)
         => _client.ListAuditAsync(new AuditQuery { MachineId = machineId, Limit = 30 }, _auth, cancellationToken: ct).ResponseAsync;
 
-    public Task<RemoteSessionReply> StartRemoteSessionAsync(string machineId, CancellationToken ct)
-        => _client.StartRemoteSessionAsync(new MachineRef { MachineId = machineId }, _auth, cancellationToken: ct).ResponseAsync;
+    /// <summary>
+    /// Fase 8. La direccion y el pin viajan en la peticion porque el SERVIDOR no
+    /// puede saber por que direccion se le ve desde la red del tecnico: puede
+    /// haber NAT, varias interfaces, o un nombre distinto segun la planta. Quien
+    /// lo sabe es este dashboard, que acaba de conectarse por ahi.
+    ///
+    /// El dashboard sigue sin saber que motor hay detras: solo aporta datos de
+    /// conexion, y quien decide que hacer con ellos es el proveedor del servidor.
+    /// </summary>
+    /// <summary>`motor` vacio = el que tenga configurado el servidor.</summary>
+    public Task<RemoteSessionReply> StartRemoteSessionAsync(
+        string machineId, string motor, CancellationToken ct)
+        => _client.StartRemoteSessionAsync(
+            new RemoteSessionRequest
+            {
+                MachineId = machineId,
+                ViewerMachineId = Environment.MachineName,
+                ServerAddress = ServerAddress,
+                ServerPin = _settings.ServerPin,
+                Provider = motor
+            },
+            _auth, cancellationToken: ct).ResponseAsync;
 
     public Task<RemoteSessionReply> EndRemoteSessionAsync(string sessionId, CancellationToken ct)
         => _client.EndRemoteSessionAsync(new RemoteSessionRef { SessionId = sessionId }, _auth, cancellationToken: ct).ResponseAsync;
+
+    /// <summary>
+    /// Fase 23. No existe "ejecuta este comando" suelto: hay que abrir sesion, y
+    /// cada comando queda ligado a ella con su salida en la auditoria.
+    /// </summary>
+    public Task<TerminalSessionReply> StartTerminalSessionAsync(string machineId, CancellationToken ct)
+        => _client.StartTerminalSessionAsync(
+            new MachineRef { MachineId = machineId }, _auth, cancellationToken: ct).ResponseAsync;
+
+    public Task<TerminalCommandReply> RunTerminalCommandAsync(
+        string sessionId, string command, CancellationToken ct)
+        => _client.RunTerminalCommandAsync(
+            new TerminalCommandRequest { SessionId = sessionId, Command = command },
+            _auth, cancellationToken: ct).ResponseAsync;
+
+    public Task<TerminalSessionReply> EndTerminalSessionAsync(string sessionId, CancellationToken ct)
+        => _client.EndTerminalSessionAsync(
+            new RemoteSessionRef { SessionId = sessionId }, _auth, cancellationToken: ct).ResponseAsync;
 
     public Task<CommandEntry> SendCommandAsync(SendCommandRequest request, CancellationToken ct)
         => _client.SendCommandAsync(request, _auth, cancellationToken: ct).ResponseAsync;

@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>DeviceHub.Remote.Contracts</RootNamespace>
+  </PropertyGroup>
+
+  <!-- net10.0 a secas y SIN dependencias nativas a proposito: al servidor lo
+       referencia para relayar, y no tiene por que arrastrar Direct3D ni Media
+       Foundation solo para reenviar bytes. Los tipos atados a la GPU
+       (VideoFrame, EncodedFrame) viven en DeviceHub.RemoteHost. -->
+
+  <!-- El .proto llega en la Fase 4. El glob no encuentra nada todavia y compila
+       igual: la fontaneria queda lista para que esa fase solo deje caer el
+       archivo. -->
+  <ItemGroup>
+    <Protobuf Include="Protos\*.proto" GrpcServices="Both" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" Version="3.35.1" />
+    <PackageReference Include="Grpc.Net.Client" Version="2.83.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.83.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

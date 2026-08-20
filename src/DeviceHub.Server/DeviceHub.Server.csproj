@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DeviceHub.Contracts\DeviceHub.Contracts.csproj" />
+    <ProjectReference Include="..\DeviceHub.Remote.Contracts\DeviceHub.Remote.Contracts.csproj" />
   </ItemGroup>
 
   <!-- Las migraciones viven en database/migrations (una sola fuente de verdad) y se

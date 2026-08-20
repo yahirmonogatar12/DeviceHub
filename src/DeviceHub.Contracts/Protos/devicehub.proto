@@ -225,7 +225,29 @@ message ServerMessage {
   oneof payload {
     ConfigUpdate config = 1;
     CommandRequest command = 2;
+    RemoteHostControl remote_host = 3;
   }
+}
+
+// Fase 7. Orden del servidor al AGENTE, no protocolo de medios: por eso vive
+// aqui y no en remote.proto. El agente lanza DeviceHub.RemoteHost dentro de la
+// sesion interactiva, que es la unica donde hay un escritorio que capturar.
+message RemoteHostControl {
+  enum Action {
+    ACTION_UNSPECIFIED = 0;
+    START = 1;
+    STOP = 2;
+  }
+
+  Action action = 1;
+  string session_id = 2;
+
+  // Secreto. Viaja por este stream, que ya esta autenticado y con el
+  // certificado fijado, y de ahi al host por un named pipe con ACL restringida
+  // al SID del usuario. Nunca por linea de comandos y nunca a un log.
+  string host_ticket = 3;
+
+  int64 expires_at_us = 4;
 }
 
 message ConfigUpdate {
@@ -245,6 +267,10 @@ service AdminService {
   rpc MoveMachine (MoveMachineRequest) returns (MachineDetail);
   rpc CreateEnrollmentCode (CreateEnrollmentCodeRequest) returns (EnrollmentCodeReply);
   rpc ResolveIdentityConflict (ResolveConflictRequest) returns (MachineDetail);
+  // Autoriza a UNA maquina a reasociarse sin recovery code durante unos
+  // minutos. Es la salida para una PC cuyo token se invalido estando
+  // desconectada: sin esto hay que ir fisicamente hasta ella.
+  rpc AuthorizeReenrollment (MachineRef) returns (MachineDetail);
   rpc ListUsers (ListUsersRequest) returns (UserList);
   rpc CreateUser (CreateUserRequest) returns (UserRecord);
   rpc UpdateUser (UpdateUserRequest) returns (UserRecord);
@@ -254,7 +280,11 @@ service AdminService {
   rpc StartTerminalSession (MachineRef) returns (TerminalSessionReply);
   rpc RunTerminalCommand (TerminalCommandRequest) returns (TerminalCommandReply);
   rpc EndTerminalSession (RemoteSessionRef) returns (TerminalSessionReply);
-  rpc StartRemoteSession (MachineRef) returns (RemoteSessionReply);
+  // Fase 6. Deliberadamente APARTE de StartRemoteSession: ese decide COMO se
+  // lanza cada motor, y eso es la Fase 8. Este solo autoriza, que es lo unico
+  // que la Fase 6 tiene que resolver.
+  rpc IssueRemoteTickets (IssueRemoteTicketsRequest) returns (IssueRemoteTicketsResponse);
+  rpc StartRemoteSession (RemoteSessionRequest) returns (RemoteSessionReply);
   rpc EndRemoteSession (RemoteSessionRef) returns (RemoteSessionReply);
   rpc SendCommand (SendCommandRequest) returns (CommandEntry);
   rpc ListCommands (MachineRef) returns (CommandList);
@@ -358,6 +388,13 @@ message TerminalCommandReply {
   string working_dir = 4;    // puede cambiar si el comando fue un `cd`
   bool truncated = 5;
   int32 duration_ms = 6;
+
+  // Fase 23. Bajo que identidad se ejecuto: el agente es un servicio LocalSystem,
+  // asi que es NT AUTHORITY\SYSTEM -- por encima de administrador. Viaja para
+  // que el tecnico lo vea, porque cambia lo que devuelven los comandos:
+  // %USERPROFILE% es el perfil de SYSTEM y las unidades de red del usuario no
+  // existen ahi.
+  string identity = 7;
 }
 
 message RemoteSessionRef {
@@ -366,6 +403,29 @@ message RemoteSessionRef {
 
 // Lo que el dashboard necesita para lanzar el cliente local. Nada aqui nombra a
 // RustDesk: `launch_target` es lo que el provider decida que hay que ejecutar.
+// La identidad del tecnico NO viaja aqui: sale del principal autenticado. Si
+// viniera en el mensaje, cualquiera con permiso para llamar podria emitir un
+// ticket a nombre de otro, y el ticket dejaria de decir quien pidio la sesion.
+message IssueRemoteTicketsRequest {
+  string target_machine_id = 1;   // la PC que se va a controlar
+  string viewer_machine_id = 2;   // la PC del tecnico, si ya se conoce
+}
+
+// Los dos secretos salen UNA sola vez y en claro. El servidor solo se queda con
+// su SHA-256; no hay forma de recuperarlos despues, ni la tiene que haber.
+message IssueRemoteTicketsResponse {
+  string session_id = 1;
+  string host_ticket = 2;
+  string viewer_ticket = 3;
+  int64 expires_at_us = 4;
+
+  // Fase 7: si el agente de esa PC estaba conectado y recibio la orden de
+  // arrancar el host. Falso no es un error del ticket -- el ticket es valido y
+  // caduca igual -- pero el tecnico tiene que saber que nadie va a conectarse
+  // del otro lado.
+  bool host_notified = 5;
+}
+
 message RemoteSessionReply {
   string session_id = 1;
   string provider = 2;
@@ -374,6 +434,37 @@ message RemoteSessionReply {
   string launch_arguments = 5;
   google.protobuf.Timestamp started_at = 6;
   google.protobuf.Timestamp ended_at = 7;
+
+  // Fase 8. Lo que el dashboard tiene que escribir en el STDIN del proceso que
+  // lanza, si el motor lo necesita. Vacio para los que no.
+  //
+  // Va aparte de launch_arguments a proposito y no es un capricho: los
+  // argumentos de un proceso los lee cualquier usuario de esa PC, y esto es la
+  // credencial que da acceso a ver y controlar una pantalla. No se registra en
+  // ningun log.
+  string viewer_secret = 8;
+
+  // Si el motor necesitaba arrancar el otro extremo y el agente estaba
+  // conectado para recibir la orden. Falso no invalida la sesion, pero el
+  // tecnico tiene que saber que nadie va a conectarse del otro lado.
+  bool host_notified = 9;
+}
+
+// Fase 8. La direccion y el pin los trae el DASHBOARD: el servidor no puede
+// saber por que direccion se le ve desde la red del tecnico -- puede haber NAT,
+// varias interfaces, o un nombre distinto segun la planta.
+message RemoteSessionRequest {
+  string machine_id = 1;
+  string viewer_machine_id = 2;
+  string server_address = 3;
+  string server_pin = 4;
+
+  // Que motor usar. Vacio = el configurado en el servidor.
+  //
+  // El dashboard manda un NOMBRE opaco, no una eleccion de comportamiento: sigue
+  // sin saber que hace cada motor ni como se lanza. Poder elegir es del tecnico;
+  // saber lanzarlo, del servidor.
+  string provider = 5;
 }
 
 message SendCommandRequest {

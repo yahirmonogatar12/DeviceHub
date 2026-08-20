@@ -1,0 +1,183 @@
+using System.Runtime.InteropServices;
+using System.Windows.Interop;
+
+namespace DeviceHub.RemoteViewer.Render;
+
+/// <summary>
+/// Una ventana hija de Win32 dentro del arbol WPF, y nada mas.
+///
+/// El video se presenta con un swapchain D3D11 sobre este HWND, no con
+/// D3DImage: D3DImage obliga a compartir superficies con D3D9Ex, que es la capa
+/// mas fragil de todo el camino. El precio es el problema de AIRSPACE -- nada de
+/// XAML puede dibujarse encima de este rectangulo -- y por eso las estadisticas
+/// van AL LADO, en una barra propia, no superpuestas.
+///
+/// Esta clase no toca Direct3D. Solo entrega el handle y lo destruye; quien
+/// dibuja es VideoPresenter, desde el hilo de reproduccion.
+/// </summary>
+public sealed class VideoSurface : HwndHost
+{
+    private const int WsChild = 0x40000000;
+    private const int WsVisible = 0x10000000;
+
+    private readonly ManualResetEventSlim _listo = new(false);
+    private IntPtr _hwnd;
+
+    /// <summary>Espera a que WPF construya la ventana hija. La reproduccion no
+    /// puede crear el swapchain antes de que exista el HWND.</summary>
+    public IntPtr WaitForWindow(TimeSpan espera)
+        => _listo.Wait(espera) ? _hwnd : IntPtr.Zero;
+
+    protected override HandleRef BuildWindowCore(HandleRef hwndParent)
+    {
+        // Clase "static": una de las predefinidas de Windows, asi que no hay que
+        // registrar ninguna. No dibuja nada por su cuenta, que es exactamente lo
+        // que se quiere de una superficie que va a pintar DXGI.
+        _hwnd = CreateWindowEx(
+            0, "static", null, WsChild | WsVisible,
+            0, 0, 1, 1, hwndParent.Handle, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+
+        if (_hwnd == IntPtr.Zero)
+            throw new InvalidOperationException(
+                $"No se pudo crear la ventana del video (error {Marshal.GetLastWin32Error()}).");
+
+        _listo.Set();
+        return new HandleRef(this, _hwnd);
+    }
+
+    /// <summary>
+    /// Raton sobre el video: (x, y) normalizados 0..1, el mensaje de Win32 y su
+    /// wParam.
+    ///
+    /// POR QUE NO SE USAN LOS EVENTOS DE WPF. Esta es una ventana Win32 de
+    /// verdad, encima del arbol visual. Los mensajes del raton van a ELLA, no a
+    /// WPF, asi que MouseMove y MouseDown del elemento no se disparan nunca --
+    /// el video se veia perfecto y no se podia controlar nada. Se cogen aqui,
+    /// donde llegan.
+    /// </summary>
+    public event Action<double, double, int, IntPtr>? Raton;
+
+    /// <summary>
+    /// La clase "static" contesta HTTRANSPARENT al WM_NCHITTEST, y con eso
+    /// Windows enruta los mensajes del raton a la ventana de debajo en vez de a
+    /// esta. Se responde HTCLIENT para quedarselos.
+    /// </summary>
+    /// <summary>
+    /// El cursor que se ensena sobre el video: el de la PC REMOTA. Fase 11.
+    ///
+    /// Se responde a WM_SETCURSOR porque la clase "static" pone la flecha por su
+    /// cuenta en cada movimiento; poner el cursor una vez y marcharse no dura ni
+    /// un pixel.
+    /// </summary>
+    private IntPtr _cursor;
+    private bool _cursorVisible = true;
+
+    public void UsarCursor(IntPtr nuevo, bool visible)
+    {
+        _cursorVisible = visible;
+
+        if (nuevo == IntPtr.Zero || nuevo == _cursor)
+            return;
+
+        var anterior = _cursor;
+        _cursor = nuevo;
+
+        // El anterior se destruye DESPUES de cambiar el campo: destruirlo antes
+        // deja un instante en el que WM_SETCURSOR usaria un handle muerto.
+        if (anterior != IntPtr.Zero)
+            DestroyIcon(anterior);
+    }
+
+    protected override IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == WmSetCursor && _cursor != IntPtr.Zero)
+        {
+            // Zero oculta el puntero, que es lo correcto cuando la aplicacion de
+            // alla lo escondio -- un juego, un visor a pantalla completa.
+            SetCursor(_cursorVisible ? _cursor : IntPtr.Zero);
+            handled = true;
+            return 1;
+        }
+
+        if (msg == WmNcHitTest)
+        {
+            handled = true;
+            return HtClient;
+        }
+
+        if (msg is >= WmMouseFirst and <= WmMouseLast && Raton is not null && GetClientRect(hwnd, out var caja))
+        {
+            var ancho = Math.Max(caja.Right - caja.Left, 1);
+            var alto = Math.Max(caja.Bottom - caja.Top, 1);
+
+            // La rueda trae coordenadas de PANTALLA, no de cliente. Es la unica
+            // del grupo que lo hace, y mezclarlas manda el puntero a otro sitio.
+            var bruto = (int)(lParam.ToInt64() & 0xFFFFFFFF);
+            var x = (short)(bruto & 0xFFFF);
+            var y = (short)((bruto >> 16) & 0xFFFF);
+
+            if (msg == WmMouseWheel)
+            {
+                var punto = new POINT { X = x, Y = y };
+                ScreenToClient(hwnd, ref punto);
+                x = (short)punto.X;
+                y = (short)punto.Y;
+            }
+
+            Raton((double)x / ancho, (double)y / alto, msg, wParam);
+        }
+
+        return base.WndProc(hwnd, msg, wParam, lParam, ref handled);
+    }
+
+    private const int WmNcHitTest = 0x0084;
+    private const int WmSetCursor = 0x0020;
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetCursor(IntPtr cursor);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DestroyIcon(IntPtr icono);
+    private const int HtClient = 1;
+    private const int WmMouseFirst = 0x0200;
+    private const int WmMouseLast = 0x020E;
+    public const int WmMouseWheel = 0x020A;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int X, Y; }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetClientRect(IntPtr hwnd, out RECT rect);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ScreenToClient(IntPtr hwnd, ref POINT point);
+
+    protected override void DestroyWindowCore(HandleRef hwnd)
+    {
+        if (_cursor != IntPtr.Zero)
+        {
+            DestroyIcon(_cursor);
+            _cursor = IntPtr.Zero;
+        }
+
+        _listo.Reset();
+        _hwnd = IntPtr.Zero;
+        DestroyWindow(hwnd.Handle);
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateWindowEx(
+        int exStyle, string className, string? windowName, int style,
+        int x, int y, int width, int height,
+        IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DestroyWindow(IntPtr hwnd);
+}
