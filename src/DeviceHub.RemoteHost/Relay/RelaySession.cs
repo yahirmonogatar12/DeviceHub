@@ -461,13 +461,29 @@ public static class RelaySession
 
                 if (reloj.Elapsed >= siguienteAviso)
                 {
+                    // LA OCUPACION SE MIDE ANTES DE ESCRIBIR NADA.
+                    //
+                    // Medir() encola el mensaje de estado EN ESTA MISMA COLA, y
+                    // Avisar() igual. Leyendola despues, el controlador de
+                    // bitrate encontraba siempre al menos un elemento -- el
+                    // nuestro -- y caia en la rama de "con algo de cola no se
+                    // toca". No subia NUNCA: la sesion se quedaba clavada en el
+                    // bitrate de arranque, que en Equilibrado son 1388 kbps, y
+                    // por eso la imagen se ablandaba con movimiento mientras en
+                    // Fiel no.
+                    //
+                    // La linea de estado imprimia "cola 0" y era verdad: se
+                    // evalua antes de encolarse a si misma. El que veia 1 era el
+                    // controlador.
+                    var enCola = cola.Reader.Count;
+
                     _medidas?.Invoke(cuenta);
 
                     Medir(opciones,
                         $"{reloj.Elapsed:mm\\:ss}  capturados {cuenta.Capturados}  codificados {cuenta.Codificados}  " +
                         $"frames enviados {cuenta.Enviados}  chunks {cuenta.Trozos}  " +
                         $"{cuenta.Bytes * 8 / reloj.Elapsed.TotalSeconds / 1_000_000:0.00} Mbps  " +
-                        $"keyframes {cuenta.Claves}  config {cuenta.ConfigVersion}  cola {cola.Reader.Count}  " +
+                        $"keyframes {cuenta.Claves}  config {cuenta.ConfigVersion}  cola {enCola}  " +
                         $"acuses {(_visorAcusa ? "si" : "no")}/{cuenta.AcusesPerdidos} perdidos  " +
                         $"red {_retraso.Base:0.0} ms + cola {_retraso.Encolado:0.0} ms  " +
                         $"verse {_verse.Ultimo:0.0} ms (min {_verse.Base:0.0})  " +
@@ -490,7 +506,7 @@ public static class RelaySession
                     // aunque no cupiera. Un acuse perdido pasa a contar como
                     // cola llena, que es exactamente lo que significa.
                     var acusesPerdidos = Interlocked.Read(ref cuenta.AcusesPerdidos);
-                    var ocupacion = acusesPerdidos > acusesAlMirar ? 8 : cola.Reader.Count;
+                    var ocupacion = acusesPerdidos > acusesAlMirar ? 8 : enCola;
 
                     acusesAlMirar = acusesPerdidos;
 

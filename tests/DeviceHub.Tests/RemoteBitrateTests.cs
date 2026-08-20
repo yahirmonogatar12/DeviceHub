@@ -186,4 +186,21 @@ public class RemoteBitrateTests
         Assert.True(bitrate >= 3_800_000);
         Assert.True(pasos <= 8, $"tardo {pasos} pasos en llegar");
     }
+
+    [Fact]
+    public void One_single_item_in_the_queue_freezes_the_climb()
+    {
+        // ESTE ES EL FALLO QUE COSTO LA NITIDEZ. La rama de "con algo de cola no
+        // se toca" es correcta, pero basta UN elemento para caer en ella -- y el
+        // host medía la cola DESPUES de encolar en ella su propia linea de
+        // estadisticas, asi que siempre habia uno.
+        //
+        // Resultado: en Equilibrado el objetivo se quedaba clavado en los 1388
+        // kbps de arranque para siempre, y la imagen se ablandaba al mover una
+        // ventana. En Fiel no se notaba porque de entrada ya hay bits de sobra.
+        const int Arranque = 1_388_910;
+
+        Assert.Equal(Arranque, ControlBitrate.Siguiente(Arranque, 1, Capacidad, pantallaViva: true));
+        Assert.True(ControlBitrate.Siguiente(Arranque, 0, Capacidad, pantallaViva: true) > Arranque);
+    }
 }
