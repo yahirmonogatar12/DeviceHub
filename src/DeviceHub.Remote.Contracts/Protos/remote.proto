@@ -79,6 +79,7 @@ message RemotePacket {
     ClipboardFiles      clipboard_files   = 30;
     HostStatus          host_status       = 31;
     VideoAck            video_ack         = 32;
+    SelectCodec         select_codec      = 33;
   }
 }
 
@@ -577,6 +578,21 @@ message KeyEvent {
 // ---------------------------------------------------------------------------
 // Control de sesion
 // ---------------------------------------------------------------------------
+
+// Cambiar de codec EN CALIENTE, sin editar un json ni reiniciar un servicio.
+//
+// Es la unica forma honesta de comparar H.264 con H.265: la misma PC, la misma
+// pantalla y el mismo contenido, con segundos de diferencia. Editar el
+// appsettings del agente y reiniciar el servicio mete minutos y un reinicio en
+// medio de la comparacion, que es justo lo que docs/benchmark.md prohibe.
+//
+// El host rehace duplicador y codificador -- la misma cadena que un cambio de
+// pantalla -- y estrena config_version. Si esa GPU no puede con el codec
+// pedido, se queda en el que tenia y lo dice: lo que manda es lo que vuelva en
+// VideoConfig, no lo que se pidio.
+message SelectCodec {
+  VideoCodec codec = 1;
+}
 
 // EL FRENO QUE IMPIDE QUE EL EMISOR SE ADELANTE AL RECEPTOR.
 //

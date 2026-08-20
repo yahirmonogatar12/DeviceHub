@@ -249,6 +249,16 @@ public static class RelaySession
     /// </summary>
     private static int _pantalla;
 
+    /// <summary>
+    /// Codec que el tecnico pidio desde el visor. Arranca en lo que diga el
+    /// appsettings del agente y se puede cambiar en caliente.
+    ///
+    /// Lo lee el hilo de captura y lo escribe el de red, igual que la pantalla:
+    /// tocar el MFT desde fuera de su hilo es la familia de cuelgues que costo
+    /// dos fases entender.
+    /// </summary>
+    private static VideoCodec _codec = VideoCodec.Unspecified;
+
     /// <summary>Numeracion de frames de toda la SESION. No se reinicia al rehacer
     /// la captura: ver el comentario en la llamada a Split.</summary>
     private static ulong _frameDeLaSesion;
@@ -759,6 +769,14 @@ public static class RelaySession
         var pedida = _pantalla;
         var elegida = pantallas.FirstOrDefault(p => p.Id == pedida);
 
+        // Sin peticion del tecnico manda el appsettings del agente. La primera
+        // vuelta fija _codec para que la comparacion de mas abajo no se dispare
+        // sola en el primer medio segundo.
+        if (_codec == VideoCodec.Unspecified)
+            _codec = opciones.UsarH265 ? VideoCodec.H265 : VideoCodec.H264;
+
+        var codecPedido = _codec;
+
         // Todas a la vez compone N duplicaciones en una imagen del tamano del
         // escritorio virtual; una sola entrega la textura del duplicador sin
         // copiar nada. La entrada funciona igual con las dos: InputInjector
@@ -784,6 +802,15 @@ public static class RelaySession
         // Con una sola pantalla la lista tiene un elemento, asi que el camino de
         // siempre no se bifurca: es el mismo bucle con N=1.
         var flujos = Etiquetar(paso, () => AbrirFlujos(pedida, pantallas, elegida, opciones, cuenta));
+
+        // LO QUE SALIO, no lo que se pidio.
+        //
+        // Si no habia codificador H.265, Codificar se cayo a H.264. Comparar
+        // contra el deseo original dejaria _codec en H.264 y codecPedido en
+        // H.265 para siempre, y el bucle de abajo reharia la captura cada medio
+        // segundo sin que nada cambiara nunca.
+        codecPedido = flujos[0].Codificador.Codec;
+        _codec = codecPedido;
 
         using var pararBombas = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var bombas = new List<Thread>();
@@ -822,7 +849,7 @@ public static class RelaySession
         opciones.Escribir(
             $"Identidad {System.Security.Principal.WindowsIdentity.GetCurrent().Name}  " +
             $"Escritorio {escritorio.Name}  Flujos {flujos.Count}  " +
-            $"Codec {(flujos[0].Codificador.Codec == VideoCodec.H265 ? "H.265" : "H.264")}  " +
+            $"Codec {Etiqueta(flujos[0].Codificador.Codec)}  " +
             $"MFT {flujos[0].Codificador.Capabilities.Name}  " +
             $"Hardware {(flujos[0].Codificador.Capabilities.Hardware ? "TRUE" : "FALSE")}  " +
             $"Lienzo {lienzo.Ancho}x{lienzo.Alto}");
@@ -914,6 +941,14 @@ public static class RelaySession
                     if (_pantalla != pedida)
                     {
                         opciones.Escribir($"El tecnico pidio la pantalla {_pantalla}; se rehace la captura");
+                        return;
+                    }
+
+                    // Igual que la pantalla, y por lo mismo: el SPS que el visor
+                    // tiene descodifica el codec anterior.
+                    if (_codec != codecPedido)
+                    {
+                        Avisar(opciones, $"El tecnico pidio {Etiqueta(_codec)}; se rehace la captura");
                         return;
                     }
 
@@ -1528,13 +1563,16 @@ public static class RelaySession
     /// casos reales, y con el interruptor puesto por descuido dejarian sin
     /// control remoto a una PC de planta. Mejor H.264 y un aviso.
     /// </summary>
+    internal static string Etiqueta(VideoCodec codec)
+        => codec == VideoCodec.H265 ? "H.265" : "H.264";
+
     private static H264Encoder Codificar(
         ID3D11Device device, int ancho, int alto, Vortice.Luid luid, uint vendor,
         RelayOptions opciones)
     {
         var bitrate = ControlBitrate.PorResolucion(ancho, alto);
 
-        if (opciones.UsarH265)
+        if (_codec == VideoCodec.H265)
         {
             try
             {
@@ -1545,6 +1583,11 @@ public static class RelaySession
             catch (Exception ex)
             {
                 Avisar(opciones, $"Sin codificador H.265 ({ex.Message.Split('\n')[0]}); se sigue en H.264.");
+
+                // Se apunta el resultado REAL. Si no se corrigiera, el bucle de
+                // fuera veria H.265 pedido y H.264 en marcha y rehariam la
+                // captura cada medio segundo para siempre.
+                _codec = VideoCodec.H264;
             }
         }
 
@@ -1879,6 +1922,12 @@ public static class RelaySession
                             FileAck = _archivos.Escribir(paquete.FileChunk)
                         });
 
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.SelectCodec:
+                        // Solo se anota, igual que la pantalla. Quien rehace la
+                        // cadena es el hilo que la tiene.
+                        _codec = paquete.SelectCodec.Codec;
                         break;
 
                     case RemotePacket.PayloadOneofCase.SelectDisplay:

@@ -479,6 +479,7 @@ public partial class RelayWindow : Window
                         {
                             _videoAncho = ancho;
                             _videoAlto = alto;
+                            MarcarCodec(nueva.Codec);
                             Ajustar();
                         });
 
@@ -920,6 +921,41 @@ public partial class RelayWindow : Window
         MenuEscala.ToolTip = $"Vista: {elegido.Header}";
 
         Ajustar();
+    }
+
+    /// <summary>
+    /// Pide otro codec y rehace la cadena, sin tocar ningun json.
+    ///
+    /// Es la unica forma honesta de comparar los dos: la misma PC, la misma
+    /// pantalla y el mismo contenido con segundos de diferencia. Editar el
+    /// appsettings del agente y reiniciar el servicio mete minutos y un
+    /// reinicio en medio, que es justo lo que docs/benchmark.md prohibe.
+    /// </summary>
+    private void ElegirCodec(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem elegido || elegido.Tag is not string etiqueta)
+            return;
+
+        var codec = etiqueta == "h265" ? VideoCodec.H265 : VideoCodec.H264;
+
+        // Las marcas NO se tocan aqui. Las pone MarcarCodec cuando llegue la
+        // VideoConfig con el codec que de verdad salio: si esa GPU no puede con
+        // H.265, marcarlo ahora seria enseñar un estado que no existe.
+        Encolar(new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = _sesion,
+            SelectCodec = new SelectCodec { Codec = codec }
+        });
+
+        Nota($"Cambiando a {(codec == VideoCodec.H265 ? "H.265" : "H.264")}...");
+    }
+
+    /// <summary>La marca sigue al codec REAL, el que vuelve en VideoConfig.</summary>
+    private void MarcarCodec(VideoCodec codec)
+    {
+        MenuH264.IsChecked = codec != VideoCodec.H265;
+        MenuH265.IsChecked = codec == VideoCodec.H265;
     }
 
     private void Ajustar(object sender, SizeChangedEventArgs e) => Ajustar();

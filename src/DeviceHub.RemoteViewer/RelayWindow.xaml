@@ -231,6 +231,23 @@
                             <MenuItem Header="50 %" Tag="0.5" IsCheckable="True" Click="ElegirEscala" />
                             <MenuItem Header="150 %" Tag="1.5" IsCheckable="True" Click="ElegirEscala" />
                             <MenuItem Header="200 %" Tag="2" IsCheckable="True" Click="ElegirEscala" />
+
+                            <Separator />
+
+                            <MenuItem IsHitTestVisible="False" Focusable="False">
+                                <MenuItem.Header>
+                                    <TextBlock Text="Codec" Foreground="{StaticResource LetraTenue}" FontSize="11" />
+                                </MenuItem.Header>
+                            </MenuItem>
+
+                            <!-- La marca la pone lo que VUELVE en VideoConfig, no
+                                 lo que se pulso: si esa GPU no puede con H.265,
+                                 el host se queda en H.264 y aqui tiene que verse
+                                 eso y no el deseo. -->
+                            <MenuItem x:Name="MenuH264" Header="H.264" Tag="h264"
+                                      IsCheckable="True" IsChecked="True" Click="ElegirCodec" />
+                            <MenuItem x:Name="MenuH265" Header="H.265  (menos ancho de banda)" Tag="h265"
+                                      IsCheckable="True" Click="ElegirCodec" />
                         </MenuItem>
                     </Menu>
 

@@ -394,6 +394,7 @@ public sealed class RemoteRelayGrpcService(
             RemotePacket.PayloadOneofCase.Input or
             RemotePacket.PayloadOneofCase.HostAction or
             RemotePacket.PayloadOneofCase.SelectDisplay or
+            RemotePacket.PayloadOneofCase.SelectCodec or
             RemotePacket.PayloadOneofCase.FileListRequest or
             RemotePacket.PayloadOneofCase.FileDownload or
             RemotePacket.PayloadOneofCase.KeyframeRequest or
