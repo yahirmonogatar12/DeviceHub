@@ -1241,7 +1241,7 @@ public static class RelaySession
                             Codec = flujo.Codificador.Codec,
                             Width = (uint)frameCodificado.Width,
                             Height = (uint)frameCodificado.Height,
-                            FramesPerSecond = (uint)opciones.Fps,
+                            FramesPerSecond = (uint)FpsDeclarado(opciones),
                             BitrateBitsPerSecond = (uint)flujo.BitrateBase,
                             ParameterSets = Google.Protobuf.ByteString.CopyFrom(parametros),
                             VisibleWidth = (uint)frameCodificado.Width,
@@ -1601,6 +1601,23 @@ public static class RelaySession
     /// casos reales, y con el interruptor puesto por descuido dejarian sin
     /// control remoto a una PC de planta. Mejor H.264 y un aviso.
     /// </summary>
+    /// <summary>
+    /// Los FPS que se le DECLARAN al codificador.
+    ///
+    /// Tienen que ser los que de verdad va a recibir, no los que a alguien le
+    /// gustaria. El control de tasa divide el presupuesto entre este numero, y
+    /// declarar 60 mientras le llegan 19 reparte los bits entre cuarenta y un
+    /// frames que no existen: el resultado eran 0.25 Mbps de un objetivo de
+    /// 3109, o sea el 8 %, y una imagen blanda en cuanto algo se movia.
+    ///
+    /// Es el techo del control de ritmo y no el ritmo actual: cambiar
+    /// MF_MT_FRAME_RATE obliga a reconfigurar la salida -- SPS nuevo,
+    /// config_version nueva, el visor tirando su decodificador -- y eso no se
+    /// puede hacer cada vez que la red respira.
+    /// </summary>
+    private static int FpsDeclarado(RelayOptions opciones)
+        => Math.Clamp(opciones.Fps, ControlFps.Minimo, ControlFps.Maximo);
+
     /// <summary>La base de todas las pantallas por la calidad pedida, acotada a
     /// lo que el codificador acepta.</summary>
     private static int Objetivo(int baseTotal)
@@ -1614,13 +1631,14 @@ public static class RelaySession
         RelayOptions opciones)
     {
         var bitrate = ControlBitrate.PorResolucion(ancho, alto, _calidad);
+        var fps = FpsDeclarado(opciones);
 
         if (_codec == VideoCodec.H265)
         {
             try
             {
                 return new H264Encoder(
-                    device, ancho, alto, opciones.Fps, bitrate, luid, vendor,
+                    device, ancho, alto, fps, bitrate, luid, vendor,
                     codec: VideoCodec.H265);
             }
             catch (Exception ex)
@@ -1634,7 +1652,7 @@ public static class RelaySession
             }
         }
 
-        return new H264Encoder(device, ancho, alto, opciones.Fps, bitrate, luid, vendor);
+        return new H264Encoder(device, ancho, alto, fps, bitrate, luid, vendor);
     }
 
     private static bool Relevar(Flujo flujo, RelayOptions opciones, Contadores cuenta)
@@ -1647,7 +1665,7 @@ public static class RelaySession
             var gdi = new GdiDesktopCapture(info.X, info.Y, info.Ancho, info.Alto);
 
             var codificador = new H264Encoder(
-                gdi.Device, gdi.Width, gdi.Height, opciones.Fps,
+                gdi.Device, gdi.Width, gdi.Height, FpsDeclarado(opciones),
                 Math.Max(flujo.BitrateDeseado, ControlBitrate.Minimo),
                 gdi.AdapterLuid, gdi.AdapterVendorId,
                 codec: flujo.Codificador.Codec);

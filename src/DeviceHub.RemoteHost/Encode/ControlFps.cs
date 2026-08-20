@@ -22,7 +22,20 @@ public static class ControlFps
     /// diapositivas: mas vale una imagen peor que llegue seguida.</summary>
     public const int Minimo = 5;
 
-    public const int Maximo = 60;
+    /// <summary>
+    /// EL TECHO ES 30, no 60, y es lo que hace RustDesk: su contexto de
+    /// codificador declara DEFAULT_FPS = 30 y en el campo corren a 24.
+    ///
+    /// Subir mas no daba mas fluidez y si quitaba nitidez. El control de tasa
+    /// del codificador reparte el presupuesto entre los FPS que se le declaran:
+    /// 3109 kbps entre 60 son 52 kbit por frame, contra los 160 que gasta
+    /// RustDesk. Con la pantalla quieta no se nota; al mover una ventana se ve
+    /// enseguida, porque es justo cuando el frame necesita bits.
+    ///
+    /// Y un escritorio no da 60 cambios por segundo casi nunca: se estaba
+    /// repartiendo el presupuesto entre frames que no existen.
+    /// </summary>
+    public const int Maximo = 30;
 
     /// <summary>
     /// Objetivo de arranque. No se empieza por el maximo a proposito: subir

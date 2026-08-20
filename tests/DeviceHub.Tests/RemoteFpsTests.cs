@@ -77,4 +77,28 @@ public class RemoteFpsTests
     [Fact]
     public void Se_arranca_por_debajo_del_maximo()
         => Assert.InRange(ControlFps.Inicial, ControlFps.Minimo + 1, ControlFps.Maximo - 1);
+
+    [Fact]
+    public void The_ceiling_matches_what_the_encoder_is_told()
+    {
+        // EL TECHO NO ES DECORATIVO. El control de tasa del codificador reparte
+        // el presupuesto entre los FPS que se le declaran, y se le declara este
+        // maximo. Subirlo sin subir el bitrate reparte los mismos bits entre
+        // mas frames y la imagen se ablanda al moverse: con 60 declarados y 19
+        // reales, 3109 kbps producian 0.25 Mbps.
+        //
+        // 30 es lo que declara RustDesk en su contexto de codificador.
+        Assert.Equal(30, ControlFps.Maximo);
+    }
+
+    [Fact]
+    public void A_healthy_link_climbs_to_the_ceiling_and_stops()
+    {
+        var fps = ControlFps.Inicial;
+
+        for (var i = 0; i < 40; i++)
+            fps = ControlFps.Siguiente(fps, rttMs: 5);
+
+        Assert.Equal(ControlFps.Maximo, fps);
+    }
 }
