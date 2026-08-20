@@ -319,14 +319,6 @@ public static class RelaySession
         /// <summary>Frames que salieron y nadie confirmo en EsperaDeAcuseMs. Si
         /// esto sube, el visor no esta siguiendo el ritmo.</summary>
         public long AcusesPerdidos;
-
-        /// <summary>Pixeles convertidos de BGRA a NV12 contra los que habria
-        /// costado convertir la pantalla entera cada vez. 100 % = los
-        /// rectangulos sucios no estan sirviendo de nada.</summary>
-        public long PixelesConvertidos, PixelesTotales;
-
-        public double PorcentajeConvertido
-            => PixelesTotales == 0 ? 100 : PixelesConvertidos * 100.0 / PixelesTotales;
         public uint ConfigVersion;
 
         /// <summary>La misma cuenta, en un campo que Interlocked puede tocar: al
@@ -437,10 +429,6 @@ public static class RelaySession
 
                 if (reloj.Elapsed >= siguienteAviso)
                 {
-                    // Se leen AQUI y no solo al cerrar. Antes el porcentaje se
-                    // calculaba sobre contadores en cero y salia el 100 % de la
-                    // rama de "todavia no hay datos": justo el numero que haria
-                    // pensar que los rectangulos no estan sirviendo.
                     _medidas?.Invoke(cuenta);
 
                     Medir(opciones,
@@ -455,7 +443,6 @@ public static class RelaySession
                         // la entrada llega de verdad al otro lado o se la traga
                         // el escritorio equivocado.
                         $"descartes {cuenta.DescartesEncoder}+{cuenta.DescartesCaptura}  " +
-                        $"convertido {cuenta.PorcentajeConvertido:0}%  " +
                         $"entrada {_entrada?.Applied ?? 0}/{_entrada?.Rejected ?? 0}");
 
                     // El bitrate se DECIDE aqui, donde se ve la cola, y se
@@ -854,9 +841,8 @@ public static class RelaySession
         // lo suyo, y esto solo abre un semaforo.
         _medidas = c =>
         {
-            c.PixelesConvertidos = flujos.Sum(f => f.Codificador.Conversion.Convertidos);
-            c.PixelesTotales = flujos.Sum(f => f.Codificador.Conversion.Totales);
             c.DescartesEncoder = flujos.Sum(f => f.Codificador.Dropped);
+            c.DescartesCaptura = flujos.Sum(f => f.Captura.Dropped);
         };
 
         _acusar = (pantalla, frame) =>
@@ -1066,8 +1052,6 @@ public static class RelaySession
             }
 
             cuenta.DescartesEncoder = flujos.Sum(f => f.Codificador.Dropped);
-            cuenta.PixelesConvertidos = flujos.Sum(f => f.Codificador.Conversion.Convertidos);
-            cuenta.PixelesTotales = flujos.Sum(f => f.Codificador.Conversion.Totales);
             cuenta.DescartesCaptura = flujos.Sum(f => f.Captura.Dropped);
         }
         }
@@ -1360,8 +1344,15 @@ public static class RelaySession
     /// saber si el cuello era la iGPU habia que ir hasta la maquina.</summary>
     private static Action<string>? _medir;
 
-    /// <summary>Refresca los contadores que viven en los flujos. Los pone
-    /// Escritorio, que es quien tiene la lista.</summary>
+    /// <summary>
+    /// Refresca los contadores que viven dentro de los flujos.
+    ///
+    /// Existe porque sin esto los descartes se leian UNA sola vez, al terminar
+    /// la captura, y la linea de cada 2 s imprimia el cero con el que nacieron.
+    /// O sea que "descartes 0+0" no era una medida: era un contador sin
+    /// rellenar, y con el se concluyo que el codificador de la PC de planta no
+    /// era el cuello de botella. No habia datos para decir eso.
+    /// </summary>
     private static Action<Contadores>? _medidas;
 
     /// <summary>

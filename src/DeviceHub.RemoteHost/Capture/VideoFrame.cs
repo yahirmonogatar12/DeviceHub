@@ -34,10 +34,8 @@ public sealed class VideoFrame : IDisposable
 
     internal VideoFrame(
         ID3D11Texture2D texture, int width, int height,
-        ulong frameId, long timestampUs, bool desktopChanged, Action release,
-        Vortice.RawRect? dirty = null)
+        ulong frameId, long timestampUs, bool desktopChanged, Action release)
     {
-        Dirty = dirty;
         Texture = texture;
         Width = width;
         Height = height;
@@ -46,16 +44,6 @@ public sealed class VideoFrame : IDisposable
         DesktopChanged = desktopChanged;
         _release = release;
     }
-
-    /// <summary>
-    /// La caja que envuelve lo que cambio, o null si no se sabe.
-    ///
-    /// Null NO significa "no cambio nada" -- para eso esta DesktopChanged --
-    /// sino "convierte todo". Es la respuesta segura cuando DXGI no da
-    /// metadatos: convertir de mas cuesta tiempo, convertir de menos deja
-    /// pixeles viejos en pantalla.
-    /// </summary>
-    public Vortice.RawRect? Dirty { get; }
 
     /// <summary>Valida solo hasta <see cref="Dispose"/>.</summary>
     public ID3D11Texture2D Texture { get; }

@@ -166,21 +166,6 @@ public sealed class H264Encoder : IVideoEncoder
     /// </summary>
     public void ForzarKeyframe() => _forzarKeyframe = true;
 
-    /// <summary>Hasta que no se convierte una vez entera, la textura NV12 tiene
-    /// lo que la GPU tuviera en esa memoria.</summary>
-    private bool _primeraConversionHecha;
-
-    /// <summary>Se salto al menos un frame desde la ultima conversion, y su zona
-    /// hay que arrastrarla hasta que alguna entre.</summary>
-    private bool _saltado;
-
-    private Vortice.RawRect? _saltadoZona;
-
-    /// <summary>Pixeles convertidos contra los que habria costado convertirlo
-    /// todo. Es lo que dice si los rectangulos sucios estan sirviendo.</summary>
-    public (long Convertidos, long Totales) Conversion
-        => (_converter.PixelesConvertidos, _converter.PixelesTotales);
-
     /// <summary>
     /// Cambia el bitrate objetivo SIN rehacer el codificador.
     ///
@@ -282,39 +267,7 @@ public sealed class H264Encoder : IVideoEncoder
         // espera perjudica el caso que importa.
         if (_needInput > 0)
         {
-            // SOLO LO QUE CAMBIO, cuando DXGI dice que lo sabe.
-            //
-            // La textura NV12 se reutiliza entre frames, asi que lo que queda
-            // fuera de la caja conserva el contenido anterior -- que para un
-            // pixel que no cambio ES el contenido actual.
-            //
-            // El PRIMER frame va entero por narices: hasta que se convierte una
-            // vez, esa textura tiene lo que la GPU tuviera ahi. Y un keyframe
-            // pedido tambien, que es el punto de resincronizacion natural y sale
-            // barato: son uno cada minuto largo.
-            var zona = _primeraConversionHecha && !_forzarKeyframe ? frame.Dirty : null;
-
-            // Y LO QUE SE SALTO POR EL CAMINO.
-            //
-            // Aqui estaba el fantasma. Un frame descartado porque el
-            // codificador no pedia entrada se llevaba su zona sucia con el, y
-            // esos pixeles ya no volvian a aparecer en ninguna zona posterior:
-            // la del frame siguiente describe SUS cambios, no los del que no se
-            // convirtio. Quedaban ventanas duplicadas en pantalla.
-            //
-            // Antes de los rectangulos esto era inofensivo, porque el siguiente
-            // frame convertia el escritorio entero de todas formas.
-            if (_saltado)
-            {
-                zona = ZonaSucia.Unir(zona, _saltadoZona);
-
-                _saltado = false;
-                _saltadoZona = null;
-            }
-
-            _primeraConversionHecha = true;
-
-            _converter.Convert(frame.Texture, zona);
+            _converter.Convert(frame.Texture);
             Submit(frame.TimestampUs);
 
             if (_needInput != int.MaxValue)
@@ -322,11 +275,7 @@ public sealed class H264Encoder : IVideoEncoder
         }
         else
         {
-            // El codificador no pidio entrada: va por detras de la captura. Lo
-            // que cambio en este frame se apunta para el proximo que si entre.
-            _saltadoZona = _saltado ? ZonaSucia.Unir(_saltadoZona, frame.Dirty) : frame.Dirty;
-            _saltado = true;
-
+            // El codificador no pidio entrada: va por detras de la captura.
             Dropped++;
         }
 
