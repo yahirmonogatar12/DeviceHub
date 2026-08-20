@@ -153,6 +153,27 @@ public sealed class H264Encoder : IVideoEncoder
     private static readonly Guid MeanBitRate =
         new("f7222374-2144-4815-b550-a37f8e12ee52");
 
+    /// <summary>CODECAPI_AVEncCommonLowLatency.</summary>
+    private static readonly Guid BajaLatencia =
+        new("9d3ecd55-89e8-490a-970a-0c9548d5a56e");
+
+    /// <summary>CODECAPI_AVEncMPVDefaultBPictureCount.</summary>
+    private static readonly Guid CuantasB =
+        new("8d390aac-dc5c-4200-b57f-814d04babab2");
+
+    /// <summary>
+    /// Cuantos B-frames dice el codificador que va a emitir. -1 si no contesta.
+    ///
+    /// TIENE QUE SER 0. Un B-frame se codifica mirando un frame FUTURO, asi que
+    /// obliga a emitir en un orden distinto del de reproduccion -- y el
+    /// decodificador del visor va en MF_LOW_LATENCY, que es justo el modo en el
+    /// que NO reordena: saca los frames segun le llegan. Con B-frames en el
+    /// flujo, eso se ve como una ventana que al arrastrarla avanza, retrocede y
+    /// vuelve a avanzar. No es la red ni el desgarro: el desgarro parte un frame
+    /// en dos mitades, pero no puede enseñar el pasado.
+    /// </summary>
+    public int BFrames { get; private set; } = -1;
+
     private bool _forzarKeyframe;
 
     public long KeyframesForzados { get; private set; }
@@ -178,20 +199,8 @@ public sealed class H264Encoder : IVideoEncoder
     /// sigue con el bitrate fijo, que es lo que habia.
     /// </summary>
     public bool CambiarBitrate(int bitsPorSegundo)
-    {
-        // Vortice no cubre ICodecAPI, asi que se declara aqui y solo esa.
-        // Es el precedente de la Fase 2: interop puntual para la API que falta,
-        // nunca migrar toda la capa a otra biblioteca por una funcion.
-        object? crudo = null;
-
-        try
+        => ConCodec(_transform, codec =>
         {
-            crudo = System.Runtime.InteropServices.Marshal
-                .GetObjectForIUnknown(_transform.NativePointer);
-
-            if (crudo is not ICodecAPI codec)
-                return false;
-
             var api = MeanBitRate;
             object valor = bitsPorSegundo;
 
@@ -200,11 +209,29 @@ public sealed class H264Encoder : IVideoEncoder
 
             BitratesAplicados++;
             return true;
+        });
+
+    /// <summary>
+    /// Vortice no cubre ICodecAPI, asi que se declara aqui y solo esa. Es el
+    /// precedente de la Fase 2: interop puntual para la API que falta, nunca
+    /// migrar toda la capa a otra biblioteca por una funcion.
+    ///
+    /// Devuelve false si el codificador no la expone. No es un fallo: se sigue
+    /// con lo que haya, que es lo que habia antes de pedirlo.
+    /// </summary>
+    private static bool ConCodec(IMFTransform transform, Func<ICodecAPI, bool> hacer)
+    {
+        object? crudo = null;
+
+        try
+        {
+            crudo = System.Runtime.InteropServices.Marshal
+                .GetObjectForIUnknown(transform.NativePointer);
+
+            return crudo is ICodecAPI codec && hacer(codec);
         }
         catch (Exception)
         {
-            // Un codificador que no admite cambiar el bitrate en caliente no es
-            // un fallo de sesion: se sigue con el fijo, que es lo que habia.
             return false;
         }
         finally
@@ -241,7 +268,9 @@ public sealed class H264Encoder : IVideoEncoder
         int GetDefaultValue(ref Guid api, out IntPtr valor);
 
         [System.Runtime.InteropServices.PreserveSig]
-        int GetValue(ref Guid api, out IntPtr valor);
+        int GetValue(ref Guid api,
+            [System.Runtime.InteropServices.MarshalAs(
+                System.Runtime.InteropServices.UnmanagedType.Struct)] out object valor);
 
         [System.Runtime.InteropServices.PreserveSig]
         int SetValue(ref Guid api,
@@ -722,9 +751,6 @@ public sealed class H264Encoder : IVideoEncoder
                 $"El codificador no acepta NV12 de {width}x{height} como entrada: {ex.ResultCode}", ex);
         }
 
-        // Baja latencia por atributo, sin ICodecAPI. Si un codificador lo ignora,
-        // se vera en la latencia captura->codificado y se documentara antes de
-        // meter mas interop.
         try
         {
             transform.Attributes?.Set(SinkWriterAttributeKeys.LowLatency, true);
@@ -733,7 +759,49 @@ public sealed class H264Encoder : IVideoEncoder
         {
             // No todos lo admiten; no es motivo para rechazar el codificador.
         }
+
+        SinReordenar(transform);
     }
+
+    /// <summary>
+    /// Se lo pide TAMBIEN por ICodecAPI, y se lee lo que contesta.
+    ///
+    /// MF_LOW_LATENCY es un atributo del MFT y un codificador puede aceptarlo y
+    /// no hacerle caso -- el comentario que habia aqui decia que si lo ignoraba
+    /// "se veria en la latencia", y no: un B-frame no cuesta latencia medible en
+    /// el host, cuesta ORDEN. El frame sale antes que el que va delante suyo, y
+    /// eso no aparece en ningun percentil de encode.
+    ///
+    /// Donde aparece es en la pantalla del tecnico: el decodificador del visor
+    /// tambien va en baja latencia, o sea que NO reordena, asi que enseña los
+    /// frames en el orden en que llegan. Una ventana arrastrada avanza,
+    /// retrocede y vuelve a avanzar.
+    ///
+    /// Y se LEE de vuelta en vez de darlo por hecho. Pedirlo y suponer que se
+    /// obedecio es como llegamos a "el codificador no es el cuello de botella"
+    /// mirando un contador que nunca se rellenaba.
+    /// </summary>
+    private void SinReordenar(IMFTransform transform)
+        => ConCodec(transform, codec =>
+        {
+            var api = BajaLatencia;
+            object si = true;
+
+            codec.SetValue(ref api, ref si);
+
+            api = CuantasB;
+            object cero = 0u;
+
+            codec.SetValue(ref api, ref cero);
+
+            api = CuantasB;
+
+            BFrames = codec.GetValue(ref api, out var leido) >= 0 && leido is not null
+                ? Convert.ToInt32(leido)
+                : -1;
+
+            return true;
+        });
 
     /// <summary>
     /// Lee un atributo booleano del MFT. Sin atributos, FALSE.

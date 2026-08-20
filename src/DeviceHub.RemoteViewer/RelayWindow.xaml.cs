@@ -534,7 +534,14 @@ public partial class RelayWindow : Window
                         // WM_SIZE no llega y la imagen se queda clavada.
                         if (presentador is null)
                         {
-                            presentador = new VideoPresenter(device, hwnd, ancho, alto);
+                            presentador = new VideoPresenter(device, hwnd, ancho, alto)
+                            {
+                                // Lo que el tecnico eligiera antes de que
+                                // existiera la cadena.
+                                Vsync = _vsync
+                            };
+
+                            _presentador = presentador;
                             Nota(presentador.Diagnostico);
                         }
 
@@ -1041,6 +1048,31 @@ public partial class RelayWindow : Window
 
         Nota($"Calidad: {elegido.Header}");
     }
+
+    /// <summary>
+    /// Presentar en cuanto llega el frame, o esperar al monitor.
+    ///
+    /// No pasa por el host ni por el protocolo: es del lado del tecnico entero.
+    /// </summary>
+    private void AlternarVsync(object sender, RoutedEventArgs e)
+    {
+        _vsync = MenuVsync.IsChecked;
+
+        if (_presentador is not null)
+            _presentador.Vsync = _vsync;
+
+        Nota(_vsync
+            ? "Esperando al monitor: sin desgarro, hasta un refresco mas de retraso."
+            : "Presentando en cuanto llega: minimo retraso, puede haber desgarro.");
+    }
+
+    /// <summary>Sobrevive al presentador: la cadena se rehace en cada cambio de
+    /// configuracion, y la eleccion del tecnico no puede irse con ella.</summary>
+    private bool _vsync;
+
+    /// <summary>El presentador vivo, solo para que el menu pueda alcanzarlo. Su
+    /// dueño sigue siendo el bucle de reproduccion.</summary>
+    private VideoPresenter? _presentador;
 
     /// <summary>La marca sigue al codec REAL, el que vuelve en VideoConfig.</summary>
     private void MarcarCodec(VideoCodec codec)

@@ -267,6 +267,16 @@
                                       IsCheckable="True" Click="ElegirCalidad" />
                             <MenuItem x:Name="MenuCalidadRapida" Header="De rapida reaccion" Tag="0.5"
                                       IsCheckable="True" Click="ElegirCalidad" />
+
+                            <Separator />
+
+                            <!-- Presentar en cuanto llega el frame, o esperar al
+                                 monitor. Sin esperar hay menos retraso pero un
+                                 frame puede partirse por la mitad al arrastrar
+                                 una ventana. Es cuestion de monitor y de gusto,
+                                 asi que se prueba aqui y no recompilando. -->
+                            <MenuItem x:Name="MenuVsync" Header="Esperar al monitor (sin desgarro)"
+                                      IsCheckable="True" Click="AlternarVsync" />
                         </MenuItem>
                     </Menu>
 

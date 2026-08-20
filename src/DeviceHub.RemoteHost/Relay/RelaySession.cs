@@ -1020,6 +1020,7 @@ public static class RelaySession
             $"Codec {Etiqueta(flujos[0].Codificador.Codec)}  " +
             $"MFT {flujos[0].Codificador.Capabilities.Name}  " +
             $"Hardware {(flujos[0].Codificador.Capabilities.Hardware ? "TRUE" : "FALSE")}  " +
+            $"B-frames {Bes(flujos[0].Codificador)}  " +
             $"Lienzo {lienzo.Ancho}x{lienzo.Alto}");
 
         // UN HILO POR PANTALLA, que es como lo hace RustDesk.
@@ -1947,6 +1948,18 @@ public static class RelaySession
 
     private static long Ahora()
         => Stopwatch.GetTimestamp() * 1_000_000L / Stopwatch.Frequency;
+
+    /// <summary>Lo que el codificador dice sobre los B-frames. Tiene que ser 0:
+    /// cualquier otra cosa se ve como movimiento que retrocede.</summary>
+    private static string Bes(IVideoEncoder codificador)
+        => codificador is H264Encoder mft
+            ? mft.BFrames switch
+            {
+                0 => "0",
+                < 0 => "no contesta",
+                var cuantos => $"{cuantos} (!)"
+            }
+            : "-";
 
     private static InputInjector? _entrada;
 

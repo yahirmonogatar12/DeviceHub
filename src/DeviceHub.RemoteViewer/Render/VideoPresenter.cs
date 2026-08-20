@@ -40,6 +40,16 @@ public sealed class VideoPresenter : IDisposable
     private ID3D11Texture2D _lienzo;
 
     private readonly bool _desgarroPermitido;
+
+    /// <summary>
+    /// Esperar al monitor en vez de presentar en cuanto llega.
+    ///
+    /// Se puede cambiar EN CALIENTE porque el desgarro es cuestion de gusto y de
+    /// monitor, y averiguarlo no puede costar una compilacion: la cadena ya se
+    /// creo permitiendo desgarro, y presentar con intervalo 1 sobre ella es
+    /// legal -- la bandera simplemente no se usa.
+    /// </summary>
+    public bool Vsync { get; set; }
     private readonly SwapChainFlags _banderas;
     private uint _colaDeFrames;
 
@@ -330,7 +340,15 @@ public sealed class VideoPresenter : IDisposable
         // Intervalo 0 Y permitiendo desgarro: el ritmo lo marca lo que llega del
         // host, no el monitor del tecnico. Solo con el intervalo a 0, el modelo
         // flip sigue esperando al retrazo vertical para voltear.
-        _swapChain.Present(0, _desgarroPermitido ? PresentFlags.AllowTearing : PresentFlags.None);
+        //
+        // CON Vsync SE CAMBIAN LAS DOS COSAS A LA VEZ, que es como se puso: el
+        // intervalo a 1 y sin la bandera de desgarro. Un frame llega entonces
+        // entero pero puede esperar hasta un refresco -- 16.7 ms a 60 Hz -- y a
+        // cambio no se parte por la mitad al arrastrar una ventana.
+        if (Vsync)
+            _swapChain.Present(1, PresentFlags.None);
+        else
+            _swapChain.Present(0, _desgarroPermitido ? PresentFlags.AllowTearing : PresentFlags.None);
     }
 
     /// <summary>Textura de lectura para las capturas. Se crea la primera vez y se
