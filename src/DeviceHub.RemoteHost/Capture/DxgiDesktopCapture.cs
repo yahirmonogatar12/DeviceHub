@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+using Vortice;
 using SharpGen.Runtime;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
@@ -213,6 +215,11 @@ public sealed class DxgiDesktopCapture : IScreenCapture
 
             _frameOutstanding = true;
 
+            // Que cambio, si DXGI lo cuenta. Se lee ANTES de devolver el frame y
+            // con el frame todavia adquirido: los metadatos pertenecen a esta
+            // adquisicion y ReleaseFrame se los lleva.
+            var sucia = desktopChanged ? Zona(duplication, info.TotalMetadataBufferSize) : null;
+
             return new VideoFrame(
                 texture, Width, Height, ++_frameId, ElapsedUs(), desktopChanged,
                 release: () =>
@@ -222,13 +229,102 @@ public sealed class DxgiDesktopCapture : IScreenCapture
                     // Contra ESTE duplicador, no contra el que haya en el campo:
                     // si entretanto se recreo, liberar en el nuevo seria mentira.
                     duplication.ReleaseFrame();
-                });
+                },
+                sucia);
         }
         catch
         {
             duplication.ReleaseFrame();
             throw;
         }
+    }
+
+    // Se reutilizan entre frames: a 60 por segundo, dos arrays nuevos cada vez
+    // son basura que el recolector acaba pagando en medio de una sesion.
+    private RawRect[] _sucios = new RawRect[64];
+    private OutduplMoveRect[] _movidos = new OutduplMoveRect[16];
+    private RawRect[] _union = new RawRect[128];
+
+    /// <summary>Frames en los que DXGI no dio metadatos y hubo que convertir la
+    /// pantalla entera.</summary>
+    public long SinMetadatos { get; private set; }
+
+    /// <summary>
+    /// La caja de lo que cambio, o null si no se sabe.
+    ///
+    /// EL ORDEN IMPORTA: primero los movidos y despues los sucios. Los dos salen
+    /// del MISMO buffer de metadatos y DXGI lo entrega en ese orden; pedir los
+    /// sucios primero devuelve basura donde deberian estar los movidos.
+    ///
+    /// Un rectangulo MOVIDO ensucia dos sitios, no uno: de donde salio -- que se
+    /// queda con lo que hubiera debajo -- y donde llego. Contar solo el destino
+    /// deja el rastro de la ventana arrastrada pegado en pantalla.
+    /// </summary>
+    private RawRect? Zona(IDXGIOutputDuplication duplication, uint metadatos)
+    {
+        if (metadatos == 0)
+        {
+            SinMetadatos++;
+            return null;
+        }
+
+        try
+        {
+            var tamMovido = Marshal.SizeOf<OutduplMoveRect>();
+            var tamRect = Marshal.SizeOf<RawRect>();
+
+            // Cota superior sin adivinar: los metadatos son movidos MAS sucios,
+            // asi que ninguno de los dos cabe mas veces que el total entre su
+            // propio tamano.
+            Crecer(ref _movidos, (int)(metadatos / (uint)tamMovido) + 1);
+            Crecer(ref _sucios, (int)(metadatos / (uint)tamRect) + 1);
+
+            duplication.GetFrameMoveRects((uint)(_movidos.Length * tamMovido), _movidos, out var bytesMovidos);
+            duplication.GetFrameDirtyRects((uint)(_sucios.Length * tamRect), _sucios, out var bytesSucios);
+
+            var cuantosMovidos = (int)(bytesMovidos / (uint)tamMovido);
+            var cuantosSucios = (int)(bytesSucios / (uint)tamRect);
+
+            Crecer(ref _union, cuantosSucios + cuantosMovidos * 2);
+
+            var n = 0;
+
+            for (var i = 0; i < cuantosSucios; i++)
+                _union[n++] = _sucios[i];
+
+            for (var i = 0; i < cuantosMovidos; i++)
+            {
+                var destino = _movidos[i].DestinationRect;
+                _union[n++] = destino;
+
+                // De donde vino, que es el destino trasladado al punto origen.
+                var origenX = _movidos[i].SourcePoint.X;
+                var origenY = _movidos[i].SourcePoint.Y;
+
+                _union[n++] = new RawRect(
+                    origenX, origenY,
+                    origenX + (destino.Right - destino.Left),
+                    origenY + (destino.Bottom - destino.Top));
+            }
+
+            if (n == 0)
+                SinMetadatos++;
+
+            return ZonaSucia.Caja(_union.AsSpan(0, n), Width, Height);
+        }
+        catch (SharpGenException)
+        {
+            // Sin metadatos fiables se convierte todo. Es lo mismo que hacia
+            // antes de existir esto, asi que el peor caso es el de siempre.
+            SinMetadatos++;
+            return null;
+        }
+    }
+
+    private static void Crecer<T>(ref T[] arreglo, int minimo)
+    {
+        if (arreglo.Length < minimo)
+            arreglo = new T[minimo];
     }
 
     /// <summary>

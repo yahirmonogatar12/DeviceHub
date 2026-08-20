@@ -166,6 +166,15 @@ public sealed class H264Encoder : IVideoEncoder
     /// </summary>
     public void ForzarKeyframe() => _forzarKeyframe = true;
 
+    /// <summary>Hasta que no se convierte una vez entera, la textura NV12 tiene
+    /// lo que la GPU tuviera en esa memoria.</summary>
+    private bool _primeraConversionHecha;
+
+    /// <summary>Pixeles convertidos contra los que habria costado convertirlo
+    /// todo. Es lo que dice si los rectangulos sucios estan sirviendo.</summary>
+    public (long Convertidos, long Totales) Conversion
+        => (_converter.PixelesConvertidos, _converter.PixelesTotales);
+
     /// <summary>
     /// Cambia el bitrate objetivo SIN rehacer el codificador.
     ///
@@ -267,7 +276,21 @@ public sealed class H264Encoder : IVideoEncoder
         // espera perjudica el caso que importa.
         if (_needInput > 0)
         {
-            _converter.Convert(frame.Texture);
+            // SOLO LO QUE CAMBIO, cuando DXGI dice que lo sabe.
+            //
+            // La textura NV12 se reutiliza entre frames, asi que lo que queda
+            // fuera de la caja conserva el contenido anterior -- que para un
+            // pixel que no cambio ES el contenido actual.
+            //
+            // El PRIMER frame va entero por narices: hasta que se convierte una
+            // vez, esa textura tiene lo que la GPU tuviera ahi. Y un keyframe
+            // pedido tambien, que es el punto de resincronizacion natural y sale
+            // barato: son uno cada minuto largo.
+            var zona = _primeraConversionHecha && !_forzarKeyframe ? frame.Dirty : null;
+
+            _primeraConversionHecha = true;
+
+            _converter.Convert(frame.Texture, zona);
             Submit(frame.TimestampUs);
 
             if (_needInput != int.MaxValue)

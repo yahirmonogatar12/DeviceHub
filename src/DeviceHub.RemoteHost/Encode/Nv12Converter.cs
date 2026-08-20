@@ -1,3 +1,4 @@
+using Vortice;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
 
@@ -20,6 +21,8 @@ public sealed class Nv12Converter : IDisposable
     private readonly ID3D11VideoProcessorEnumerator _enumerator;
     private readonly ID3D11VideoProcessor _processor;
     private readonly ID3D11VideoProcessorOutputView _outputView;
+    private readonly int _entradaAncho;
+    private readonly int _entradaAlto;
 
     /// <summary>
     /// `width`/`height` es lo que ENTRA; `salidaAncho`/`salidaAlto` lo que sale.
@@ -32,6 +35,13 @@ public sealed class Nv12Converter : IDisposable
     {
         Width = salidaAncho > 0 ? salidaAncho : width;
         Height = salidaAlto > 0 ? salidaAlto : height;
+
+        // Acotar el blt solo vale cuando entra y sale el MISMO tamano. Si el
+        // procesador esta escalando -- el modo compuesto lo hace -- la caja de
+        // la entrada no cae donde toca en la salida, y actualizar la esquina
+        // equivocada es peor que convertirlo todo.
+        _entradaAncho = width;
+        _entradaAlto = height;
 
         _videoDevice = device.QueryInterface<ID3D11VideoDevice>();
         _videoContext = device.ImmediateContext.QueryInterface<ID3D11VideoContext>();
@@ -94,7 +104,24 @@ public sealed class Nv12Converter : IDisposable
     /// <summary>La textura NV12 reutilizada. Valida hasta la siguiente conversion.</summary>
     public ID3D11Texture2D Output { get; }
 
-    public void Convert(ID3D11Texture2D bgra)
+    /// <summary>Cuantos pixeles se han convertido y cuantos habria costado
+    /// convertirlo todo. La diferencia es lo que ahorran los rectangulos
+    /// sucios, y sin medirla no hay forma de saber si sirven.</summary>
+    public long PixelesConvertidos { get; private set; }
+
+    public long PixelesTotales { get; private set; }
+
+    /// <param name="zona">
+    /// Solo esta caja. Null = la pantalla entera.
+    ///
+    /// LO QUE QUEDA FUERA NO SE TOCA, y es correcto: la textura NV12 se
+    /// reutiliza entre frames, asi que ahi sigue exactamente el contenido
+    /// anterior -- que para un pixel que no cambio ES el contenido actual.
+    ///
+    /// Solo vale si quien pasa la zona GARANTIZA que cubre todo lo que cambio.
+    /// DXGI lo garantiza; adivinarlo no.
+    /// </param>
+    public void Convert(ID3D11Texture2D bgra, RawRect? zona = null)
     {
         using var inputView = _videoDevice.CreateVideoProcessorInputView(
             bgra, _enumerator, new VideoProcessorInputViewDescription
@@ -109,6 +136,31 @@ public sealed class Nv12Converter : IDisposable
             FutureFrames = 0,
             InputSurface = inputView
         };
+
+        if (zona is { } caja && Width == _entradaAncho && Height == _entradaAlto)
+        {
+            _videoContext.VideoProcessorSetStreamSourceRect(_processor, 0, true, caja);
+            _videoContext.VideoProcessorSetStreamDestRect(_processor, 0, true, caja);
+
+            // Y QUE NO TOQUE NADA MAS. VideoProcessorBlt escribe la superficie
+            // de salida ENTERA y rellena con el color de fondo lo que queda
+            // fuera del stream: sin acotar el objetivo, actualizar una esquina
+            // borraria el resto de la pantalla. Es la misma leccion que costo
+            // la segunda pantalla en el visor.
+            _videoContext.VideoProcessorSetOutputTargetRect(_processor, true, caja);
+
+            PixelesConvertidos += (long)(caja.Right - caja.Left) * (caja.Bottom - caja.Top);
+        }
+        else
+        {
+            _videoContext.VideoProcessorSetStreamSourceRect(_processor, 0, false, default);
+            _videoContext.VideoProcessorSetStreamDestRect(_processor, 0, false, default);
+            _videoContext.VideoProcessorSetOutputTargetRect(_processor, false, default);
+
+            PixelesConvertidos += (long)Width * Height;
+        }
+
+        PixelesTotales += (long)Width * Height;
 
         _videoContext.VideoProcessorBlt(_processor, _outputView, 0, [stream]);
     }

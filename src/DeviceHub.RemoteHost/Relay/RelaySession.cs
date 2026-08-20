@@ -319,6 +319,14 @@ public static class RelaySession
         /// <summary>Frames que salieron y nadie confirmo en EsperaDeAcuseMs. Si
         /// esto sube, el visor no esta siguiendo el ritmo.</summary>
         public long AcusesPerdidos;
+
+        /// <summary>Pixeles convertidos de BGRA a NV12 contra los que habria
+        /// costado convertir la pantalla entera cada vez. 100 % = los
+        /// rectangulos sucios no estan sirviendo de nada.</summary>
+        public long PixelesConvertidos, PixelesTotales;
+
+        public double PorcentajeConvertido
+            => PixelesTotales == 0 ? 100 : PixelesConvertidos * 100.0 / PixelesTotales;
         public uint ConfigVersion;
 
         /// <summary>La misma cuenta, en un campo que Interlocked puede tocar: al
@@ -441,6 +449,7 @@ public static class RelaySession
                         // la entrada llega de verdad al otro lado o se la traga
                         // el escritorio equivocado.
                         $"descartes {cuenta.DescartesEncoder}+{cuenta.DescartesCaptura}  " +
+                        $"convertido {cuenta.PorcentajeConvertido:0}%  " +
                         $"entrada {_entrada?.Applied ?? 0}/{_entrada?.Rejected ?? 0}");
 
                     // El bitrate se DECIDE aqui, donde se ve la cola, y se
@@ -1044,6 +1053,8 @@ public static class RelaySession
             }
 
             cuenta.DescartesEncoder = flujos.Sum(f => f.Codificador.Dropped);
+            cuenta.PixelesConvertidos = flujos.Sum(f => f.Codificador.Conversion.Convertidos);
+            cuenta.PixelesTotales = flujos.Sum(f => f.Codificador.Conversion.Totales);
             cuenta.DescartesCaptura = flujos.Sum(f => f.Captura.Dropped);
         }
         }

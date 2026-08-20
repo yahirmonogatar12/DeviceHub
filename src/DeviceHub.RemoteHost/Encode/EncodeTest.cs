@@ -137,6 +137,12 @@ public static class EncodeTest
             Console.WriteLine($"Keyframes:     {keyframes}");
             Console.WriteLine($"CPU:           {cpu:0.0}%");
             Console.WriteLine($"GPU Encode:    {(usoGpu.Count == 0 ? "n/d" : $"{usoGpu.Average():0.0}%")}");
+            var (convertidos, totales) = encoder.Conversion;
+
+            Console.WriteLine(
+                $"Convertido:    {(totales == 0 ? 100 : convertidos * 100.0 / totales):0.0}%  " +
+                $"de la pantalla por frame (rectangulos sucios)");
+            Console.WriteLine($"Sin metadatos: {capture.SinMetadatos} frames");
             Console.WriteLine($"Dropped:       {encoder.Dropped}  (captura {capture.Dropped})");
             Console.WriteLine($"RAM start:     {ramInicio / 1024 / 1024} MB");
             Console.WriteLine($"RAM end:       {ramFin / 1024 / 1024} MB");
