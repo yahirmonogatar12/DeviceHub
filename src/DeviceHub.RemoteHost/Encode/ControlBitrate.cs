@@ -22,6 +22,18 @@ public static class ControlBitrate
     /// dejaba al controlador tres pasos de margen antes de tocar fondo.</summary>
     public const int Minimo = 400_000;
 
+    /// <summary>
+    /// Lo minimo que se le da a UNA pantalla al repartir.
+    ///
+    /// Minimo es el suelo de la SESION. Usarlo tambien por pantalla convertia el
+    /// suelo en un multiplo del numero de monitores: el controlador creia haber
+    /// bajado a 400 kbps y con dos salian 800 reales, con cuatro 1.6 Mbps, y
+    /// justo con la red mala, que es cuando el suelo existe para algo.
+    ///
+    /// Esto es solo para no darle cero a un codificador, que no lo acepta.
+    /// </summary>
+    public const int MinimoPorPantalla = 100_000;
+
     public const int Maximo = 15_000_000;
 
     /// <summary>

@@ -262,9 +262,9 @@
                                  kbit por frame contra los 160 que gasta RustDesk
                                  en la misma PC: al mover una ventana se notaba. -->
                             <MenuItem x:Name="MenuCalidadFiel" Header="Fiel al original" Tag="1.5"
-                                      IsCheckable="True" Click="ElegirCalidad" />
-                            <MenuItem x:Name="MenuCalidadMedia" Header="Equilibrado" Tag="0.67"
                                       IsCheckable="True" IsChecked="True" Click="ElegirCalidad" />
+                            <MenuItem x:Name="MenuCalidadMedia" Header="Equilibrado" Tag="0.67"
+                                      IsCheckable="True" Click="ElegirCalidad" />
                             <MenuItem x:Name="MenuCalidadRapida" Header="De rapida reaccion" Tag="0.5"
                                       IsCheckable="True" Click="ElegirCalidad" />
                         </MenuItem>

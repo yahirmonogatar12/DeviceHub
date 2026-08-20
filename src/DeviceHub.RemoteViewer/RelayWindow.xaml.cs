@@ -11,6 +11,7 @@ using Contracts = DeviceHub.Remote.Contracts;
 using DeviceHub.Remote.Contracts;
 using DeviceHub.RemoteViewer.Decode;
 using DeviceHub.RemoteViewer.Input;
+using DeviceHub.RemoteViewer.Input;
 using DeviceHub.RemoteViewer.Render;
 using Grpc.Core;
 using Grpc.Net.Client;
@@ -350,15 +351,7 @@ public partial class RelayWindow : Window
         // Nada de lo pendiente sigue valiendo: el relay nunca lo recibio, los
         // acuses son de un stream muerto y los frames que confirmaban ya no
         // existen.
-        while (_salida.Reader.TryRead(out _))
-        {
-        }
-
-        Interlocked.Exchange(ref _movimiento, null);
-
-        // Y lo primero que sale del stream nuevo es soltar lo que quedara
-        // hundido, antes que cualquier entrada.
-        PedirSoltarEntrada();
+        _salida.Reiniciar();
 
         var latidos = LatirAsync(llamada.RequestStream, intento.Token);
 
@@ -779,9 +772,9 @@ public partial class RelayWindow : Window
                         // La entrada enviada va en la barra a proposito: cuando
                         // el video se ve pero no se puede controlar, esta cifra
                         // dice de un vistazo cual de las dos mitades falla.
-                        $"entrada {_entradaEnviada}" +
-                        (_entradaPerdida == 0 ? string.Empty : $" ({_entradaPerdida} PERDIDOS)") +
-                        $"   movimientos fundidos {_movimientosFundidos}   " +
+                        $"entrada {_salida.Enviados}" +
+                        (_salida.Perdidos == 0 ? string.Empty : $" ({_salida.Perdidos} PERDIDOS)") +
+                        $"   movimientos fundidos {_salida.Fundidos}   " +
                         $"acuses {_acuses}/{_acusesPintados}   IDR pedidos {_idrPedidos}   " +
                         (_grabacion is null ? string.Empty : $"grabando {_grabados} frames   ") +
                         $"incompletos {montadores.Values.Sum(m => m.Dropped)}   " +
@@ -1075,9 +1068,7 @@ public partial class RelayWindow : Window
     /// </summary>
     /// <summary>1 = hay que pedir al host que suelte lo hundido. Lo levanta
     /// quien lo necesite y lo baja el hilo de envio.</summary>
-    private int _soltarPendiente;
-
-    private void PedirSoltarEntrada() => Interlocked.Exchange(ref _soltarPendiente, 1);
+    private void PedirSoltarEntrada() => _salida.PedirSoltar();
 
     private void SoltarEntradaRemota(object sender, RoutedEventArgs e)
     {
@@ -1789,7 +1780,7 @@ public partial class RelayWindow : Window
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                var evento = _salida.Reader.WaitToReadAsync(cancellationToken).AsTask();
+                var evento = _salida.EsperarAsync(cancellationToken).AsTask();
 
                 if (await Task.WhenAny(latido, evento) == latido)
                 {
@@ -1804,39 +1795,10 @@ public partial class RelayWindow : Window
                     continue;
                 }
 
-                // EL RESCATE ANTES QUE NADA. No pasa por la cola -- por eso
-                // existe -- y va delante porque lo que sigue puede ser mas
-                // entrada sobre un estado que todavia esta sucio.
-                if (Interlocked.Exchange(ref _soltarPendiente, 0) == 1)
-                {
-                    await salida.WriteAsync(new RemotePacket
-                    {
-                        ProtocolVersion = RemoteSessionProtocol.Version,
-                        SessionId = _sesion,
-                        HostAction = new HostAction
-                        {
-                            Kind = HostAction.Types.Kind.HostActionReleaseInput
-                        }
-                    }, cancellationToken);
-                }
-
-                // EL MOVIMIENTO DESPUES, y solo el ultimo. Mandarlo despues de
-                // la rafaga de criticos lo dejaria llegando tarde justo cuando
-                // hay prisa.
-                if (Interlocked.Exchange(ref _movimiento, null) is { } movimiento)
-                {
-                    await salida.WriteAsync(movimiento, cancellationToken);
-                    _entradaEnviada++;
-                }
-
-                while (_salida.Reader.TryRead(out var paquete))
-                {
-                    // El golpecito no se manda: solo servia para despertar.
-                    if (ReferenceEquals(paquete, Golpecito))
-                        continue;
-
+                // El orden lo decide el buzon: rescate, movimiento, y despues lo
+                // demas. Aqui solo se escribe.
+                while (_salida.TryTomar(_sesion, out var paquete))
                     await salida.WriteAsync(paquete, cancellationToken);
-                }
             }
         }
         catch (OperationCanceledException)
@@ -1862,14 +1824,15 @@ public partial class RelayWindow : Window
     /// quedandose con el ultimo, que es correcto porque son posiciones
     /// absolutas, no incrementos.
     /// </summary>
-    private readonly Channel<RemotePacket> _salida =
-        Channel.CreateBounded<RemotePacket>(new BoundedChannelOptions(512)
-        {
-            FullMode = BoundedChannelFullMode.Wait,
-            SingleReader = true
-        });
+    /// <summary>
+    /// Lo que sale hacia el host, con sus prioridades. Vive fuera de la ventana
+    /// porque ahi se puede probar: la coalescencia del raton, la saturacion y el
+    /// vaciado al reconectar ya han fallado tres veces y ninguna se podia cubrir
+    /// desde una Window.
+    /// </summary>
+    private readonly BuzonDeSalida _salida = new();
 
-    private long _entradaPerdida;
+
 
     private void Enviar(InputEvent evento)
         => Encolar(new RemotePacket
@@ -1897,7 +1860,7 @@ public partial class RelayWindow : Window
     /// </summary>
     private void Acusar(uint pantalla, ulong frame, bool pintado = false)
     {
-        var ok = _salida.Writer.TryWrite(new RemotePacket
+        var ok = _salida.Encolar(new RemotePacket
         {
             ProtocolVersion = RemoteSessionProtocol.Version,
             SessionId = _sesion,
@@ -1946,7 +1909,7 @@ public partial class RelayWindow : Window
         _ultimaPeticionIdr[pantalla] = ahora;
         _idrPedidos++;
 
-        _salida.Writer.TryWrite(new RemotePacket
+        _salida.Encolar(new RemotePacket
         {
             ProtocolVersion = RemoteSessionProtocol.Version,
             SessionId = _sesion,
@@ -1959,68 +1922,7 @@ public partial class RelayWindow : Window
         });
     }
 
-    /// <summary>
-    /// El ultimo movimiento del raton pendiente de mandar. UNO, no una cola.
-    ///
-    /// EL MOVIMIENTO SE COALESCE Y LO CRITICO NO. Las coordenadas van
-    /// normalizadas 0..1, o sea que son ABSOLUTAS: de
-    ///
-    ///     0.20,0.30  0.21,0.31  0.25,0.35  0.42,0.51
-    ///
-    /// el ultimo dice todo lo que el host necesita saber. Reproducir el caminito
-    /// entero no aporta nada y es lo que llenaba la cola.
-    ///
-    /// Y llenar la cola no era gratis: Encolar usa TryWrite, que no espera, asi
-    /// que con 512 huecos ocupados por movimientos el que se caia podia ser un
-    /// KeyUp. Un KeyUp perdido deja esa tecla hundida en la PC de planta, donde
-    /// nadie puede despegarla -- el host no ve el teclado del tecnico, solo los
-    /// eventos que le llegaron.
-    /// </summary>
-    private RemotePacket? _movimiento;
-
-    private long _movimientosFundidos;
-
-    private void Encolar(RemotePacket paquete)
-    {
-        if (paquete.PayloadCase == RemotePacket.PayloadOneofCase.Input
-            && paquete.Input.EventCase == InputEvent.EventOneofCase.MouseMove)
-        {
-            // Se queda el ultimo. El anterior, si lo habia, no llego a salir y
-            // no hace falta que salga.
-            if (Interlocked.Exchange(ref _movimiento, paquete) is not null)
-                _movimientosFundidos++;
-
-            _salida.Writer.TryWrite(Golpecito);
-            return;
-        }
-
-        if (_salida.Writer.TryWrite(paquete))
-        {
-            _entradaEnviada++;
-            return;
-        }
-
-        // Con el movimiento fuera de la cola esto no deberia pasar nunca. Si
-        // pasa, algo hundido puede haberse quedado sin su KeyUp.
-        //
-        // EL RESCATE NO PUEDE IR POR LA COLA QUE ACABA DE FALLAR. Mandarlo con
-        // Enviar() volveria a Encolar(), que volveria a fallar, que volveria a
-        // pedir el rescate: recursion sin fondo y desbordamiento de pila, justo
-        // en el momento de mas presion.
-        //
-        // Se levanta una bandera y la atiende el hilo de envio, que es el unico
-        // que de verdad escribe en el stream y no depende de esta cola.
-        _entradaPerdida++;
-        PedirSoltarEntrada();
-    }
-
-    /// <summary>
-    /// Golpecito para despertar al hilo de envio cuando hay un movimiento
-    /// pendiente. No lleva nada dentro: el movimiento vive en su propio hueco.
-    /// </summary>
-    private static readonly RemotePacket Golpecito = new();
-
-    private long _entradaEnviada;
+    private void Encolar(RemotePacket paquete) => _salida.Encolar(paquete);
 
     /// <summary>
     /// De pixeles de la ventana a 0..1 sobre la pantalla remota.

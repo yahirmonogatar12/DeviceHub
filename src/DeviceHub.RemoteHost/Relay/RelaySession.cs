@@ -264,7 +264,18 @@ public static class RelaySession
     /// resolucion. Lo cambia el tecnico desde el visor y NO rehace nada: el
     /// bitrate se toca sobre el codificador en marcha.
     /// </summary>
-    private static double _calidad = ControlBitrate.CalidadEquilibrada;
+    /// <summary>
+    /// ARRANCA EN FIEL, no en Equilibrado.
+    ///
+    /// El overlay de RustDesk en esta misma planta dice "Target Bitrate 3846
+    /// kb", por ENCIMA incluso de nuestro Fiel (3109), y ahi la imagen aguanta
+    /// el movimiento. Con Equilibrado -- 1388 kbps -- se ablandaba, y el tecnico
+    /// tenia que saber que existe un menu para arreglarlo.
+    ///
+    /// El ancho de banda en una LAN de planta es gratis; la nitidez no. Los
+    /// otros dos modos siguen ahi para una red que de verdad no de.
+    /// </summary>
+    private static double _calidad = ControlBitrate.CalidadFiel;
 
     /// <summary>Numeracion de frames de toda la SESION. No se reinicia al rehacer
     /// la captura: ver el comentario en la llamada a Split.</summary>
@@ -883,12 +894,15 @@ public static class RelaySession
 
         // La lista viaja al empezar y en cada cambio de pantalla: es cuando el
         // visor necesita repintar su selector, y cuesta un mensaje.
-        salida.TryWrite(new Enviable(null, null, new RemotePacket
+        // La lista de pantallas NO se descarta: pasa una vez, al abrir y en
+        // cada cambio, y si no llega el desplegable del visor se queda sin el
+        // monitor nuevo hasta la proxima recaptura. Nada lo reintenta.
+        Fiable(salida, new RemotePacket
         {
             ProtocolVersion = RemoteSessionProtocol.Version,
             SessionId = opciones.SesionId,
             Displays = ListaDePantallas(pantallas, pedida)
-        }));
+        }, cancellationToken);
 
         // El inyector trabaja sobre el LIENZO entero, no sobre una pantalla: el
         // visor manda coordenadas normalizadas sobre lo que ve, y lo que ve es la
@@ -1044,12 +1058,14 @@ public static class RelaySession
 
                     if (copiado is not null)
                     {
-                        salida.TryWrite(new Enviable(null, null, new RemotePacket
+                        // Lo copiado pasa UNA vez. Perderlo es que el tecnico
+                        // pegue lo de antes sin enterarse.
+                        Fiable(salida, new RemotePacket
                         {
                             ProtocolVersion = RemoteSessionProtocol.Version,
                             SessionId = opciones.SesionId,
                             Clipboard = new ClipboardText { Text = copiado }
-                        }));
+                        }, cancellationToken);
                     }
 
                     // Solo el ANUNCIO: aqui viajan rutas, nunca contenido. Los
@@ -1060,12 +1076,12 @@ public static class RelaySession
                         var aviso = new ClipboardFiles();
                         aviso.Paths.AddRange(archivosCopiados);
 
-                        salida.TryWrite(new Enviable(null, null, new RemotePacket
+                        Fiable(salida, new RemotePacket
                         {
                             ProtocolVersion = RemoteSessionProtocol.Version,
                             SessionId = opciones.SesionId,
                             ClipboardFiles = aviso
-                        }));
+                        }, cancellationToken);
                     }
                 }
 
@@ -1119,9 +1135,18 @@ public static class RelaySession
                     // no piden lo mismo.
                     foreach (var flujo in flujos)
                     {
+                        // EL SUELO ES DE LA SESION, NO DE CADA PANTALLA.
+                        //
+                        // Con ControlBitrate.Minimo aqui, el controlador creia
+                        // haber bajado a 400 kbps y con dos monitores salian
+                        // 800 reales; con cuatro, 1.6 Mbps. Justo con la red
+                        // mala, que es cuando el suelo importa.
+                        //
+                        // Lo que se reparte ya viene acotado por abajo: aqui
+                        // solo se evita el cero, que ningun codificador acepta.
                         flujo.BitrateDeseado = (int)Math.Max(
                             (long)_bitrateDeseado * flujo.BitrateBase / bitrateBaseTotal,
-                            ControlBitrate.Minimo);
+                            ControlBitrate.MinimoPorPantalla);
                     }
                 }
 
@@ -1800,6 +1825,40 @@ public static class RelaySession
         {
             Avisar(opciones, $"El respaldo GDI de la pantalla {flujo.DisplayId} tampoco pudo: {ex.Message}");
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Encola SIN DESCARTAR, esperando si hace falta.
+    ///
+    /// NO TODO ES DESCARTABLE. El cursor y las medidas se pueden perder sin
+    /// consecuencia: viene otro detras en milisegundos. Pero la lista de
+    /// pantallas y el portapapeles son ESTADO -- pasan una vez y describen como
+    /// esta el mundo -- y con la cola llena TryWrite los tiraba en silencio: el
+    /// desplegable del visor se quedaba sin el monitor nuevo, o una copia no
+    /// llegaba, y nada lo volvia a intentar.
+    ///
+    /// La espera es corta y acotada. Esto lo llama el hilo de captura, y
+    /// bloquearlo mucho seria peor que perder el mensaje; pero la cola son ocho
+    /// frames de video que el hilo de red esta vaciando todo el rato, asi que en
+    /// la practica no se espera.
+    /// </summary>
+    private static void Fiable(
+        System.Threading.Channels.ChannelWriter<Enviable> salida, RemotePacket paquete,
+        CancellationToken cancellationToken)
+    {
+        var envoltorio = new Enviable(null, null, paquete);
+
+        if (salida.TryWrite(envoltorio))
+            return;
+
+        try
+        {
+            salida.WriteAsync(envoltorio, cancellationToken)
+                .AsTask().Wait(TimeSpan.FromSeconds(2), cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
         }
     }
 
