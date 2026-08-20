@@ -623,6 +623,12 @@ public partial class RelayWindow : Window
 
                                 presentador?.Present(pantalla, imagen.Texture, imagen.Subresource, captura);
                                 pintados++;
+
+                                // El segundo acuse, el que NO suelta nada. Con
+                                // el, el host puede medir lo que tarda un frame
+                                // en llegar a la pantalla del tecnico, que es lo
+                                // unico que el usuario ve de verdad.
+                                Acusar(pantalla, completo.FrameId, pintado: true);
                                 ritmo.Marcar(reloj.Elapsed.TotalSeconds);
 
                                 if (captura is not null)
@@ -755,7 +761,7 @@ public partial class RelayWindow : Window
                         $"entrada {_entradaEnviada}" +
                         (_entradaPerdida == 0 ? string.Empty : $" ({_entradaPerdida} PERDIDOS)") +
                         $"   movimientos fundidos {_movimientosFundidos}   " +
-                        $"acuses {_acuses}   IDR pedidos {_idrPedidos}   " +
+                        $"acuses {_acuses}/{_acusesPintados}   IDR pedidos {_idrPedidos}   " +
                         (_grabacion is null ? string.Empty : $"grabando {_grabados} frames   ") +
                         $"incompletos {montadores.Values.Sum(m => m.Dropped)}   " +
                         $"invalidos {montadores.Values.Sum(m => m.Rejected)}   " +
@@ -1849,20 +1855,31 @@ public partial class RelayWindow : Window
     /// acuse por frame convertiria esa cifra -- que sirve para saber si el
     /// teclado y el raton estan viajando -- en ruido.
     /// </summary>
-    private void Acusar(uint pantalla, ulong frame)
+    private void Acusar(uint pantalla, ulong frame, bool pintado = false)
     {
         var ok = _salida.Writer.TryWrite(new RemotePacket
         {
             ProtocolVersion = RemoteSessionProtocol.Version,
             SessionId = _sesion,
-            VideoAck = new VideoAck { FrameId = frame, DisplayId = pantalla }
+            VideoAck = new VideoAck
+            {
+                FrameId = frame,
+                DisplayId = pantalla,
+                Presented = pintado
+            }
         });
 
-        if (ok)
+        if (!ok)
+            return;
+
+        if (pintado)
+            _acusesPintados++;
+        else
             _acuses++;
     }
 
     private long _acuses;
+    private long _acusesPintados;
     private long _idrPedidos;
 
     /// <summary>Cuando se pidio el ultimo IDR de cada pantalla.</summary>

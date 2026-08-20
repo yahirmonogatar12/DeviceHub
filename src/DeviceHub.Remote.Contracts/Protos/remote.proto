@@ -629,6 +629,19 @@ message VideoAck {
 
   // Cada pantalla lleva su propio freno: la lenta no puede frenar a la otra.
   uint32 display_id = 2;
+
+  // RECIBIDO Y MOSTRADO SON DOS COSAS.
+  //
+  // false = el frame esta entero en el visor. Es lo que SUELTA EL FRENO, y se
+  // manda antes de descodificar a proposito: esperar a tenerlo pintado
+  // serializaria el pipeline entero contra el descodificador.
+  //
+  // true = el frame ya llego al swapchain. NO suelta nada; sirve para medir.
+  // Sin esto, el host sabe que el transporte va bien y no sabe nada de lo que
+  // pasa despues: con la red en 3 ms, el descodificador en 25 y el pintado en
+  // 10, el host dice "perfecto, siguiente" mientras el tecnico todavia no ha
+  // visto el anterior.
+  bool presented = 3;
 }
 
 message Ping {

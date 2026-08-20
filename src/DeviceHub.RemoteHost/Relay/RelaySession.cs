@@ -309,6 +309,21 @@ public static class RelaySession
     /// igual que _avisar.</summary>
     private static Action<uint, ulong>? _acusar;
 
+    /// <summary>Entrega un acuse de MOSTRADO. Separado del otro porque no suelta
+    /// el freno: solo alimenta la medida.</summary>
+    private static Action<uint, ulong>? _mostrado;
+
+    /// <summary>
+    /// Cuanto tarda un frame desde que sale de aqui hasta que esta en la
+    /// pantalla del tecnico.
+    ///
+    /// Es la unica cifra de la sesion medida de punta a punta con UN solo
+    /// reloj. Todo lo demas mide un tramo: el RTT mide la red, decode p50 mide
+    /// el descodificador, render FPS mide el pintado. Ninguna decia donde
+    /// estaban los milisegundos.
+    /// </summary>
+    private static readonly MedidorRetraso _verse = new();
+
     /// <summary>Cuanto se espera un acuse antes de seguir sin el. RustDesk usa
     /// 3 s; aqui menos, porque su espera se corta en cuanto llegan todos y esta
     /// solo salta cuando el acuse se perdio de verdad.</summary>
@@ -455,6 +470,7 @@ public static class RelaySession
                         $"keyframes {cuenta.Claves}  config {cuenta.ConfigVersion}  cola {cola.Reader.Count}  " +
                         $"acuses {(_visorAcusa ? "si" : "no")}/{cuenta.AcusesPerdidos} perdidos  " +
                         $"red {_retraso.Base:0.0} ms + cola {_retraso.Encolado:0.0} ms  " +
+                        $"verse {_verse.Ultimo:0.0} ms (min {_verse.Base:0.0})  " +
                         $"fps {_fpsDeseado}  " +
                         $"objetivo {_bitrateDeseado / 1000} kbps ({_calidad:0.00}x)  " +
                         // Aplicados y rechazados de SendInput. Es lo que dice si
@@ -874,6 +890,15 @@ public static class RelaySession
             c.DescartesCaptura = flujos.Sum(f => f.Captura.Dropped);
         };
 
+        _mostrado = (pantalla, frame) =>
+        {
+            foreach (var flujo in flujos)
+            {
+                if (flujo.DisplayId == (int)pantalla && flujo.Desde(frame) is >= 0 and var ms)
+                    _verse.Anotar(ms);
+            }
+        };
+
         _acusar = (pantalla, frame) =>
         {
             foreach (var flujo in flujos)
@@ -1100,6 +1125,7 @@ public static class RelaySession
             _entrada?.SoltarTodo();
 
             _acusar = null;
+            _mostrado = null;
             _medidas = null;
 
             // Primero se paran las bombas y se espera: disponer una captura
@@ -1309,6 +1335,10 @@ public static class RelaySession
                         flujo.Acuse.Reset();
                     }
 
+                    // Siempre, haya freno o no: la medida de cuanto tarda en
+                    // verse no depende de si el visor sabe frenar.
+                    flujo.Apuntar(numero);
+
                     salida.WriteAsync(new Enviable(config, grupo), cancellationToken)
                         .AsTask().GetAwaiter().GetResult();
 
@@ -1487,6 +1517,43 @@ public static class RelaySession
 
         /// <summary>Frame mandado y sin confirmar. 0 = ninguno.</summary>
         public long EnVuelo;
+
+        /// <summary>
+        /// Cuando salio cada uno de los ultimos frames.
+        ///
+        /// Hacen falta VARIOS y no uno: el acuse de MOSTRADO llega despues del
+        /// de recibido, y para entonces el freno ya solto y el frame siguiente
+        /// va de camino. Con un solo hueco, la medida que interesa -- la que
+        /// incluye descodificar y pintar -- seria justo la que nunca encuentra
+        /// su marca.
+        /// </summary>
+        private readonly (ulong Frame, long Ticks)[] _salidas = new (ulong, long)[8];
+        private int _siguienteSalida;
+
+        public void Apuntar(ulong frame)
+        {
+            lock (_salidas)
+            {
+                _salidas[_siguienteSalida] = (frame, Stopwatch.GetTimestamp());
+                _siguienteSalida = (_siguienteSalida + 1) % _salidas.Length;
+            }
+        }
+
+        /// <summary>Milisegundos desde que salio ese frame, o negativo si ya no
+        /// se recuerda.</summary>
+        public double Desde(ulong frame)
+        {
+            lock (_salidas)
+            {
+                foreach (var (id, ticks) in _salidas)
+                {
+                    if (id == frame)
+                        return (Stopwatch.GetTimestamp() - ticks) * 1000.0 / Stopwatch.Frequency;
+                }
+            }
+
+            return -1;
+        }
 
         /// <summary>Un acuse ATRASADO no abre el freno del frame actual: si el
         /// del 100 llega cuando ya se espera el 102, abrirlo seria adelantarse
@@ -2084,6 +2151,17 @@ public static class RelaySession
                         break;
 
                     case RemotePacket.PayloadOneofCase.VideoAck:
+                        if (paquete.VideoAck.Presented)
+                        {
+                            // MOSTRADO. No suelta nada: solo dice cuanto tardo en
+                            // llegar a los ojos del tecnico. El de recibido mide
+                            // el transporte; este mide el transporte MAS
+                            // descodificar y pintar, que es lo unico que el
+                            // usuario ve de verdad.
+                            _mostrado?.Invoke(paquete.VideoAck.DisplayId, paquete.VideoAck.FrameId);
+                            break;
+                        }
+
                         // El primero enciende el freno para toda la sesion.
                         _visorAcusa = true;
 
