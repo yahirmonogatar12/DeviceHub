@@ -35,9 +35,21 @@ public sealed class H264Encoder : IVideoEncoder
     private static readonly Guid HardwareUrl = new("2fb866ac-b078-4942-ab6c-003d05cda674");
 
     private readonly IMFTransform _transform;
-    private readonly IMFDXGIDeviceManager _deviceManager;
+
+    /// <summary>
+    /// Los dos caminos hasta el codificador, y solo uno esta puesto.
+    ///
+    ///   GPU   gestor DXGI + procesador de video. La textura no baja a RAM.
+    ///   CPU   ni gestor ni procesador: se baja el frame y se convierte a mano.
+    ///
+    /// El de CPU existe para las maquinas sin tuberia de video -- un servidor
+    /// sin tarjeta grafica -- donde el de GPU no es lento sino imposible.
+    /// </summary>
+    private readonly IMFDXGIDeviceManager? _deviceManager;
+    private readonly Nv12Converter? _converter;
+    private readonly Nv12Cpu? _cpu;
+
     private readonly IMFMediaEventGenerator? _events;
-    private readonly Nv12Converter _converter;
     private readonly long _frameDurationHns;
 
     private int _needInput;
@@ -83,7 +95,6 @@ public sealed class H264Encoder : IVideoEncoder
         Fps = framesPerSecond;
         Bits = bitrate;
 
-        _converter = new Nv12Converter(device, anchoEntrada, altoEntrada, width, height);
         _frameDurationHns = 10_000_000L / framesPerSecond;
 
         // El gestor DXGI es lo que permite entregar texturas al MFT sin copiarlas
@@ -102,16 +113,33 @@ public sealed class H264Encoder : IVideoEncoder
         {
             _deviceManager = MediaFactory.MFCreateDXGIDeviceManager();
             _deviceManager.ResetDevice(device).CheckError();
+
+            _converter = new Nv12Converter(device, anchoEntrada, altoEntrada, width, height);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            throw new VideoEncoderUnavailableException(
-                "Esta maquina no tiene tuberia de video por hardware: su dispositivo " +
-                "grafico no expone ID3D11VideoDevice. Es lo normal en un servidor sin " +
-                "tarjeta grafica. Dos cosas que probar, en orden: " +
-                "1) Install-WindowsFeature Server-Media-Foundation y reiniciar. " +
-                "2) Si aun asi falla, esa PC se controla con RustDesk, que trae su propio " +
-                "codificador por software y no depende de Media Foundation.", ex);
+            // NO ES EL FINAL: es una maquina sin tuberia de video.
+            //
+            // ResetDevice le pregunta al dispositivo por su ID3D11VideoDevice, y
+            // uno que no hace video no lo tiene. Pasa en los servidores con
+            // adaptador de gestion y pasa con WARP, que es a donde cae la
+            // captura en esas mismas maquinas. El procesador de video se cae por
+            // lo mismo, asi que los dos se sueltan juntos.
+            //
+            // Se sigue por CPU, que es lo que hacen RustDesk y AnyDesk en TODAS
+            // las maquinas -- y por eso ellos entran donde nosotros no.
+            _deviceManager?.Dispose();
+            _deviceManager = null;
+
+            _converter?.Dispose();
+            _converter = null;
+
+            if (anchoEntrada is not 0 && (anchoEntrada != width || altoEntrada != height))
+                throw new VideoEncoderUnavailableException(
+                    $"Sin tuberia de video no se puede escalar de {anchoEntrada}x{altoEntrada} " +
+                    $"a {width}x{height}: el escalado lo hacia el procesador de video.");
+
+            _cpu = new Nv12Cpu(device, width, height);
         }
 
         var (transform, nombre, hardware) = Select(adapterLuid, vendorId);
@@ -319,8 +347,8 @@ public sealed class H264Encoder : IVideoEncoder
         // espera perjudica el caso que importa.
         if (_needInput > 0)
         {
-            _converter.Convert(frame.Texture);
-            Submit(frame.TimestampUs);
+            _converter?.Convert(frame.Texture);
+            Submit(frame.TimestampUs, frame.Texture);
 
             if (_needInput != int.MaxValue)
                 _needInput--;
@@ -340,10 +368,12 @@ public sealed class H264Encoder : IVideoEncoder
         return salidas;
     }
 
-    private void Submit(long timestampUs)
+    private void Submit(long timestampUs, ID3D11Texture2D textura)
     {
-        using var buffer = MediaFactory.MFCreateDXGISurfaceBuffer(
-            typeof(ID3D11Texture2D).GUID, _converter.Output, 0, false);
+        using var buffer = _cpu is null
+            ? MediaFactory.MFCreateDXGISurfaceBuffer(
+                typeof(ID3D11Texture2D).GUID, _converter!.Output, 0, false)
+            : EnMemoria(_cpu.Convertir(textura));
 
         using var sample = MediaFactory.MFCreateSample();
         sample.AddBuffer(buffer);
@@ -373,6 +403,34 @@ public sealed class H264Encoder : IVideoEncoder
 
         _transform.ProcessInput(0, sample, 0);
         Submitted++;
+    }
+
+    /// <summary>
+    /// Mete el NV12 en un bufer de Media Foundation.
+    ///
+    /// CurrentLength hay que ponerlo A MANO: MFCreateMemoryBuffer reserva sitio
+    /// pero deja la longitud en cero, y un MFT que reciba un bufer de longitud
+    /// cero no se queja -- se traga el frame y no saca nada. Es de los errores
+    /// que no dan error.
+    /// </summary>
+    private static IMFMediaBuffer EnMemoria(byte[] nv12)
+    {
+        var buffer = MediaFactory.MFCreateMemoryBuffer(nv12.Length);
+
+        buffer.Lock(out var destino, out _, out _);
+
+        try
+        {
+            Marshal.Copy(nv12, 0, destino, nv12.Length);
+        }
+        finally
+        {
+            buffer.Unlock();
+        }
+
+        buffer.CurrentLength = nv12.Length;
+
+        return buffer;
     }
 
     /// <summary>Consume los eventos que haya SIN bloquear.</summary>
@@ -600,9 +658,16 @@ public sealed class H264Encoder : IVideoEncoder
 
             // El gestor DXGI ANTES de los tipos: algunos MFT rechazan la
             // configuracion si todavia no saben sobre que dispositivo van.
-            transform.ProcessMessage(
-                TMessageType.MessageSetD3DManager,
-                (UIntPtr)(ulong)(long)_deviceManager.NativePointer);
+            //
+            // Por CPU no se manda NADA. Decirle a un MFT que trabaje sobre un
+            // dispositivo D3D y despues darle muestras de memoria es pedirle dos
+            // cosas incompatibles, y las rechaza -- que es como se descubrio.
+            if (_deviceManager is not null)
+            {
+                transform.ProcessMessage(
+                    TMessageType.MessageSetD3DManager,
+                    (UIntPtr)(ulong)(long)_deviceManager.NativePointer);
+            }
 
             Configure(transform, Ancho, Alto, Fps, Bits);
 
@@ -885,7 +950,8 @@ public sealed class H264Encoder : IVideoEncoder
 
         _events?.Dispose();
         _transform.Dispose();
-        _deviceManager.Dispose();
-        _converter.Dispose();
+        _deviceManager?.Dispose();
+        _converter?.Dispose();
+        _cpu?.Dispose();
     }
 }
