@@ -44,15 +44,25 @@ public sealed class InteractiveSessionLauncher(
     /// exactamente como se llego a la conclusion equivocada.
     /// </summary>
     /// <summary>
-    /// APAGADO por defecto. Se intento encender en 1.7.0 y la pantalla de
-    /// bloqueo sigue sin funcionar; lo que si consiguio fue romper el control
-    /// del escritorio normal en tres versiones seguidas mientras se buscaba.
+    /// ENCENDIDO POR DEFECTO desde 1.66, y no por la pantalla de bloqueo -- esa
+    /// sigue sin funcionar -- sino por las ventanas ELEVADAS. SendInput no entra
+    /// en el Administrador de dispositivos, el editor del registro ni un dialogo
+    /// de UAC si quien inyecta corre como el usuario: Windows lo bloquea por
+    /// UIPI y no avisa. El raton se mueve, la ventana no responde, y parece que
+    /// el control remoto se colgo. Como SYSTEM entra, que es lo que hace
+    /// AnyDesk.
     ///
-    /// Una funcion que no funciona no puede venir encendida estropeando las que
-    /// si. Se enciende a mano en la maquina donde se este investigando.
+    /// Estuvo apagado hasta aqui, y con motivo: se intento encender en 1.7.0 y
+    /// la pantalla de bloqueo siguio sin funcionar, mientras el control del
+    /// escritorio normal se rompia tres versiones seguidas buscandola. Lo que
+    /// cambia ahora no es esa apuesta -- la pantalla de bloqueo sigue sin
+    /// funcionar -- sino que aparecio otra cosa que si depende de esto.
+    ///
+    /// Si la escalada falla en alguna PC se cae al token del usuario: se pierden
+    /// las ventanas elevadas, que es lo que se tenia antes, y no la sesion.
     /// </summary>
     private readonly bool _escritorioSeguro =
-        configuracion.GetValue("DeviceHub:SecureDesktop", false);
+        configuracion.GetValue("DeviceHub:SecureDesktop", true);
 
     /// <summary>
     /// Codec de video. "h265" para probarlo en ESTA maquina.
@@ -306,7 +316,28 @@ public sealed class InteractiveSessionLauncher(
         if (sesion == 0xFFFFFFFF)
             throw new InvalidOperationException("No hay sesion de consola activa en esta PC");
 
-        return _escritorioSeguro ? TokenDeSistema(sesion) : TokenDelUsuario(sesion);
+        if (!_escritorioSeguro)
+            return TokenDelUsuario(sesion);
+
+        try
+        {
+            return TokenDeSistema(sesion);
+        }
+        catch (Exception ex)
+        {
+            // SE DEGRADA, NO SE CAE.
+            //
+            // Ahora que esto viene encendido de fabrica, una PC donde la escalada
+            // falle -- una directiva rara, un Windows recortado -- no puede
+            // quedarse SIN control remoto. Pierde las ventanas elevadas, que es
+            // justo lo que se tenia antes de encenderlo, y conserva todo lo
+            // demas.
+            logger.LogWarning(ex,
+                "No se pudo lanzar RemoteHost como SYSTEM en la sesion {Sesion}; " +
+                "se sigue con el token del usuario y SIN entrada en ventanas elevadas", sesion);
+
+            return TokenDelUsuario(sesion);
+        }
     }
 
     /// <summary>
