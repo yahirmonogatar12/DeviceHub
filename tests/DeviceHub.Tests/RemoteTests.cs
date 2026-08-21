@@ -15,7 +15,8 @@ public class RemoteProviderTests
         ViewerTicket: "TICKET-SECRETO",
         ViewerMachineId: "PC-TECNICO",
         ServerAddress: "https://192.168.1.10:5443",
-        ServerPin: "PIN");
+        ServerPin: "PIN",
+        MachineCode: "INPUT-M2");
 
     [Fact]
     public void The_launch_carries_the_device_id()
@@ -73,6 +74,29 @@ public class RemoteProviderTests
 
     /// <summary>Sin pin no se finge que la sesion es segura: el visor arranca en
     /// modo laboratorio y lo avisa en su barra de estado.</summary>
+    [Fact]
+    public void La_pestaña_lleva_el_nombre_de_la_maquina_CONTROLADA()
+    {
+        var launch = new DeviceHubRemoteProvider().BuildLaunch(Contexto("x"));
+
+        // Con tres pestañas abiertas contra tres PCs, las tres se llamaban igual:
+        // --machine-id es la PC del TECNICO, la misma para todas sus sesiones, y
+        // era lo unico que llegaba con nombre.
+        Assert.Contains("--titulo INPUT-M2", launch.Arguments);
+        Assert.Contains("--machine-id PC-TECNICO", launch.Arguments);
+    }
+
+    [Fact]
+    public void Un_nombre_con_espacios_no_parte_los_argumentos()
+    {
+        var launch = new DeviceHubRemoteProvider().BuildLaunch(
+            Contexto("x") with { MachineCode = "LINEA 3 ENTRADA" });
+
+        // Al otro lado esto se parte por espacios: sin juntarlo, el titulo seria
+        // "LINEA" y "3" y "ENTRADA" se leerian como argumentos sueltos.
+        Assert.Contains("--titulo LINEA_3_ENTRADA", launch.Arguments);
+    }
+
     [Fact]
     public void Sin_pin_el_visor_arranca_avisando()
     {

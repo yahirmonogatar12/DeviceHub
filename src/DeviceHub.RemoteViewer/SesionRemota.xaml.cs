@@ -33,10 +33,15 @@ namespace DeviceHub.RemoteViewer;
 /// </summary>
 public partial class SesionRemota : UserControl
 {
-    /// <summary>Lo que va en la pestaña. La maquina primero: es contra QUE se
-    /// esta actuando, y con cuatro sesiones abiertas es lo unico que importa
-    /// antes de tocar una tecla.</summary>
+    /// <summary>Lo que va en la pestaña: contra QUE maquina se esta actuando.
+    /// Con cuatro sesiones abiertas es lo unico que importa antes de tocar una
+    /// tecla.</summary>
     public string Titulo { get; }
+
+    /// <summary>Sin nombre queda el uuid de la sesion, y entero no cabe en una
+    /// pestaña.</summary>
+    private static string Corto(string sesion)
+        => sesion.Length <= 8 ? sesion : sesion[..8];
 
     private readonly string _servidor;
     private readonly string _sesion;
@@ -75,7 +80,7 @@ public partial class SesionRemota : UserControl
     /// </param>
     public SesionRemota(
         string servidor, string sesion, string machineId, bool permitirSinConfianza,
-        string pin = "", string? ticket = null)
+        string pin = "", string? ticket = null, string? titulo = null)
     {
         InitializeComponent();
 
@@ -86,7 +91,10 @@ public partial class SesionRemota : UserControl
         _pin = pin;
         _ticket = ticket;
 
-        Titulo = string.IsNullOrEmpty(machineId) ? sesion : machineId;
+        // La maquina CONTROLADA, que llega aparte. Ni machineId ni el hostname
+        // sirven: el primero es la PC del tecnico -- el mismo para todas sus
+        // pestañas -- y el segundo no se sabe hasta que el host conteste.
+        Titulo = string.IsNullOrWhiteSpace(titulo) ? Corto(sesion) : titulo;
 
         Loaded += (_, _) => new Thread(Ejecutar)
         {

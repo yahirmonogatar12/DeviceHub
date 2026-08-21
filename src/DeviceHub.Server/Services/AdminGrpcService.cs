@@ -894,7 +894,8 @@ public sealed class AdminGrpcService(
             viewerTicket,
             destinatario,
             request.ServerAddress,
-            request.ServerPin));
+            request.ServerPin,
+            machine.MachineCode));
 
         logger.LogWarning("{Actor} abrio sesion remota sobre {MachineCode} desde {Source}",
             actor, machine.MachineCode, sourceIp);

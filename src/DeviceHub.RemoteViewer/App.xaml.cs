@@ -119,7 +119,8 @@ public partial class App : Application
             // El pin no es secreto: es el hash de una clave publica. Por eso
             // puede viajar por argumento y el ticket no.
             Texto(argumentos, "--pin") ?? string.Empty,
-            ticket));
+            ticket,
+            Texto(argumentos, "--titulo")));
 
     private static string? Texto(string[] args, string nombre)
     {

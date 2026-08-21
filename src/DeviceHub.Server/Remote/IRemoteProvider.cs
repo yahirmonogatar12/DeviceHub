@@ -8,6 +8,14 @@ namespace DeviceHub.Server.Remote;
 /// le ve desde la red del tecnico -- puede haber NAT, varias interfaces, o un
 /// nombre distinto segun la planta. Quien lo sabe es el que acaba de conectarse.
 /// </summary>
+/// <param name="MachineCode">
+/// El nombre de la maquina CONTROLADA, para enseñarselo al tecnico.
+///
+/// No sale de ningun otro campo: MachineId es un uuid, DeviceId es del motor, y
+/// ViewerMachineId es la PC del tecnico -- el mismo para todas sus sesiones. Sin
+/// esto, tres pestañas abiertas contra tres PCs distintas se llamaban las tres
+/// igual, con el nombre de la PC desde la que se miraba.
+/// </param>
 public sealed record RemoteLaunchContext(
     string MachineId,
     string DeviceId,
@@ -15,7 +23,8 @@ public sealed record RemoteLaunchContext(
     string ViewerTicket,
     string ViewerMachineId,
     string ServerAddress,
-    string ServerPin);
+    string ServerPin,
+    string MachineCode = "");
 
 /// <summary>
 /// Que tiene que ejecutar la PC del tecnico para abrir la sesion.
@@ -97,12 +106,19 @@ public sealed class DeviceHubRemoteProvider : IRemoteProvider
             ? "--allow-untrusted"
             : $"--pin {context.ServerPin}";
 
+        // Sin espacios: al otro lado esto se parte por espacios, y una maquina
+        // que se llamara "LINEA 3" dejaria el argumento a medias.
+        var titulo = string.Join('_', context.MachineCode.Split(
+            (char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
         return new RemoteLaunch(
             Provider,
             context.DeviceId,
             "DeviceHub.RemoteViewer.exe",
             $"--relay-test --server {context.ServerAddress} " +
-            $"--session {context.SessionId} --machine-id {context.ViewerMachineId} {confianza}",
+            $"--session {context.SessionId} --machine-id {context.ViewerMachineId} " +
+            (titulo.Length == 0 ? string.Empty : $"--titulo {titulo} ") +
+            confianza,
             context.ViewerTicket);
     }
 }
