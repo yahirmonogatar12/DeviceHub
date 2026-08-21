@@ -1389,10 +1389,57 @@ public static class RelaySession
                 // El frame DXGI se suelta ANTES de esperar por nada. Encolar
                 // puede bloquear si la red va por detras, y quedarse la
                 // superficie duplicada mientras tanto es lo que no se hace.
-                using (var frame = flujo.Captura.CaptureAsync(cancellationToken).GetAwaiter().GetResult())
+                // UN ESCRITORIO DELANTE NO MATA LA PANTALLA.
+                //
+                // Cuando aparece un escritorio seguro -- un UAC, el dialogo de
+                // credenciales de una carpeta compartida, la pantalla de bloqueo
+                // -- DuplicateOutput contesta acceso denegado. Eso salia por el
+                // catch de fuera del bucle, se escribia "la pantalla 0 dejo de
+                // emitir" y el hilo TERMINABA: esa pantalla no volvia ni cuando
+                // el dialogo se cerraba, y la unica salida era reconectar.
+                //
+                // Se releva por GDI, que es lo mismo que se hace al ABRIR en un
+                // escritorio que no es el normal, y si tampoco puede se espera y
+                // se reintenta. Un dialogo delante es un estado pasajero.
+                VideoFrame? frame;
+
+                try
+                {
+                    frame = flujo.Captura.CaptureAsync(cancellationToken).GetAwaiter().GetResult();
+                }
+                catch (ScreenCaptureUnavailableException ex)
+                {
+                    if (!flujo.Tapada)
+                    {
+                        flujo.Tapada = true;
+                        Avisar(opciones,
+                            $"La pantalla {flujo.DisplayId} no se puede duplicar ahora mismo " +
+                            $"({ex.Message}). Se intenta por GDI.");
+                    }
+
+                    if (!flujo.Relevada)
+                    {
+                        flujo.Relevada = true;
+
+                        if (Relevar(flujo, opciones, cuenta))
+                        {
+                            flujo.Tapada = false;
+                            continue;
+                        }
+                    }
+
+                    // Ni DXGI ni GDI. Se espera y se vuelve a mirar: cuando el
+                    // dialogo se cierre, uno de los dos volvera a funcionar.
+                    cancellationToken.WaitHandle.WaitOne(250);
+                    continue;
+                }
+
+                using (frame)
                 {
                     if (frame is null)
                         continue;
+
+                    flujo.Tapada = false;
 
                     // SUELO DE IMAGEN: un frame por segundo aunque no cambie nada.
                     //
@@ -1659,6 +1706,10 @@ public static class RelaySession
         /// ahi DXGI funciona y el silencio solo significa que nadie toca esa
         /// pantalla.</summary>
         public bool Arranco { get; set; }
+
+        /// <summary>Hay un escritorio delante ahora mismo. Solo sirve para no
+        /// repetir el aviso en cada vuelta del bucle.</summary>
+        public bool Tapada { get; set; }
 
         public bool ConfigEnviada { get; set; }
 
