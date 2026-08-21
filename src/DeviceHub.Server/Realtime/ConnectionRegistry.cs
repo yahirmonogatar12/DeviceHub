@@ -100,6 +100,24 @@ public sealed class ConnectionRegistry(TimeProvider? reloj = null)
         channel.Writer.TryComplete();
     }
 
+    /// <summary>
+    /// Echa a una maquina AHORA. Cerrar su canal termina la bomba y con ella su
+    /// stream.
+    ///
+    /// Hace falta porque la autenticacion se comprueba al CONECTAR: quitarle el
+    /// token a una PC que ya esta dentro no la saca, solo le impide volver. Sin
+    /// esto, una PC dada de baja seguiria mandando metricas hasta que se cayera
+    /// sola o alguien la apagara.
+    /// </summary>
+    public void Close(string machineId)
+    {
+        lock (_puerta)
+        {
+            if (_connections.TryRemove(machineId, out var canal))
+                canal.Writer.TryComplete();
+        }
+    }
+
     public bool TryPush(string machineId, ServerMessage message)
         => _connections.TryGetValue(machineId, out var channel) && channel.Writer.TryWrite(message);
 

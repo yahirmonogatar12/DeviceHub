@@ -127,6 +127,12 @@ public sealed class DeviceHubClient : IDisposable
     public Task<MachineDetail> ResolveConflictAsync(ResolveConflictRequest request, CancellationToken ct)
         => _client.ResolveIdentityConflictAsync(request, _auth, cancellationToken: ct).ResponseAsync;
 
+    public Task<MachineDetail> RetireMachineAsync(MachineRef request, CancellationToken ct)
+        => _client.RetireMachineAsync(request, _auth, cancellationToken: ct).ResponseAsync;
+
+    public Task<MachineDetail> RestoreMachineAsync(MachineRef request, CancellationToken ct)
+        => _client.RestoreMachineAsync(request, _auth, cancellationToken: ct).ResponseAsync;
+
     public Task<MachineDetail> AuthorizeReenrollmentAsync(string machineId, CancellationToken ct)
         => _client.AuthorizeReenrollmentAsync(
             new MachineRef { MachineId = machineId }, _auth, cancellationToken: ct).ResponseAsync;

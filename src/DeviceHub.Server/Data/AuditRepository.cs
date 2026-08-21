@@ -13,6 +13,11 @@ public static class AuditActions
     public const string ServiceRestart = "SERVICE_RESTART";
     public const string MachineReboot = "MACHINE_REBOOT";
     public const string MachineShutdown = "MACHINE_SHUTDOWN";
+    /// <summary>Baja y reactivacion. La baja quita el token, asi que es la linea
+    /// que explica por que una PC dejo de aparecer y de conectarse.</summary>
+    public const string MachineRetired = "MACHINE_RETIRED";
+    public const string MachineRestored = "MACHINE_RESTORED";
+
     public const string RemoteRequested = "REMOTE_SESSION_REQUESTED";
     public const string RemoteStart = "REMOTE_SESSION_STARTED";
     public const string RemoteEnd = "REMOTE_SESSION_ENDED";

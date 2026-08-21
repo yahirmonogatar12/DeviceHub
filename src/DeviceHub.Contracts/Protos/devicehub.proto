@@ -267,6 +267,12 @@ service AdminService {
   rpc MoveMachine (MoveMachineRequest) returns (MachineDetail);
   rpc CreateEnrollmentCode (CreateEnrollmentCodeRequest) returns (EnrollmentCodeReply);
   rpc ResolveIdentityConflict (ResolveConflictRequest) returns (MachineDetail);
+
+  // Dar de baja y reactivar. NO es un borrado: siete tablas cuelgan de machines
+  // con ON DELETE CASCADE, y entre ellas esta el registro de quien controlo esa
+  // PC. Lo que se quita es el token.
+  rpc RetireMachine (MachineRef) returns (MachineDetail);
+  rpc RestoreMachine (MachineRef) returns (MachineDetail);
   // Autoriza a UNA maquina a reasociarse sin recovery code durante unos
   // minutos. Es la salida para una PC cuyo token se invalido estando
   // desconectada: sin esto hay que ir fisicamente hasta ella.
@@ -547,6 +553,14 @@ message MachineSummary {
   // El dashboard solo necesita saber SI se puede controlar, no con que ni con
   // que identificador. El device_id no se le enseña al tecnico.
   bool remote_available = 21;
+
+  // DADA DE BAJA. La fila sigue entera -- con su historial de sesiones, de IPs y
+  // de ubicaciones -- pero se quedo sin token, asi que esa PC no vuelve a
+  // conectarse. Se manda igualmente y la esconde el dashboard: asi el filtro de
+  // "de baja" no necesita otra consulta, y se puede reactivar desde ahi mismo.
+  bool retired = 22;
+  google.protobuf.Timestamp retired_at = 23;
+  string retired_by = 24;
 }
 
 message MachineDetail {

@@ -29,8 +29,13 @@ public static class SummaryMapper
             CpuPercent = row.CpuPercent ?? 0,
             MemoryPercent = row.MemoryPercent ?? 0,
             DiskFreePercent = row.DiskFreePercent ?? 0,
-            RemoteAvailable = row.RemoteAvailable
+            RemoteAvailable = row.RemoteAvailable,
+            Retired = row.RetiredAt is not null,
+            RetiredBy = row.RetiredBy ?? string.Empty
         };
+
+        if (row.RetiredAt is not null)
+            summary.RetiredAt = Timestamp.FromDateTime(Db.AsUtc(row.RetiredAt.Value));
 
         if (row.LastSeen is not null)
             summary.LastSeen = Timestamp.FromDateTime(Db.AsUtc(row.LastSeen.Value));

@@ -110,14 +110,36 @@ public sealed partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void CloseQuickPanel() => SelectedMachine = null;
 
-    public int TotalCount => Machines.Count;
-    public int OnlineCount => Machines.Count(m => m.Status == MachineStatus.Online);
-    public int UnreachableCount => Machines.Count(m => m.Status == MachineStatus.Unreachable);
-    public int OfflineCount => Machines.Count(m => m.Status == MachineStatus.Offline);
+    /// <summary>
+    /// Las de baja NO cuentan como equipos.
+    ///
+    /// Siguen en la lista de dentro para poder reactivarlas, pero un "6
+    /// registrados" que incluya tres PCs que ya no existen es un numero que no
+    /// sirve para nada.
+    /// </summary>
+    public int TotalCount => Machines.Count(m => !m.Retired);
+
+    public int RetiredCount => Machines.Count(m => m.Retired);
+
+    /// <summary>Solo un administrador, y solo sobre una que siga en servicio.</summary>
+    public bool PuedeDarDeBaja => IsAdministrator && SelectedMachine is { Retired: false };
+    public int OnlineCount => Machines.Count(m => !m.Retired && m.Status == MachineStatus.Online);
+    public int UnreachableCount => Machines.Count(m => !m.Retired && m.Status == MachineStatus.Unreachable);
+    public int OfflineCount => Machines.Count(m => !m.Retired && m.Status == MachineStatus.Offline);
     public int ConflictCount => Machines.Count(m => m.HasConflict);
 
     /// <summary>Indicador de la barra superior.</summary>
-    public bool ServerOk => IsLoggedIn && string.IsNullOrEmpty(StatusMessage);
+    /// <summary>
+    /// El punto de arriba dice si el SERVIDOR responde, no si hubo un error.
+    ///
+    /// Estaba atado a que StatusMessage estuviera vacio, asi que cualquier
+    /// mensaje lo ponia en rojo -- incluido un fallo del portapapeles, que pasa
+    /// entero en esta PC y no dice nada del servidor. Se miraba el indicador y
+    /// se buscaba una caida que no existia.
+    /// </summary>
+    public bool ServerOk => IsLoggedIn && !_servidorCaido;
+
+    private bool _servidorCaido;
 
     private void RefreshCounts()
     {
@@ -139,6 +161,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(ShowList));
         OnPropertyChanged(nameof(ShowQuickPanel));
+        OnPropertyChanged(nameof(PuedeDarDeBaja));
         OnPropertyChanged(nameof(ShowDetail));
         OnPropertyChanged(nameof(ShowAudit));
     }
@@ -151,7 +174,22 @@ public sealed partial class MainViewModel : ObservableObject
             _ = RefreshGlobalAuditAsync();
     }
 
-    partial void OnStatusMessageChanged(string value) => OnPropertyChanged(nameof(ServerOk));
+    partial void OnStatusMessageChanged(string value)
+    {
+        // Sin mensaje no hay nada de que preocuparse; con mensaje, ya decidio
+        // Reportar si el culpable era el servidor.
+        if (value.Length == 0)
+            _servidorCaido = false;
+
+        OnPropertyChanged(nameof(ServerOk));
+    }
+
+    /// <summary>Un error a la vista, diciendo ademas de quien fue la culpa.</summary>
+    private void Reportar(Exception ex)
+    {
+        _servidorCaido = ex is Grpc.Core.RpcException;
+        StatusMessage = Describe(ex);
+    }
 
     partial void OnIsLoggedInChanged(bool value) => OnPropertyChanged(nameof(ServerOk));
 
@@ -167,6 +205,58 @@ public sealed partial class MainViewModel : ObservableObject
 
     [RelayCommand]
     private void Navigate(string pagina) => Page = pagina;
+
+    /// <summary>
+    /// Da de baja la maquina elegida. Pregunta antes: le quita el token, asi que
+    /// para volver hay que reenrolarla.
+    /// </summary>
+    [RelayCommand]
+    private async Task RetireMachineAsync()
+    {
+        if (SelectedMachine is not { } maquina)
+            return;
+
+        var respuesta = MessageBox.Show(
+            $"Dar de baja {maquina.MachineCode}?\n\n" +
+            "Se le quita el token: esa PC no vuelve a conectarse y sale de la lista.\n" +
+            "El historial se conserva entero, y se puede reactivar.\n\n" +
+            "Para que vuelva a conectarse habra que reenrolarla.",
+            "Dar de baja", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+
+        if (respuesta != MessageBoxResult.Yes)
+            return;
+
+        try
+        {
+            await _client.RetireMachineAsync(new MachineRef { MachineId = maquina.MachineId }, CancellationToken.None);
+
+            CommandFeedback = $"{maquina.MachineCode} dada de baja.";
+            SelectedMachine = null;
+        }
+        catch (Exception ex)
+        {
+            Reportar(ex);
+        }
+    }
+
+    [RelayCommand]
+    private async Task RestoreMachineAsync()
+    {
+        if (SelectedMachine is not { } maquina)
+            return;
+
+        try
+        {
+            await _client.RestoreMachineAsync(new MachineRef { MachineId = maquina.MachineId }, CancellationToken.None);
+
+            CommandFeedback =
+                $"{maquina.MachineCode} reactivada. Sigue sin token: para que conecte, reenrolala.";
+        }
+        catch (Exception ex)
+        {
+            Reportar(ex);
+        }
+    }
 
     /// <summary>
     /// Las fichas de estado SON el filtro: pulsar "Offline" deja solo las
@@ -260,7 +350,7 @@ public sealed partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = Describe(ex);
+            Reportar(ex);
         }
         finally
         {
@@ -327,7 +417,7 @@ public sealed partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = Describe(ex);
+            Reportar(ex);
         }
     }
 
@@ -339,16 +429,61 @@ public sealed partial class MainViewModel : ObservableObject
             var reply = await _client.CreateEnrollmentCodeAsync(
                 new CreateEnrollmentCodeRequest { MaxUses = 1, ValidMinutes = 30 }, CancellationToken.None);
 
-            Clipboard.SetText(reply.Code);
+            // PRIMERO SE COPIA, PERO SI FALLA SE ENSENA IGUAL.
+            //
+            // El codigo ya existe en el servidor en cuanto vuelve esta llamada:
+            // es una fila de enrollment_codes con su caducidad y sus usos. Antes,
+            // un fallo del portapapeles saltaba al catch y el codigo no se
+            // llegaba a mostrar NUNCA -- se quedaba emitido, sin usar, y el
+            // tecnico volvia a pulsar y gastaba otro. Cada hipo del portapapeles
+            // quemaba un codigo en silencio.
+            var copiado = Copiar(reply.Code);
 
             MessageBox.Show(
-                $"Codigo: {reply.Code}\n\nCopiado al portapapeles.\nVence: {reply.ExpiresAt.ToDateTime().ToLocalTime():HH:mm}\nUsos: {reply.MaxUses}\n\nNo se vuelve a mostrar.",
+                $"Codigo: {reply.Code}\n\n" +
+                (copiado
+                    ? "Copiado al portapapeles."
+                    : "NO se pudo copiar al portapapeles: copialo de aqui a mano.") +
+                $"\nVence: {reply.ExpiresAt.ToDateTime().ToLocalTime():HH:mm}\nUsos: {reply.MaxUses}\n\nNo se vuelve a mostrar.",
                 "Codigo de enrolamiento", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
-            StatusMessage = Describe(ex);
+            Reportar(ex);
         }
+    }
+
+    /// <summary>
+    /// Copia con reintentos. Devuelve false si no se pudo.
+    ///
+    /// El portapapeles de Windows es un recurso EXCLUSIVO de toda la sesion: lo
+    /// abre un proceso a la vez, y cualquiera puede tenerlo tomado medio
+    /// segundo -- el historial del portapapeles, un gestor de contrasenas, otra
+    /// aplicacion copiando. De ahi sale CLIPBRD_E_CANT_OPEN, que no significa
+    /// que algo este roto sino que hay que volver a intentarlo.
+    ///
+    /// Diez intentos separados 60 ms: medio segundo largo, que es mas de lo que
+    /// dura cualquiera de esas retenciones, y sigue siendo imperceptible.
+    /// </summary>
+    private static bool Copiar(string texto)
+    {
+        for (var intento = 0; intento < 10; intento++)
+        {
+            try
+            {
+                // SetDataObject con copy:true y no SetText: deja el texto en el
+                // portapapeles despues de que este proceso termine, que es lo
+                // que espera cualquiera que copie algo.
+                Clipboard.SetDataObject(texto, copy: true);
+                return true;
+            }
+            catch (Exception)
+            {
+                System.Threading.Thread.Sleep(60);
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -396,7 +531,7 @@ public sealed partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = Describe(ex);
+            Reportar(ex);
         }
     }
 
@@ -459,7 +594,7 @@ public sealed partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = Describe(ex);
+            Reportar(ex);
         }
     }
 
@@ -491,7 +626,7 @@ public sealed partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = Describe(ex);
+            Reportar(ex);
         }
     }
 
@@ -500,7 +635,12 @@ public sealed partial class MainViewModel : ObservableObject
         if (item is not MachineViewModel machine)
             return true;
 
-        if (StatusFilter.Length > 0)
+        // LAS DE BAJA SOLO CUANDO SE PIDEN. Es el motivo de la baja: que dejen
+        // de estorbar en la lista sin perder lo que hicieron.
+        if (machine.Retired != (StatusFilter == "RETIRED"))
+            return false;
+
+        if (StatusFilter.Length > 0 && StatusFilter != "RETIRED")
         {
             var coincide = StatusFilter == "CONFLICT"
                 ? machine.HasConflict

@@ -94,6 +94,19 @@
                 </StackPanel>
             </Button>
 
+            <Button Style="{StaticResource FichaFiltro}"
+                    Command="{Binding FilterByStatusCommand}" CommandParameter="RETIRED"
+                    Background="{Binding StatusFilter, Converter={StaticResource FondoKpi}, ConverterParameter=RETIRED}"
+                    BorderBrush="{Binding StatusFilter, Converter={StaticResource BordeKpi}, ConverterParameter=RETIRED}"
+                    ToolTip="Equipos dados de baja: conservan su historial y no pueden conectarse">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="De baja" Foreground="{StaticResource Muted}" />
+                    <TextBlock Style="{StaticResource CuentaFicha}">
+                        <Run Text="(" /><Run Text="{Binding RetiredCount, Mode=OneWay}" /><Run Text=")" />
+                    </TextBlock>
+                </StackPanel>
+            </Button>
+
             <Border Width="1" Background="{StaticResource Line}" Margin="6,3,14,3" />
 
             <ComboBox ItemsSource="{Binding Areas}" SelectedItem="{Binding AreaFilter}"
@@ -200,6 +213,7 @@
                          asi que es el unico boton solido. -->
                     <Button Content="Conectar" Style="{StaticResource BtnPrimary}"
                             Margin="0,14,0,0" HorizontalAlignment="Stretch"
+                            Visibility="{Binding Retired, Converter={StaticResource BoolToVis}, ConverterParameter=invert}"
                             Command="{Binding DataContext.RemoteControlCommand,
                                       RelativeSource={RelativeSource AncestorType=UserControl}}"
                             CommandParameter="devicehub" />
@@ -208,6 +222,37 @@
                             Margin="0,8,0,0" HorizontalAlignment="Stretch"
                             Command="{Binding DataContext.OpenDetailCommand,
                                       RelativeSource={RelativeSource AncestorType=UserControl}}" />
+
+                    <!-- Dar de baja va con los datos delante y no arriba con
+                         Conectar: no es una accion de uso diario, y un boton
+                         peligroso pegado al que se usa todo el rato acaba
+                         pulsandose por inercia. -->
+                    <Button Content="Dar de baja" Style="{StaticResource BtnDanger}"
+                            Margin="0,16,0,0" HorizontalAlignment="Stretch"
+                            Visibility="{Binding DataContext.PuedeDarDeBaja,
+                                         RelativeSource={RelativeSource AncestorType=UserControl},
+                                         Converter={StaticResource BoolToVis}}"
+                            Command="{Binding DataContext.RetireMachineCommand,
+                                      RelativeSource={RelativeSource AncestorType=UserControl}}" />
+
+                    <Border Background="{StaticResource PrimarySoft}" BorderBrush="{StaticResource Line}"
+                            BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,16,0,0"
+                            Visibility="{Binding Retired, Converter={StaticResource BoolToVis}}">
+                        <StackPanel>
+                            <TextBlock TextWrapping="Wrap" FontSize="12" Foreground="{StaticResource Muted}">
+                                <Run Text="Dada de baja por" /><Run Text=" " /><Run Text="{Binding RetiredBy, Mode=OneWay}" /><Run
+                                    Text=". No puede conectarse; su historial se conserva." />
+                            </TextBlock>
+
+                            <Button Content="Reactivar" Style="{StaticResource BtnGhost}"
+                                    Margin="0,10,0,0" HorizontalAlignment="Stretch"
+                                    Visibility="{Binding DataContext.IsAdministrator,
+                                                 RelativeSource={RelativeSource AncestorType=UserControl},
+                                                 Converter={StaticResource BoolToVis}}"
+                                    Command="{Binding DataContext.RestoreMachineCommand,
+                                              RelativeSource={RelativeSource AncestorType=UserControl}}" />
+                        </StackPanel>
+                    </Border>
 
                     <Border Background="{StaticResource DangerSoft}" BorderBrush="{StaticResource Danger}"
                             BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,12,0,0"

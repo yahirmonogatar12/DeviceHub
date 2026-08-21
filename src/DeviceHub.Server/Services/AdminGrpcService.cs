@@ -392,6 +392,57 @@ public sealed class AdminGrpcService(
         return await GetMachine(new MachineRef { MachineId = request.MachineId }, context);
     }
 
+    /// <summary>
+    /// Da de baja una PC: le quita el token y la saca de la lista.
+    ///
+    /// NO BORRA. Siete tablas cuelgan de machines con ON DELETE CASCADE, y entre
+    /// ellas esta machine_sessions -- el registro de quien controlo esa maquina.
+    /// Un DELETE convertiria una limpieza de la lista en la perdida de la
+    /// prueba, en un sistema cuyo motivo de existir es tenerla.
+    /// </summary>
+    [Authorize(Roles = Roles.Administrator)]
+    public override async Task<MachineDetail> RetireMachine(MachineRef request, ServerCallContext context)
+    {
+        var ct = context.CancellationToken;
+        var actor = context.GetHttpContext().User.Identity?.Name ?? "desconocido";
+
+        await machines.RetireAsync(request.MachineId, actor, ct);
+
+        // Y SE LE CIERRA LA PUERTA AHORA MISMO. Sin token no puede volver a
+        // entrar, pero el stream que ya tuviera abierto seguiria vivo hasta que
+        // se cayera solo: la autenticacion se comprueba al conectar, no en cada
+        // mensaje.
+        registry.Close(request.MachineId);
+
+        await audit.WriteAsync(BuildAudit(context, AuditActions.MachineRetired,
+            await machines.GetAsync(request.MachineId, ct), AuditEntry.Allowed, "baja"), ct);
+
+        logger.LogWarning("{Actor} dio de baja {MachineId}", actor, request.MachineId);
+
+        return await GetMachine(request, context);
+    }
+
+    /// <summary>
+    /// La devuelve al servicio, pero SIN token: ese se gasto al darla de baja.
+    /// Para que vuelva a conectarse hay que reenrolarla, que es el camino que ya
+    /// existe y el que deja constancia de quien la autorizo esta vez.
+    /// </summary>
+    [Authorize(Roles = Roles.Administrator)]
+    public override async Task<MachineDetail> RestoreMachine(MachineRef request, ServerCallContext context)
+    {
+        var ct = context.CancellationToken;
+        var actor = context.GetHttpContext().User.Identity?.Name ?? "desconocido";
+
+        await machines.RestoreAsync(request.MachineId, actor, ct);
+
+        await audit.WriteAsync(BuildAudit(context, AuditActions.MachineRestored,
+            await machines.GetAsync(request.MachineId, ct), AuditEntry.Allowed, "reactivada"), ct);
+
+        logger.LogWarning("{Actor} reactivo {MachineId}", actor, request.MachineId);
+
+        return await GetMachine(request, context);
+    }
+
     // ------------------------------------------------- usuarios (Fase 13)
 
     [Authorize(Roles = Roles.Administrator)]

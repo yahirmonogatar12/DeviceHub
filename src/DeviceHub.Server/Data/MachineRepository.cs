@@ -31,6 +31,10 @@ public sealed class MachineRow
     public string IdentityState { get; set; } = "ok";
     public string? HardwareFingerprint { get; set; }
     public string FingerprintConfidence { get; set; } = "low";
+
+    /// <summary>Nulo mientras este en servicio.</summary>
+    public DateTime? RetiredAt { get; set; }
+    public string? RetiredBy { get; set; }
 }
 
 public sealed class MachineAuthRow
@@ -96,7 +100,8 @@ public sealed class MachineRepository(Db db)
                m.disk_free_percent AS DiskFreePercent, m.metrics_at AS MetricsAt,
                m.identity_state AS IdentityState,
                m.hardware_fingerprint AS HardwareFingerprint,
-               m.fingerprint_confidence AS FingerprintConfidence
+               m.fingerprint_confidence AS FingerprintConfidence,
+               m.retired_at AS RetiredAt, m.retired_by AS RetiredBy
         FROM machines m
         JOIN sites s ON s.id = m.site_id
         """;
@@ -345,6 +350,59 @@ public sealed class MachineRepository(Db db)
                 "UPDATE machines SET current_ip = @ip, primary_mac = @mac WHERE id = @machineId",
                 new { machineId, ip = primary?.Ip, mac = primary?.Mac }, tx);
         }
+
+        await tx.CommitAsync(ct);
+    }
+
+    /// <summary>
+    /// Da de baja: le quita el token y la marca.
+    ///
+    /// EL TOKEN ES LO QUE IMPORTA. Esconderla de la lista sin quitarselo dejaria
+    /// una PC conectandose, apuntandose en la auditoria y ocupando su sitio,
+    /// solo que sin que nadie la viera. Sin token, el Connect se rechaza en la
+    /// primera comprobacion.
+    ///
+    /// La fila y sus siete tablas hijas se quedan enteras: es una baja, no un
+    /// borrado.
+    /// </summary>
+    public async Task RetireAsync(string machineId, string actor, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+
+        await using var conn = await db.OpenAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+
+        await conn.ExecuteAsync("""
+            UPDATE machines
+               SET retired_at = @now, retired_by = @actor, token_hash = NULL, updated_at = @now
+             WHERE id = @machineId
+            """, new { machineId, actor, now }, tx);
+
+        await LogEventAsync(conn, tx, machineId, "MACHINE_RETIRED", $"dada de baja por {actor}", null, now);
+
+        await tx.CommitAsync(ct);
+    }
+
+    /// <summary>
+    /// La devuelve al servicio. NO le devuelve el token: ese se gasto, y volver
+    /// a emitirlo desde aqui seria una forma de reconectar una PC sin que nadie
+    /// vuelva a autorizarla. Se reactiva y se reenrola, que es el camino que ya
+    /// existe y el que queda auditado.
+    /// </summary>
+    public async Task RestoreAsync(string machineId, string actor, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+
+        await using var conn = await db.OpenAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+
+        await conn.ExecuteAsync("""
+            UPDATE machines
+               SET retired_at = NULL, retired_by = NULL, updated_at = @now
+             WHERE id = @machineId
+            """, new { machineId, now }, tx);
+
+        await LogEventAsync(conn, tx, machineId, "MACHINE_RESTORED", $"reactivada por {actor}", null, now);
 
         await tx.CommitAsync(ct);
     }

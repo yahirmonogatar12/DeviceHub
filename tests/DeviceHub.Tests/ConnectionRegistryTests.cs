@@ -112,6 +112,33 @@ public class ConnectionRegistryTests
     }
 
     [Fact]
+    public void Closing_kicks_the_machine_out_now()
+    {
+        // Dar de baja una PC le quita el token, y el token se comprueba al
+        // CONECTAR: la que ya estaba dentro seguiria mandando metricas hasta
+        // caerse sola. Cerrarle el canal termina su bomba y con ella su stream.
+        var registro = new ConnectionRegistry();
+
+        var (canal, _) = registro.Registrar(Maquina);
+
+        registro.Close(Maquina);
+
+        Assert.True(canal.Reader.Completion.IsCompleted);
+        Assert.DoesNotContain(Maquina, registro.ConnectedMachineIds);
+        Assert.False(registro.TryPush(Maquina, new DeviceHub.Contracts.ServerMessage()));
+    }
+
+    [Fact]
+    public void Closing_one_that_is_not_there_is_not_a_problem()
+    {
+        // Se da de baja una PC apagada: no hay stream que cerrar, y eso no es un
+        // error -- es el caso normal.
+        var registro = new ConnectionRegistry();
+
+        registro.Close("la-que-no-esta");
+    }
+
+    [Fact]
     public void Machines_are_counted_apart()
     {
         var registro = new ConnectionRegistry();

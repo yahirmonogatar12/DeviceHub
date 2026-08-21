@@ -26,6 +26,12 @@ public sealed class MachineViewModel(MachineSummary summary) : ObservableObject
 
     public bool HasConflict => _summary.IdentityState == IdentityState.Conflict;
 
+    /// <summary>Dada de baja: sin token y fuera de la lista, con su historial
+    /// entero. No es un borrado.</summary>
+    public bool Retired => _summary.Retired;
+
+    public string RetiredBy => _summary.RetiredBy;
+
     /// <summary>
     /// El servidor ya resolvio el conflicto; esta fila todavia no lo sabe.
     ///
