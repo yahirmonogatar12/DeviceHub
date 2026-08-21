@@ -550,6 +550,7 @@ public static class RelaySession
                         $"red {_retraso.Base:0.0} ms + cola {_retraso.Encolado:0.0} ms  " +
                         $"verse {_verse.Ultimo:0.0} ms (min {_verse.Base:0.0})  " +
                         $"fps {_fpsDeseado}  B-frames {Bes()}  " +
+                        $"{(_comoSystem ? "SYSTEM" : "usuario (sin ventanas elevadas)")}  " +
                         $"objetivo {_bitrateDeseado / 1000} kbps ({_calidad:0.00}x)  " +
                         // Aplicados y rechazados de SendInput. Es lo que dice si
                         // la entrada llega de verdad al otro lado o se la traga
@@ -1015,6 +1016,19 @@ public static class RelaySession
         };
 
         _bframes = flujos[0].Codificador is H264Encoder mft ? mft.BFrames : -1;
+
+        // COMO QUIEN CORRE, en la linea que el tecnico si mira.
+        //
+        // Decide mas de lo que parece: SendInput no entra en una ventana
+        // ELEVADA -- el Administrador de dispositivos, el editor del registro,
+        // cualquier dialogo de UAC -- si quien inyecta corre como el usuario.
+        // Windows lo bloquea por UIPI y no avisa: el raton se mueve, la ventana
+        // no responde, y parece que el control remoto se colgo.
+        //
+        // Estaba solo en la linea de identidad, que va al registro de la PC de
+        // planta. El mismo error de los B-frames, otra vez.
+        _comoSystem = System.Security.Principal.WindowsIdentity.GetCurrent()
+            .User?.IsWellKnown(System.Security.Principal.WellKnownSidType.LocalSystemSid) ?? false;
 
         opciones.Escribir(
             $"Identidad {System.Security.Principal.WindowsIdentity.GetCurrent().Name}  " +
@@ -1966,6 +1980,10 @@ public static class RelaySession
     /// el mismo error que ya se corrigio una vez con los avisos de captura.
     /// </summary>
     private static int _bframes = -1;
+
+    /// <summary>Si el host corre como SYSTEM. Sin eso, la entrada no entra en
+    /// ventanas elevadas.</summary>
+    private static bool _comoSystem;
 
     private static string Bes()
         => _bframes switch
