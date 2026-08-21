@@ -150,19 +150,37 @@ public sealed class AgentGrpcService(
             throw new RpcException(new Status(StatusCode.FailedPrecondition,
                 "Maquina en conflicto de identidad: requiere resolucion de un administrador"));
 
-        // Detector de clonacion que no depende del hardware: dos streams vivos
-        // con el mismo machineId no tienen explicacion legitima.
-        var outbound = registry.TryRegister(machineId);
+        // Detector de clonacion que no depende del hardware. La conexion nueva
+        // DESALOJA a la vieja -- si son la misma PC, la que sabe cual esta viva
+        // es la que acaba de hablar -- y lo que delata a un clon es la
+        // FRECUENCIA: dos agentes con el mismo machineId se echan el uno al otro
+        // sin parar, porque cada uno reconecta en cuanto el otro lo saca.
+        var (outbound, desalojos) = registry.Registrar(machineId);
 
-        if (outbound is null)
+        if (desalojos >= ConnectionRegistry.DesalojosParaConflicto)
         {
-            await machines.MarkConflictAsync(machineId,
-                "Segundo stream Connect simultaneo con el mismo machineId", PeerIp(context), ct);
+            registry.Unregister(machineId, outbound);
 
-            logger.LogError("Conflicto de identidad en {MachineId}: ya hay un agente conectado", machineId);
+            await machines.MarkConflictAsync(machineId,
+                $"{desalojos} tomas de control en {ConnectionRegistry.Ventana.TotalMinutes:0} min: " +
+                "hay dos agentes con el mismo machineId",
+                PeerIp(context), ct);
+
+            logger.LogError(
+                "Conflicto de identidad en {MachineId}: {Desalojos} tomas de control seguidas",
+                machineId, desalojos);
 
             throw new RpcException(new Status(StatusCode.FailedPrecondition,
                 "Ya hay un agente conectado con este machineId"));
+        }
+
+        if (desalojos > 0)
+        {
+            // Se avisa pero NO se bloquea: lo normal es que la PC volviera de un
+            // corte y su stream anterior siguiera abierto del lado del servidor.
+            logger.LogWarning(
+                "Agente {MachineId} tomo el relevo de una conexion anterior ({Desalojos} en {Minutos} min)",
+                machineId, desalojos, ConnectionRegistry.Ventana.TotalMinutes);
         }
 
         logger.LogInformation("Agente conectado: {MachineCode} ({MachineId})", auth.MachineCode, machineId);
