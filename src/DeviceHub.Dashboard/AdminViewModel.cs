@@ -194,6 +194,20 @@ public sealed partial class MainViewModel
             // motores sin secreto conservan el lanzamiento de siempre.
             var conSecreto = session.ViewerSecret.Length > 0;
 
+            // SI YA HAY UN VISOR ABIERTO, la PC nueva va a SU ventana.
+            //
+            // Es la misma tuberia por la que le llego su primer ticket, que
+            // ahora se queda abierta justo para esto. Sin ella, controlar cuatro
+            // PCs son cuatro ventanas sueltas, y ninguna dice de cual es cual sin
+            // leerle la barra.
+            if (conSecreto && await AlVisorAbiertoAsync(session))
+            {
+                _remoteSessionId = session.SessionId;
+                CommandFeedback = $"Sesion remota abierta sobre {SelectedMachine.MachineCode}";
+
+                return;
+            }
+
             var proceso = System.Diagnostics.Process.Start(
                 new System.Diagnostics.ProcessStartInfo(ejecutable, session.LaunchArguments)
                 {
@@ -207,7 +221,12 @@ public sealed partial class MainViewModel
                 // Por stdin y no por argumentos: los argumentos de un proceso los
                 // lee cualquier usuario de esta PC.
                 await proceso.StandardInput.WriteLineAsync(session.ViewerSecret);
-                proceso.StandardInput.Close();
+                await proceso.StandardInput.FlushAsync();
+
+                // Y NO SE CIERRA. Antes se cerraba aqui mismo, porque no habia
+                // nada mas que decir; ahora es por donde entran las sesiones
+                // siguientes.
+                _visor = proceso;
             }
 
             _remoteSessionId = session.SessionId;
@@ -320,6 +339,47 @@ public sealed partial class MainViewModel
     }
 
     private string? _remoteSessionId;
+
+    /// <summary>
+    /// El visor abierto, si lo hay. Se guarda por su TUBERIA de entrada, que es
+    /// lo unico que hace falta: por ahi entra cada PC nueva como una pestaña mas.
+    /// </summary>
+    private System.Diagnostics.Process? _visor;
+
+    /// <summary>
+    /// Le pasa la sesion al visor que ya esta abierto. Devuelve false si no hay
+    /// ninguno, si murio, o si es de una version que no sabe recibir mas de una
+    /// -- y entonces se lanza otro, que es lo que se hacia siempre.
+    /// </summary>
+    private async Task<bool> AlVisorAbiertoAsync(RemoteSessionReply session)
+    {
+        if (_visor is not { } visor || visor.HasExited)
+            return false;
+
+        try
+        {
+            // Dos lineas: la sesion y su ticket. El ticket NUNCA en la misma
+            // linea que los argumentos, por lo mismo de siempre -- que un dia
+            // alguien registre esa linea entera.
+            // La marca literal, igual que los "--server" y "--session" que
+            // IRemoteProvider escribe a mano: el visor no puede referenciar los
+            // contratos del agente ni el dashboard los del visor, asi que el
+            // acuerdo se sostiene en las dos puntas. Al otro lado, App.Marca.
+            await visor.StandardInput.WriteLineAsync("+sesion " + session.LaunchArguments);
+
+            await visor.StandardInput.WriteLineAsync(session.ViewerSecret);
+            await visor.StandardInput.FlushAsync();
+
+            return true;
+        }
+        catch (Exception)
+        {
+            // La tuberia se rompio: el visor se cerro entre la comprobacion y la
+            // escritura. Se lanza uno nuevo.
+            _visor = null;
+            return false;
+        }
+    }
 
     [RelayCommand]
     private async Task PingAsync()

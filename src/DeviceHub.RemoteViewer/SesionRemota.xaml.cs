@@ -31,8 +31,13 @@ namespace DeviceHub.RemoteViewer;
 /// Fases 9 y 10: de vuelta viajan Ping y la ENTRADA del tecnico -- raton y
 /// teclado -- con coordenadas normalizadas 0..1, nunca en pixeles.
 /// </summary>
-public partial class RelayWindow : Window
+public partial class SesionRemota : UserControl
 {
+    /// <summary>Lo que va en la pestaña. La maquina primero: es contra QUE se
+    /// esta actuando, y con cuatro sesiones abiertas es lo unico que importa
+    /// antes de tocar una tecla.</summary>
+    public string Titulo { get; }
+
     private readonly string _servidor;
     private readonly string _sesion;
 
@@ -60,8 +65,17 @@ public partial class RelayWindow : Window
             cert.PublicKey.ExportSubjectPublicKeyInfo()));
     }
 
-    public RelayWindow(
-        string servidor, string sesion, string machineId, bool permitirSinConfianza, string pin = "")
+    /// <param name="ticket">
+    /// LO LEE LA CONSOLA, no esta sesion.
+    ///
+    /// Antes cada sesion llamaba a BootstrapTicket.Read() por su cuenta, que lee
+    /// de stdin. Con una sesion por proceso daba igual; con varias pestañas en el
+    /// mismo proceso serian dos hilos leyendo la misma tuberia, y el ticket de
+    /// una acabaria en la otra.
+    /// </param>
+    public SesionRemota(
+        string servidor, string sesion, string machineId, bool permitirSinConfianza,
+        string pin = "", string? ticket = null)
     {
         InitializeComponent();
 
@@ -70,8 +84,9 @@ public partial class RelayWindow : Window
         _machineId = machineId;
         _permitirSinConfianza = permitirSinConfianza;
         _pin = pin;
+        _ticket = ticket;
 
-        Title = $"DeviceHub - sesion {sesion}";
+        Titulo = string.IsNullOrEmpty(machineId) ? sesion : machineId;
 
         Loaded += (_, _) => new Thread(Ejecutar)
         {
@@ -79,47 +94,63 @@ public partial class RelayWindow : Window
             Name = "devicehub-relay-viewer"
         }.Start();
 
-        // Cancelar si, disponer NO: el hilo de reconexion puede estar esperando
-        // en _cancelacion.Token.WaitHandle, y disponer el origen mientras alguien
-        // espera en su handle lanza. El proceso termina detras de esto.
-        Closed += (_, _) => _cancelacion.Cancel();
-
         // Del WndProc de la ventana hija, no de los eventos de WPF: el video se
         // dibuja en una ventana Win32 encima del arbol visual, y los mensajes del
         // raton van a ella. Con los eventos de WPF el video se veia y no se podia
         // controlar nada.
         Video.Raton += RatonRemoto;
 
-        // A nivel de ventana, no del video: el teclado va a donde este el foco, y
-        // el control "static" no lo toma.
-        PreviewKeyDown += (_, e) => Tecla(e, pulsada: true);
-        PreviewKeyUp += (_, e) => Tecla(e, pulsada: false);
 
-        Activated += EnviarPortapapeles;
+    }
 
-        // El gancho SOLO mientras esta ventana tiene el foco. Instalado a secas
-        // se tragaria la tecla Windows del tecnico tambien cuando esta en sus
+    /// <summary>
+    /// Esta sesion pasa a ser la de delante: la pestaña elegida, y su ventana
+    /// con el foco.
+    ///
+    /// LAS DOS COSAS TIENEN QUE DARSE. Con varias pestañas abiertas, engancharse
+    /// el teclado por tener el foco de la ventana enviaria la tecla Windows a la
+    /// PC de la pestaña que NO se esta mirando.
+    /// </summary>
+    public void Activar()
+    {
+        EnviarPortapapeles(this, EventArgs.Empty);
+
+        // El gancho SOLO mientras esta sesion esta delante. Instalado a secas se
+        // tragaria la tecla Windows del tecnico tambien cuando esta en sus
         // propias aplicaciones, que es lo contrario de lo que se quiere.
-        Activated += (_, _) => EngancharTeclado();
+        EngancharTeclado();
+    }
 
-        // AL PERDER EL FOCO SE SUELTA EN LOS DOS LADOS.
-        //
-        // Soltar solo el gancho local dejaba teclas pegadas en la PC remota:
-        // mantienes Ctrl, haces clic en otra ventana tuya, sueltas Ctrl -- y ese
-        // KeyUp ya no lo ve el visor. El host recibio el Down y nunca recibe el
-        // Up, y como la conexion sigue viva no entra nada de la logica de
-        // reconexion. Ese Ctrl se queda hundido hasta que alguien lo note.
-        Deactivated += (_, _) =>
-        {
-            SoltarTeclado();
-            PedirSoltarEntrada();
-        };
+    /// <summary>
+    /// Deja de ser la de delante: se cambio de pestaña, o la ventana perdio el
+    /// foco.
+    ///
+    /// SE SUELTA EN LOS DOS LADOS. Soltar solo el gancho local dejaba teclas
+    /// pegadas en la PC remota: mantienes Ctrl, haces clic en otra ventana tuya,
+    /// sueltas Ctrl -- y ese KeyUp ya no lo ve el visor. El host recibio el Down
+    /// y nunca recibe el Up, y como la conexion sigue viva no entra nada de la
+    /// logica de reconexion. Ese Ctrl se queda hundido hasta que alguien lo note.
+    ///
+    /// Con pestañas pasa lo mismo cambiando de una a otra, y ahi es peor: la PC
+    /// que se queda con el Ctrl hundido ya no es la que el tecnico esta mirando.
+    /// </summary>
+    public void Desactivar()
+    {
+        SoltarTeclado();
+        PedirSoltarEntrada();
+    }
 
-        Closed += (_, _) =>
-        {
-            SoltarTeclado();
-            PedirSoltarEntrada();
-        };
+    /// <summary>
+    /// Se cierra la pestaña o la consola entera.
+    ///
+    /// Cancelar si, disponer NO: el hilo de reconexion puede estar esperando en
+    /// _cancelacion.Token.WaitHandle, y disponer el origen mientras alguien
+    /// espera en su handle lanza.
+    /// </summary>
+    public void Cerrar()
+    {
+        Desactivar();
+        _cancelacion.Cancel();
     }
 
     /// <summary>
@@ -202,8 +233,6 @@ public partial class RelayWindow : Window
     {
         try
         {
-            _ticket = BootstrapTicket.Read();
-
             if (_ticket is null)
             {
                 Mostrar("Falta el ticket. Se pasa por stdin, nunca por linea de comandos.");
@@ -1417,7 +1446,7 @@ public partial class RelayWindow : Window
 
         var dialogo = new Microsoft.Win32.OpenFileDialog { Title = "Subir a la PC remota" };
 
-        if (dialogo.ShowDialog(this) != true)
+        if (dialogo.ShowDialog(Window.GetWindow(this)) != true)
             return;
 
         IniciarSubida(dialogo.FileName, Path.Combine(_rutaRemota, Path.GetFileName(dialogo.FileName)));
@@ -2056,6 +2085,21 @@ public partial class RelayWindow : Window
     /// Preview* y no los eventos normales porque el Tab, las flechas y el Alt los
     /// consume WPF para navegar entre controles antes de que lleguen.
     /// </summary>
+    /// <summary>
+    /// El teclado LO REPARTE LA CONSOLA, no cada sesion.
+    ///
+    /// Antes esto estaba suscrito a la ventana, porque el teclado va a donde
+    /// este el foco y el "static" del video no lo toma: la ventana se quedaba
+    /// con el y lo tunelaba. Convertido en control eso deja de funcionar -- WPF
+    /// tunela desde la raiz hasta el elemento CON FOCO, y si el foco se queda en
+    /// la ventana, el control no lo ve pasar. La sesion se veria y no se podria
+    /// escribir en ella.
+    ///
+    /// Y con pestañas es ademas lo correcto: hay un solo teclado y varias PCs, y
+    /// quien sabe a cual va es la consola.
+    /// </summary>
+    public void Teclear(KeyEventArgs e, bool pulsada) => Tecla(e, pulsada);
+
     private void Tecla(KeyEventArgs e, bool pulsada)
     {
         // SystemKey es lo que trae la tecla real cuando Alt esta pulsado.

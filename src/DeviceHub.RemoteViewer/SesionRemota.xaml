@@ -1,9 +1,8 @@
-<Window x:Class="DeviceHub.RemoteViewer.RelayWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:render="clr-namespace:DeviceHub.RemoteViewer.Render"
-        Title="DeviceHub - Sesion remota" Height="700" Width="1180"
-        Background="#1B1B1B" WindowStartupLocation="CenterScreen">
+<UserControl x:Class="DeviceHub.RemoteViewer.SesionRemota"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:render="clr-namespace:DeviceHub.RemoteViewer.Render"
+             Background="#1B1B1B">
 
     <!-- GRIS NEUTRO Y ROJO, como AnyDesk, y no el azul de DeviceHub.
 
@@ -14,7 +13,7 @@
 
          El rojo es de acento y solo aparece donde hay algo encendido: grabando,
          o un boton pulsado. -->
-    <Window.Resources>
+    <UserControl.Resources>
         <SolidColorBrush x:Key="Barra"     Color="#2D2D2D" />
         <SolidColorBrush x:Key="Panel"     Color="#232323" />
         <SolidColorBrush x:Key="Hueco"     Color="#181818" />
@@ -173,7 +172,7 @@
                 </Trigger>
             </Style.Triggers>
         </Style>
-    </Window.Resources>
+    </UserControl.Resources>
 
     <DockPanel>
 
@@ -405,4 +404,4 @@
         </ScrollViewer>
 
     </DockPanel>
-</Window>
+</UserControl>
