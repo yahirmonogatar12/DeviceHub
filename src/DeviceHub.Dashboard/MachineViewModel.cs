@@ -1,3 +1,5 @@
+using System.Windows;
+using System.Windows.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using DeviceHub.Contracts;
 
@@ -92,8 +94,69 @@ public sealed class MachineViewModel(MachineSummary summary) : ObservableObject
 
     public void Update(MachineSummary summary)
     {
+        var antes = _summary.MetricsAt;
+
         _summary = summary;
+
+        // Solo cuando la medida es NUEVA. El resumen llega tambien por cambios
+        // que no son metricas -- un renombrado, una IP -- y apuntar el mismo
+        // valor otra vez dibujaria una linea plana que no significa nada.
+        if (summary.MetricsAt is not null && summary.MetricsAt != antes)
+        {
+            Apuntar(_cpu, summary.CpuPercent);
+            Apuntar(_ram, summary.MemoryPercent);
+            Apuntar(_disco, summary.DiskFreePercent);
+        }
+
         RefreshAll();
+    }
+
+    /// <summary>
+    /// Cuantas medidas se guardan para la curva.
+    ///
+    /// EN MEMORIA Y SOLO MIENTRAS EL DASHBOARD ESTE ABIERTO. El servidor guarda
+    /// el historial de metricas; traerlo aqui seria una consulta por maquina
+    /// cada vez que alguien abre un panel, para dibujar 60 px de linea. La curva
+    /// dice como va la PC AHORA, que es para lo que se mira.
+    /// </summary>
+    private const int Muestras = 30;
+
+    private readonly Queue<float> _cpu = new();
+    private readonly Queue<float> _ram = new();
+    private readonly Queue<float> _disco = new();
+
+    private static void Apuntar(Queue<float> serie, float valor)
+    {
+        serie.Enqueue(Math.Clamp(valor, 0, 100));
+
+        while (serie.Count > Muestras)
+            serie.Dequeue();
+    }
+
+    public PointCollection CpuCurva => Curva(_cpu);
+    public PointCollection RamCurva => Curva(_ram);
+    public PointCollection DiscoCurva => Curva(_disco);
+
+    /// <summary>
+    /// La serie en coordenadas de un rectangulo de 100x30, que es el tamano en
+    /// el que se dibuja. La escala vertical es SIEMPRE 0-100 %, nunca el minimo
+    /// y el maximo de la serie: una CPU que oscila entre 3 % y 5 % dibujada a
+    /// toda altura parece una PC en llamas.
+    /// </summary>
+    private static PointCollection Curva(Queue<float> serie)
+    {
+        var puntos = new PointCollection();
+
+        if (serie.Count < 2)
+            return puntos;
+
+        var valores = serie.ToArray();
+        var paso = 100.0 / (valores.Length - 1);
+
+        for (var i = 0; i < valores.Length; i++)
+            puntos.Add(new Point(i * paso, 30 - valores[i] / 100.0 * 30));
+
+        return puntos;
     }
 
     /// <summary>Lo llama el timer de la UI: el paso del tiempo cambia el estado

@@ -342,6 +342,35 @@
         </Setter>
     </Style>
 
+    <!-- ================= Miniatura con curva ================= -->
+    <Style x:Key="Miniatura" TargetType="Border">
+        <Setter Property="Background" Value="#1F1F1F" />
+        <Setter Property="BorderBrush" Value="{StaticResource Line}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="9,7" />
+        <Setter Property="Margin" Value="0,0,6,0" />
+    </Style>
+
+    <Style x:Key="MiniNumero" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+        <Setter Property="FontFamily" Value="Segoe UI Variable Display, Segoe UI" />
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Foreground" Value="{StaticResource Ink}" />
+        <Setter Property="Margin" Value="0,1,0,4" />
+    </Style>
+
+    <!-- La curva se dibuja en un rectangulo de 100x30 que arma el ViewModel, y
+         se estira a lo ancho de la miniatura. Sin Stretch habria que saber aqui
+         cuanto mide, y mide lo que le deje la columna. -->
+    <Style x:Key="Curva" TargetType="Polyline">
+        <Setter Property="Stroke" Value="{StaticResource Accent}" />
+        <Setter Property="StrokeThickness" Value="1.4" />
+        <Setter Property="StrokeLineJoin" Value="Round" />
+        <Setter Property="Height" Value="26" />
+        <Setter Property="Stretch" Value="Fill" />
+    </Style>
+
     <Style x:Key="KpiNumero" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
         <Setter Property="FontFamily" Value="Segoe UI Variable Display, Segoe UI" />
         <Setter Property="FontSize" Value="26" />

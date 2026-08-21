@@ -261,18 +261,27 @@
                     <TextBlock Text="Estadisticas rapidas" Style="{StaticResource Caption}" />
 
                     <UniformGrid Columns="3" Margin="0,8,0,0">
-                        <StackPanel>
-                            <TextBlock Text="CPU" Style="{StaticResource Caption}" />
-                            <TextBlock Text="{Binding Cpu}" FontSize="18" FontWeight="SemiBold" />
-                        </StackPanel>
-                        <StackPanel>
-                            <TextBlock Text="RAM" Style="{StaticResource Caption}" />
-                            <TextBlock Text="{Binding Memory}" FontSize="18" FontWeight="SemiBold" />
-                        </StackPanel>
-                        <StackPanel>
-                            <TextBlock Text="Disco libre" Style="{StaticResource Caption}" />
-                            <TextBlock Text="{Binding DiskFree}" FontSize="18" FontWeight="SemiBold" />
-                        </StackPanel>
+                        <Border Style="{StaticResource Miniatura}">
+                            <StackPanel>
+                                <TextBlock Text="CPU" Style="{StaticResource Caption}" />
+                                <TextBlock Text="{Binding Cpu}" Style="{StaticResource MiniNumero}" />
+                                <Polyline Points="{Binding CpuCurva}" Style="{StaticResource Curva}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Miniatura}">
+                            <StackPanel>
+                                <TextBlock Text="RAM" Style="{StaticResource Caption}" />
+                                <TextBlock Text="{Binding Memory}" Style="{StaticResource MiniNumero}" />
+                                <Polyline Points="{Binding RamCurva}" Style="{StaticResource Curva}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Miniatura}">
+                            <StackPanel>
+                                <TextBlock Text="Disco" Style="{StaticResource Caption}" />
+                                <TextBlock Text="{Binding DiskFree}" Style="{StaticResource MiniNumero}" />
+                                <Polyline Points="{Binding DiscoCurva}" Style="{StaticResource Curva}" />
+                            </StackPanel>
+                        </Border>
                     </UniformGrid>
                 </StackPanel>
             </ScrollViewer>
