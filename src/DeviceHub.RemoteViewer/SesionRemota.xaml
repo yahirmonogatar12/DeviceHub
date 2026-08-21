@@ -179,7 +179,7 @@
         <!-- Una franja fina y de un solo color, con una linea abajo que la separa
              del negro. Sin el borde, la barra y el hueco del video se funden y no
              se sabe donde acaba el visor y empieza la PC remota. -->
-        <Border DockPanel.Dock="Top" Background="{StaticResource Barra}"
+        <Border x:Name="BarraSuperior" DockPanel.Dock="Top" Background="{StaticResource Barra}"
                 BorderBrush="{StaticResource Linea}" BorderThickness="0,0,0,1" Padding="6,3">
             <DockPanel>
 

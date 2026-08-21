@@ -277,6 +277,14 @@ public partial class ConsolaWindow : Window
         Pestanas.Children.Remove(pestana.Ficha);
         Pestanas.Children.Insert(destino, pestana.Ficha);
 
+        // Y EL MOSAICO CON ELLAS. El orden de los cuadros es el orden de los
+        // hijos del UniformGrid: sin esto, arrastrar una pestaña reordenaria la
+        // franja y dejaria los cuadros donde estaban, o sea que la franja
+        // dejaria de decir cual es cual -- que es justo para lo que sirve cuando
+        // los cuadros no llevan nombre.
+        Contenido.Children.Remove(pestana.Sesion);
+        Contenido.Children.Insert(destino, pestana.Sesion);
+
         _agarre = donde;
     }
 

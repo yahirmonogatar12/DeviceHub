@@ -2034,14 +2034,43 @@ public partial class SesionRemota : UserControl
     /// WPF y es lo unico que funciona: sobre un HwndHost, WPF no ve el raton.
     /// </summary>
     /// <summary>
-    /// Si el raton y el teclado van a la PC remota.
+    /// Si esta sesion se maneja, o solo se mira.
     ///
-    /// En mosaico NO. Cuatro escritorios a la vez son para MIRAR -- una pared de
-    /// camaras -- y ahi un clic significa "quiero esta grande", no "pulsa en esa
-    /// PC". Sin esto, acercarse a leer una pantalla movería el raton de una PC de
+    /// En mosaico solo se mira. Cuatro escritorios a la vez son una pared de
+    /// camaras, y ahi un clic significa "quiero esta grande", no "pulsa en esa
+    /// PC": sin esto, acercarse a leer una pantalla moveria el raton de una PC de
     /// planta, y con cuatro abiertas ni siquiera estaria claro cual.
+    ///
+    /// Y se va con ella TODO EL MARCO. Una miniatura de un cuarto de pantalla con
+    /// su barra de botones, su menu y sus estadisticas encima no deja ver el
+    /// escritorio, que es lo unico que se estaba mirando. Al volver, la barra de
+    /// datos vuelve como estaba: es una eleccion del tecnico, no del modo.
     /// </summary>
-    public bool Interactiva { get; set; } = true;
+    public bool Interactiva
+    {
+        get;
+
+        set
+        {
+            if (field == value)
+                return;
+
+            field = value;
+
+            if (!value)
+                _datosAntes = BarraEstado.Visibility;
+
+            BarraSuperior.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
+            BarraEstado.Visibility = value ? _datosAntes : Visibility.Collapsed;
+
+            // El panel de archivos no se restaura solo: se abre a mano y se
+            // cierra a mano, y volver del mosaico no es ninguna de las dos.
+            if (!value)
+                PanelArchivos.Visibility = Visibility.Collapsed;
+        }
+    } = true;
+
+    private Visibility _datosAntes = Visibility.Visible;
 
     /// <summary>Alguien pulso encima mientras NO era interactiva. Lo escucha la
     /// consola para sacarla del mosaico.</summary>
