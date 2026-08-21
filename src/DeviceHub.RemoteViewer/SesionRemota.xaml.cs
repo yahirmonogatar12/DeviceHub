@@ -2033,10 +2033,34 @@ public partial class SesionRemota : UserControl
     /// Traduce los mensajes crudos de Win32. Es feo comparado con los eventos de
     /// WPF y es lo unico que funciona: sobre un HwndHost, WPF no ve el raton.
     /// </summary>
+    /// <summary>
+    /// Si el raton y el teclado van a la PC remota.
+    ///
+    /// En mosaico NO. Cuatro escritorios a la vez son para MIRAR -- una pared de
+    /// camaras -- y ahi un clic significa "quiero esta grande", no "pulsa en esa
+    /// PC". Sin esto, acercarse a leer una pantalla movería el raton de una PC de
+    /// planta, y con cuatro abiertas ni siquiera estaria claro cual.
+    /// </summary>
+    public bool Interactiva { get; set; } = true;
+
+    /// <summary>Alguien pulso encima mientras NO era interactiva. Lo escucha la
+    /// consola para sacarla del mosaico.</summary>
+    public event EventHandler? Pulsada;
+
     private void RatonRemoto(double x, double y, int mensaje, IntPtr wParam)
     {
         if (x is < 0 or > 1 || y is < 0 or > 1)
             return;
+
+        if (!Interactiva)
+        {
+            // Solo el clic, y solo al soltar: mover el raton por encima de un
+            // mosaico no puede ir cambiando de pantalla sola.
+            if (mensaje == VideoSurface.WmLButtonUp)
+                Pulsada?.Invoke(this, EventArgs.Empty);
+
+            return;
+        }
 
         if (mensaje == VideoSurface.WmMouseWheel)
         {

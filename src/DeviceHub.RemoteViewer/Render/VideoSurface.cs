@@ -144,6 +144,10 @@ public sealed class VideoSurface : HwndHost
     private const int WmMouseLast = 0x020E;
     public const int WmMouseWheel = 0x020A;
 
+    /// <summary>Lo mira la sesion cuando NO es interactiva: en mosaico un clic
+    /// no se reenvia, sirve para elegir esa pantalla.</summary>
+    public const int WmLButtonUp = 0x0202;
+
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT { public int Left, Top, Right, Bottom; }
 
