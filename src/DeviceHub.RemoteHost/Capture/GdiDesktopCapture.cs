@@ -38,7 +38,8 @@ public sealed class GdiDesktopCapture : IScreenCapture
     private readonly long _inicioTicks = Stopwatch.GetTimestamp();
 
     private ID3D11Device _device = null!;
-    private IDXGIAdapter1 _adapter = null!;
+    /// <summary>Nulo cuando se cayo a WARP, que no tiene adaptador.</summary>
+    private IDXGIAdapter1? _adapter;
 
     /// <summary>Textura que se rellena desde la CPU y textura que ve el
     /// codificador. Son dos porque una dinamica no vale como entrada de un
@@ -304,9 +305,37 @@ public sealed class GdiDesktopCapture : IScreenCapture
             [FeatureLevel.Level_11_1, FeatureLevel.Level_11_0, FeatureLevel.Level_10_1],
             out _device!);
 
+        // WARP: EL RESPALDO DEL RESPALDO.
+        //
+        // En un servidor sin grafica -- un Xeon con su adaptador de gestion --
+        // ese adaptador esta en la lista de DXGI pero no sabe hacer D3D11: la
+        // llamada de arriba contesta E_INVALIDARG. WARP es el D3D11 por software
+        // de Windows, cumple nivel 11_1 y no depende de ninguna GPU.
+        //
+        // Es lento, y aqui da igual: en una maquina asi no hay codificador por
+        // hardware tampoco, y lo que se mira es una consola casi siempre quieta.
+        // Lento y funcionando le gana a rapido e imposible.
+        if (resultado.Failure || _device is null)
+        {
+            _adapter?.Dispose();
+            _adapter = null;
+
+            resultado = D3D11.D3D11CreateDevice(
+                null, DriverType.Warp, DeviceCreationFlags.BgraSupport,
+                [FeatureLevel.Level_11_1, FeatureLevel.Level_11_0, FeatureLevel.Level_10_1],
+                out _device!);
+
+            if (resultado.Success && _device is not null)
+            {
+                Adapter = "WARP (D3D11 por software)";
+                AdapterVendorId = 0;
+                AdapterLuid = default;
+            }
+        }
+
         if (resultado.Failure || _device is null)
             throw new ScreenCaptureUnavailableException(
-                $"No se pudo crear el dispositivo D3D11 para el respaldo GDI: {resultado}");
+                $"No se pudo crear el dispositivo D3D11 para el respaldo GDI, ni con WARP: {resultado}");
 
         _subida = _device.CreateTexture2D(new Texture2DDescription
         {

@@ -2036,11 +2036,24 @@ public static class RelaySession
                     elegida?.AdapterIndex ?? opciones.Adapter,
                     elegida?.OutputIndex ?? opciones.Output);
         }
-        catch (ScreenCaptureUnavailableException ex)
+        catch (Exception ex)
         {
-            // Que DXGI no pueda NO es el final: en el escritorio seguro es lo
-            // esperado. Se dice cual fue el motivo -- si el respaldo tambien
-            // falla, hacen falta los dos errores para saber que pasa.
+            // CUALQUIER fallo, no solo el nuestro.
+            //
+            // Antes aqui solo se atrapaba ScreenCaptureUnavailableException, que
+            // es la que se lanza para los HRESULT conocidos -- acceso denegado,
+            // sesion desconectada, adaptador sin duplicacion. Un HRESULT que no
+            // estuviera en esa lista salia como InvalidOperationException, se
+            // saltaba el respaldo entero y mataba la sesion.
+            //
+            // Paso en el servidor, un Xeon Silver sin grafica: su adaptador de
+            // gestion contesta E_INVALIDARG al crear el dispositivo D3D11, que
+            // no es ninguno de los casos previstos. El visor solo veia "Fallo al
+            // capturar (intento 9)" mientras GDI, que ahi funciona, no llegaba a
+            // intentarse nunca.
+            //
+            // Se dice cual fue el motivo: si el respaldo tambien falla, hacen
+            // falta los dos errores para saber que pasa.
             Avisar(opciones, $"DXGI no puede capturar aqui ({ex.Message}); se pasa al respaldo GDI");
 
             var gdi = new GdiDesktopCapture();
