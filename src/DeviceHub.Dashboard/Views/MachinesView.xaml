@@ -292,7 +292,22 @@
                         </TextBlock>
 
                         <TextBlock Grid.Row="3" Grid.Column="0" Text="Agente" Style="{StaticResource Caption}" Margin="0,6,0,0" />
-                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding AgentVersion}" FontSize="12" Margin="0,6,0,0" />
+
+                        <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="0,6,0,0">
+                            <TextBlock Text="{Binding AgentVersion}" FontSize="12" />
+
+                            <!-- Al lado de la version y no en un menu: el sitio
+                                 donde se ve que una PC esta atrasada es el sitio
+                                 donde se quiere ponerla al dia. -->
+                            <Button Content="actualizar" Style="{StaticResource BtnLink}"
+                                    FontSize="11" Height="18" Margin="8,0,0,0" Padding="0"
+                                    ToolTip="Mirar el recurso de actualizaciones ahora, sin esperar las 6 h"
+                                    Visibility="{Binding DataContext.IsAdministrator,
+                                                 RelativeSource={RelativeSource AncestorType=UserControl},
+                                                 Converter={StaticResource BoolToVis}}"
+                                    Command="{Binding DataContext.CheckUpdateCommand,
+                                              RelativeSource={RelativeSource AncestorType=UserControl}}" />
+                        </StackPanel>
 
                         <TextBlock Grid.Row="4" Grid.Column="0" Text="Uptime" Style="{StaticResource Caption}" Margin="0,6,0,0" />
                         <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Uptime}" FontSize="12" Margin="0,6,0,0" />

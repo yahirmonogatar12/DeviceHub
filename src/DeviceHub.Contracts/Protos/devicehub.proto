@@ -118,6 +118,12 @@ enum CommandType {
   // Fase 15. Solo se emite dentro de una sesion de terminal abierta y auditada:
   // el servidor nunca acepta este tipo suelto desde SendCommand.
   COMMAND_TYPE_RUN_SHELL = 16;
+
+  // Comprobar el recurso de actualizaciones AHORA, sin esperar lo que falte del
+  // temporizador. Publicar algo urgente y esperar seis horas es casi lo mismo
+  // que no haberlo publicado, y la alternativa era ir PC por PC reiniciando el
+  // servicio.
+  COMMAND_TYPE_CHECK_UPDATE = 17;
 }
 
 enum CommandStatus {

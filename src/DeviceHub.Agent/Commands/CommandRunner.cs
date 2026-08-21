@@ -14,6 +14,12 @@ namespace DeviceHub.Agent.Commands;
 /// </summary>
 public sealed class CommandRunner(ILogger<CommandRunner> logger)
 {
+    /// <summary>
+    /// Lo pone el Worker al arrancar. Una funcion y no el servicio entero: aqui
+    /// no hace falta saber nada del actualizador, solo poder decirle que mire ya.
+    /// </summary>
+    public Func<bool>? ComprobarActualizacion { get; set; }
+
     public async Task<CommandResult> ExecuteAsync(CommandRequest request, string agentVersion, CancellationToken ct)
     {
         var result = new CommandResult { CommandId = request.CommandId, AgentVersion = agentVersion };
@@ -67,6 +73,16 @@ public sealed class CommandRunner(ILogger<CommandRunner> logger)
 
     private Task<string> RunAsync(CommandRequest request, CancellationToken ct) => request.Type switch
     {
+        // Si encuentra algo, el actualizador para este servicio en segundos: la
+        // respuesta puede no llegar nunca, y eso es justo lo que se pidio. Por
+        // eso el texto dice lo que VA a pasar, no lo que paso.
+        CommandType.CheckUpdate => Task.FromResult(
+            ComprobarActualizacion is null
+                ? "El actualizador no esta disponible en este agente."
+                : ComprobarActualizacion()
+                    ? "Hay version nueva: se esta instalando y el servicio se reiniciara."
+                    : "Sin novedades: ya esta en la ultima version publicada."),
+
         CommandType.Ping => Task.FromResult(
             $"pong desde {Environment.MachineName}, uptime {TimeSpan.FromMilliseconds(Environment.TickCount64):d\\d\\ hh\\:mm}"),
 

@@ -381,6 +381,26 @@ public sealed partial class MainViewModel
         }
     }
 
+    /// <summary>
+    /// Le dice a esta PC que mire el recurso de actualizaciones AHORA.
+    ///
+    /// El agente lo comprueba cada seis horas por su cuenta; esto es para cuando
+    /// se acaba de publicar algo y esperarlas no tiene sentido. Si encuentra
+    /// version nueva, el servicio se reinicia en segundos -- asi que la respuesta
+    /// puede no llegar, y eso NO es un fallo.
+    /// </summary>
+    [RelayCommand]
+    private async Task CheckUpdateAsync()
+    {
+        var entry = await RunAsync(CommandType.CheckUpdate);
+
+        CommandFeedback = entry is null
+            ? "No se pudo pedir la comprobacion."
+            : entry.Status == CommandStatus.Completed
+                ? entry.Result
+                : "Pedida la comprobacion. Si habia version nueva, el agente se esta reiniciando.";
+    }
+
     [RelayCommand]
     private async Task PingAsync()
     {

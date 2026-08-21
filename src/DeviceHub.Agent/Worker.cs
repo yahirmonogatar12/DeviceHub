@@ -266,6 +266,12 @@ public sealed class Worker(
         // como uno que no arranca, y el rollback tiene que dispararse igual.
         updates.WriteHealthMarker(System.Version.Parse(AgentVersion));
 
+        // Y se le da al ejecutor de comandos la forma de mirar el recurso ahora
+        // mismo: es lo que atiende COMMAND_TYPE_CHECK_UPDATE. Se ata aqui y no
+        // en el contenedor porque la version la sabe este.
+        runner.ComprobarActualizacion =
+            () => updates.TryCheckAndStage(System.Version.Parse(AgentVersion));
+
         // Cola de salida por sesion. Los streams gRPC de cliente no admiten
         // escrituras concurrentes, asi que hay UN solo escritor y todo lo demas
         // encola. Antes el heartbeat escribia directo y no habia hueco para meter

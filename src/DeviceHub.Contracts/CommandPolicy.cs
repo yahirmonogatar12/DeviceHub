@@ -35,6 +35,12 @@ public static class CommandPolicy
         [CommandType.GetServices] = new(CommandType.GetServices, Roles.Technician,
             IsDestructive: false, AllowRetry: true, Ttl: TimeSpan.FromMinutes(2), Timeout: TimeSpan.FromSeconds(30)),
 
+        // Administrador y no tecnico: empuja una version a esa PC, y la version
+        // la decide quien publica en el recurso. TTL corto -- si la PC estaba
+        // apagada, mañana ya no interesa este comando sino el temporizador.
+        [CommandType.CheckUpdate] = new(CommandType.CheckUpdate, Roles.Administrator,
+            IsDestructive: false, AllowRetry: false, Ttl: TimeSpan.FromMinutes(10), Timeout: TimeSpan.FromMinutes(2)),
+
         // --- Administrativos: cambian el estado de la PC, sin reintento automatico ---
         [CommandType.KillProcess] = new(CommandType.KillProcess, Roles.Technician,
             IsDestructive: true, AllowRetry: false, Ttl: TimeSpan.FromMinutes(2), Timeout: TimeSpan.FromSeconds(20)),
