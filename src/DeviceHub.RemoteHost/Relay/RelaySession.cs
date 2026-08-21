@@ -549,7 +549,7 @@ public static class RelaySession
                         $"acuses {(_visorAcusa ? "si" : "no")}/{cuenta.AcusesPerdidos} perdidos  " +
                         $"red {_retraso.Base:0.0} ms + cola {_retraso.Encolado:0.0} ms  " +
                         $"verse {_verse.Ultimo:0.0} ms (min {_verse.Base:0.0})  " +
-                        $"fps {_fpsDeseado}  " +
+                        $"fps {_fpsDeseado}  B-frames {Bes()}  " +
                         $"objetivo {_bitrateDeseado / 1000} kbps ({_calidad:0.00}x)  " +
                         // Aplicados y rechazados de SendInput. Es lo que dice si
                         // la entrada llega de verdad al otro lado o se la traga
@@ -1014,13 +1014,15 @@ public static class RelaySession
             }
         };
 
+        _bframes = flujos[0].Codificador is H264Encoder mft ? mft.BFrames : -1;
+
         opciones.Escribir(
             $"Identidad {System.Security.Principal.WindowsIdentity.GetCurrent().Name}  " +
             $"Escritorio {escritorio.Name}  Flujos {flujos.Count}  " +
             $"Codec {Etiqueta(flujos[0].Codificador.Codec)}  " +
             $"MFT {flujos[0].Codificador.Capabilities.Name}  " +
             $"Hardware {(flujos[0].Codificador.Capabilities.Hardware ? "TRUE" : "FALSE")}  " +
-            $"B-frames {Bes(flujos[0].Codificador)}  " +
+            $"B-frames {Bes()}  " +
             $"Lienzo {lienzo.Ancho}x{lienzo.Alto}");
 
         // UN HILO POR PANTALLA, que es como lo hace RustDesk.
@@ -1949,17 +1951,25 @@ public static class RelaySession
     private static long Ahora()
         => Stopwatch.GetTimestamp() * 1_000_000L / Stopwatch.Frequency;
 
-    /// <summary>Lo que el codificador dice sobre los B-frames. Tiene que ser 0:
-    /// cualquier otra cosa se ve como movimiento que retrocede.</summary>
-    private static string Bes(IVideoEncoder codificador)
-        => codificador is H264Encoder mft
-            ? mft.BFrames switch
-            {
-                0 => "0",
-                < 0 => "no contesta",
-                var cuantos => $"{cuantos} (!)"
-            }
-            : "-";
+    /// <summary>
+    /// Lo que el codificador dice sobre los B-frames. Tiene que ser 0:
+    /// cualquier otra cosa se ve como movimiento que retrocede.
+    ///
+    /// Es estatico porque va en la linea de medidas, que se arma en la bomba de
+    /// salida y no tiene los flujos a mano. Lo primero que hizo fue irse a la
+    /// linea de identidad -- o sea al registro de la PC de planta, o sea a un
+    /// sitio donde el tecnico que esta mirando el problema no puede leerlo. Es
+    /// el mismo error que ya se corrigio una vez con los avisos de captura.
+    /// </summary>
+    private static int _bframes = -1;
+
+    private static string Bes()
+        => _bframes switch
+        {
+            0 => "0",
+            < 0 => "?",
+            var cuantos => $"{cuantos} (!)"
+        };
 
     private static InputInjector? _entrada;
 
