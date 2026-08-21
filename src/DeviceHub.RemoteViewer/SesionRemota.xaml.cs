@@ -2070,7 +2070,9 @@ public partial class SesionRemota : UserControl
         }
     } = true;
 
-    private Visibility _datosAntes = Visibility.Visible;
+    /// <summary>Como estaba la barra de datos antes de entrar en mosaico. Nace
+    /// apagada, igual que ella.</summary>
+    private Visibility _datosAntes = Visibility.Collapsed;
 
     /// <summary>Alguien pulso encima mientras NO era interactiva. Lo escucha la
     /// consola para sacarla del mosaico.</summary>

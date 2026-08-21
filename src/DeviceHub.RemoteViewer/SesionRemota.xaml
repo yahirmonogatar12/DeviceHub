@@ -341,8 +341,13 @@
 
         <!-- Al lado del video, nunca encima: un HwndHost dibuja fuera del arbol
              visual de WPF y cualquier XAML superpuesto quedaria tapado. -->
+        <!-- APAGADA DE ENTRADA. Son medidas para diagnosticar, no para trabajar:
+             quien entra a arreglar algo en una PC de planta quiere ver el
+             escritorio, no chunks y percentiles. El boton de la barra las
+             enciende cuando hacen falta. -->
         <Border x:Name="BarraEstado" DockPanel.Dock="Bottom" Background="{StaticResource Panel}"
-                BorderBrush="{StaticResource Linea}" BorderThickness="0,1,0,0" Padding="10,5">
+                BorderBrush="{StaticResource Linea}" BorderThickness="0,1,0,0" Padding="10,5"
+                Visibility="Collapsed">
             <TextBlock x:Name="Estado" FontFamily="Consolas" FontSize="11"
                        Foreground="{StaticResource LetraTenue}" TextWrapping="Wrap"
                        Text="Conectando..." />
