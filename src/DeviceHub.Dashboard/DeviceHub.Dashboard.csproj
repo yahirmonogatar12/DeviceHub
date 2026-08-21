@@ -13,7 +13,17 @@
          lanza "Cannot find non-neutral culture related to 'en-us'". El dashboard
          se abria y moria en el acto. -->
     <InvariantGlobalization>false</InvariantGlobalization>
+
+    <!-- El icono del ejecutable, y de paso el de las ventanas: WPF usa el del
+         .exe cuando la ventana no declara otro. -->
+    <ApplicationIcon>..\..\assets\devicehub.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Enlazado y no copiado: el png vive en assets, con el ico que sale de el.
+         Dos copias del mismo logo acaban divergiendo. -->
+    <Resource Include="..\..\assets\logo.png" Link="Assets\logo.png" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\DeviceHub.Contracts\DeviceHub.Contracts.csproj" />

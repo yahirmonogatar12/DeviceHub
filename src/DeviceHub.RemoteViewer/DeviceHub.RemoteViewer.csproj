@@ -12,6 +12,10 @@
          culture related to 'en-us'". Directory.Build.props activa la
          globalizacion invariante para todo el repositorio. -->
     <InvariantGlobalization>false</InvariantGlobalization>
+
+    <!-- El icono del ejecutable, y de paso el de las ventanas: WPF usa el del
+         .exe cuando la ventana no declara otro. -->
+    <ApplicationIcon>..\..\assets\devicehub.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>

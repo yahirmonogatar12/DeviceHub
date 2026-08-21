@@ -52,6 +52,9 @@ DisableDirPage=yes
 DisableProgramGroupPage=yes
 OutputDir=..\artifacts\installers
 OutputBaseFilename=DeviceHubAgent-setup-{#AppVersion}
+; El icono del propio instalador y el que queda en Programas y caracteristicas.
+SetupIconFile=..\assets\devicehub.ico
+UninstallDisplayIcon={app}\DeviceHub.Agent.exe
 Compression=lzma2/max
 SolidCompression=yes
 ; El agente corre como LocalSystem y crea un servicio: sin admin no hay nada que hacer.

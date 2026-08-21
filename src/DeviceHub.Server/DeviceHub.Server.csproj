@@ -4,6 +4,10 @@
     <TargetFramework>net10.0</TargetFramework>
     <OutputType>Exe</OutputType>
     <UserSecretsId>devicehub-server</UserSecretsId>
+
+    <!-- El icono del ejecutable, y de paso el de las ventanas: WPF usa el del
+         .exe cuando la ventana no declara otro. -->
+    <ApplicationIcon>..\..\assets\devicehub.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>

@@ -21,11 +21,8 @@
             <Border Grid.Row="0" Background="{StaticResource Card}" Height="58"
                     BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
                 <DockPanel LastChildFill="False" Margin="16,0">
-                    <Border Width="30" Height="30" CornerRadius="8" Background="{StaticResource Brand}"
-                            VerticalAlignment="Center">
-                        <TextBlock Text="&#x25C8;" FontSize="15" Foreground="White"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Border>
+                    <Image Source="/Assets/logo.png" Width="30" Height="30"
+                           VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality" />
                     <TextBlock Text="DeviceHub" Style="{StaticResource H2}" Margin="10,0,26,0" />
 
                     <TextBox Width="300" VerticalAlignment="Center"

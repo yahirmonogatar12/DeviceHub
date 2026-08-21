@@ -27,6 +27,9 @@ DefaultDirName={commonpf}\ILSAN\DeviceHub
 DefaultGroupName=ILSAN DeviceHub
 OutputDir=..\artifacts\installers
 OutputBaseFilename=DeviceHubServer-setup-{#AppVersion}
+; El icono del propio instalador y el que queda en Programas y caracteristicas.
+SetupIconFile=..\assets\devicehub.ico
+UninstallDisplayIcon={app}\Dashboard\DeviceHub.Dashboard.exe
 Compression=lzma2/max
 SolidCompression=yes
 PrivilegesRequired=admin

@@ -10,11 +10,8 @@
             </Border.Effect>
 
             <StackPanel>
-                <Border Width="46" Height="46" CornerRadius="12" Background="{StaticResource Brand}"
-                        HorizontalAlignment="Center">
-                    <TextBlock Text="&#x25C8;" FontSize="22" Foreground="White"
-                               HorizontalAlignment="Center" VerticalAlignment="Center" />
-                </Border>
+                <Image Source="/Assets/logo.png" Width="52" Height="52"
+                       HorizontalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality" />
 
                 <TextBlock Text="DeviceHub" Style="{StaticResource H1}" Margin="0,14,0,0"
                            HorizontalAlignment="Center" />

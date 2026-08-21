@@ -5,6 +5,10 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>DeviceHub.Agent</RootNamespace>
     <AssemblyName>DeviceHub.Agent</AssemblyName>
+
+    <!-- El icono del ejecutable, y de paso el de las ventanas: WPF usa el del
+         .exe cuando la ventana no declara otro. -->
+    <ApplicationIcon>..\..\assets\devicehub.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
