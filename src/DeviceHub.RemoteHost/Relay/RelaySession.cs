@@ -1291,6 +1291,9 @@ public static class RelaySession
         {
             var siguienteFrame = Stopwatch.GetTimestamp();
             var ultimoFrame = Stopwatch.GetTimestamp();
+
+            // Cuando se codifico algo por ultima vez, para el suelo de imagen.
+            var ultimoCodificado = 0L;
             var bitrateActual = 0;
 
             while (!cancellationToken.IsCancellationRequested)
@@ -1388,9 +1391,33 @@ public static class RelaySession
                 // superficie duplicada mientras tanto es lo que no se hace.
                 using (var frame = flujo.Captura.CaptureAsync(cancellationToken).GetAwaiter().GetResult())
                 {
-                    if (frame is null || !frame.DesktopChanged)
+                    if (frame is null)
                         continue;
 
+                    // SUELO DE IMAGEN: un frame por segundo aunque no cambie nada.
+                    //
+                    // "Sin cambios no se manda nada" es correcto y es lo que hace
+                    // que un escritorio quieto no gaste ancho de banda. Lo que no
+                    // vale es que no se mande NUNCA: en la consola de un servidor,
+                    // que puede pasar horas sin que se mueva un pixel, el visor se
+                    // queda en "sin config" para siempre -- no hay primer keyframe
+                    // que mandar, asi que no hay nada que descodificar.
+                    //
+                    // Y ademas un codificador por software no arranca con eso:
+                    // recibia tres frames en cuarenta y cinco segundos, con las
+                    // marcas de tiempo a quince segundos unas de otras, y no
+                    // producia una sola salida.
+                    //
+                    // Es lo que hace RustDesk, y por eso ahi se ve la pantalla
+                    // desde el primer segundo. Un frame de un escritorio quieto
+                    // cuesta unos pocos cientos de bytes.
+                    var ahora = Stopwatch.GetTimestamp();
+                    var toca = ahora - ultimoCodificado > Stopwatch.Frequency;
+
+                    if (!frame.DesktopChanged && !toca)
+                        continue;
+
+                    ultimoCodificado = ahora;
                     ultimoFrame = Stopwatch.GetTimestamp();
                     flujo.Arranco = true;
 

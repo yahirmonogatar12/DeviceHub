@@ -472,6 +472,10 @@ public partial class SesionRemota : UserControl
         // camino.
         var medidasDelHost = string.Empty;
 
+        // Lo ultimo que dijo el host: por que capturador tiro, si tuvo que
+        // relevarse, si le falta algo. No se pisa con las notas de aqui.
+        var avisoDelHost = string.Empty;
+
         // Y lo mismo con los tiempos de descodificado: los ultimos 600, que a 30
         // FPS son los ultimos 20 s. De paso deja de crecer sin limite -- en una
         // sesion de ocho horas eran cien mil entradas para calcular dos
@@ -774,9 +778,21 @@ public partial class SesionRemota : UserControl
                         // hueco de los avisos borrarian cada 2 s cualquier cosa
                         // que hubiera que leer.
                         if (paquete.HostStatus.Measurements)
+                        {
                             medidasDelHost = paquete.HostStatus.Text;
+                        }
                         else
+                        {
+                            // EN SU PROPIA LINEA, no en la de los avisos de aqui.
+                            //
+                            // Compartian hueco, y el ultimo en hablar borraba al
+                            // otro: encender el vsync desde el menu tapaba el
+                            // "DXGI no puede capturar aqui; se pasa al respaldo
+                            // GDI" que el host acababa de mandar. Justo la linea
+                            // que explica por que no se ve nada.
+                            avisoDelHost = paquete.HostStatus.Text;
                             Nota(paquete.HostStatus.Text);
+                        }
 
                         break;
 
