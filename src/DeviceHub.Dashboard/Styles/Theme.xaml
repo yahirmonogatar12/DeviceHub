@@ -222,21 +222,119 @@
     <local:MatchBrushConverter x:Key="FondoKpi" Igual="{StaticResource PrimarySoft}" Distinto="{StaticResource Card}" />
     <local:MatchBrushConverter x:Key="BordeKpi" Igual="{StaticResource Primary}" Distinto="{StaticResource Line}" />
 
-    <Style x:Key="KpiCard" TargetType="Button">
+    <!-- ================= Ficha de filtro =================
+         Sustituye a las tarjetas de KPI. Cinco tarjetas de 118 px ocupaban una
+         franja entera de la pantalla para decir cinco numeros que caben en una
+         linea, y encima empujaban hacia abajo la tabla, que es lo que se viene a
+         mirar. La ficha hace lo mismo: ensena el numero y filtra al pulsarla. -->
+    <Style x:Key="FichaFiltro" TargetType="Button">
         <Setter Property="Cursor" Value="Hand" />
-        <Setter Property="Margin" Value="0,0,10,0" />
-        <Setter Property="MinWidth" Value="118" />
+        <Setter Property="Margin" Value="0,0,8,0" />
+        <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{StaticResource Ink}" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
                     <Border x:Name="Fondo" Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
-                            CornerRadius="8" Padding="14,10">
-                        <ContentPresenter HorizontalAlignment="Left" />
+                            CornerRadius="6" Padding="11,6">
+                        <ContentPresenter VerticalAlignment="Center" />
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Fondo" Property="Opacity" Value="0.85" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- El punto de color de cada ficha. Sin el, cinco fichas grises seguidas
+         obligan a leerlas todas para encontrar la de Online. -->
+    <Style x:Key="PuntoEstado" TargetType="Ellipse">
+        <Setter Property="Width" Value="7" />
+        <Setter Property="Height" Value="7" />
+        <Setter Property="Margin" Value="0,0,7,0" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <Style x:Key="CuentaFicha" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+        <Setter Property="Foreground" Value="{StaticResource Muted}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Margin" Value="5,0,0,0" />
+    </Style>
+
+    <!-- ================= Desplegable de filtro ================= -->
+    <Style TargetType="ComboBox">
+        <Setter Property="Height" Value="30" />
+        <Setter Property="Margin" Value="0,0,8,0" />
+        <Setter Property="MinWidth" Value="130" />
+        <Setter Property="Padding" Value="9,0" />
+        <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Foreground" Value="{StaticResource Ink}" />
+        <Setter Property="Background" Value="{StaticResource Card}" />
+        <Setter Property="BorderBrush" Value="{StaticResource Line}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBox">
+                    <Grid>
+                        <ToggleButton x:Name="Boton" Focusable="False" ClickMode="Press"
+                                      IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border Background="{StaticResource Card}"
+                                            BorderBrush="{StaticResource Line}" BorderThickness="1"
+                                            CornerRadius="6" Padding="9,0">
+                                        <DockPanel>
+                                            <TextBlock DockPanel.Dock="Right" Text="&#x25BE;" FontSize="10"
+                                                       Foreground="{StaticResource Muted}"
+                                                       VerticalAlignment="Center" Margin="8,0,0,0" />
+                                            <ContentPresenter VerticalAlignment="Center" />
+                                        </DockPanel>
+                                    </Border>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+
+                            <ContentPresenter Content="{TemplateBinding SelectionBoxItem}" />
+                        </ToggleButton>
+
+                        <Popup IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom"
+                               AllowsTransparency="True" PopupAnimation="Fade" Focusable="False">
+                            <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Line}"
+                                    BorderThickness="1" CornerRadius="6" Padding="4"
+                                    MinWidth="{TemplateBinding ActualWidth}">
+                                <ScrollViewer MaxHeight="260">
+                                    <ItemsPresenter />
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="ComboBoxItem">
+        <Setter Property="Padding" Value="9,6" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Foreground" Value="{StaticResource Ink}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBoxItem">
+                    <Border x:Name="Fondo" Background="Transparent" CornerRadius="4"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Fondo" Property="Background" Value="#2F2F2F" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Fondo" Property="Background" Value="{StaticResource PrimarySoft}" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

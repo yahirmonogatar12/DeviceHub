@@ -70,6 +70,20 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>Filtro por estado que activan las tarjetas de KPI. Vacio = todos.</summary>
     [ObservableProperty] private string _statusFilter = string.Empty;
 
+    /// <summary>
+    /// Area y linea, en dos listas que salen de los equipos que HAY.
+    ///
+    /// No de un catalogo: si alguien mueve una PC a un area nueva, la lista
+    /// tiene que ofrecerla sin que nadie la de de alta en ningun sitio.
+    /// </summary>
+    public const string Todas = "Todas";
+
+    public ObservableCollection<string> Areas { get; } = [Todas];
+    public ObservableCollection<string> Lineas { get; } = [Todas];
+
+    [ObservableProperty] private string _areaFilter = Todas;
+    [ObservableProperty] private string _lineFilter = Todas;
+
     // Al seleccionar una maquina se entra en su ficha a pantalla completa: en un
     // panel lateral de 420 px las pestanas no caben y todo compite por el espacio.
     public bool ShowList => Page == "machines" && SelectedMachine is null;
@@ -128,9 +142,8 @@ public sealed partial class MainViewModel : ObservableObject
     private void Navigate(string pagina) => Page = pagina;
 
     /// <summary>
-    /// Las tarjetas de KPI SON el filtro por estado: pulsar "Offline" deja solo
-    /// las offline y volver a pulsarla las devuelve todas. No hacen falta cuatro
-    /// ComboBox que preguntan lo que ya contesta la barra de busqueda.
+    /// Las fichas de estado SON el filtro: pulsar "Offline" deja solo las
+    /// offline y volver a pulsarla las devuelve todas.
     /// </summary>
     [RelayCommand]
     private void FilterByStatus(string estado)
@@ -139,6 +152,45 @@ public sealed partial class MainViewModel : ObservableObject
     partial void OnStatusFilterChanged(string value) => MachinesView.Refresh();
 
     partial void OnFilterChanged(string value) => MachinesView.Refresh();
+
+    partial void OnAreaFilterChanged(string value) => MachinesView.Refresh();
+
+    partial void OnLineFilterChanged(string value) => MachinesView.Refresh();
+
+    /// <summary>Rehace las dos listas conservando lo que el tecnico tenia
+    /// elegido: que llegue un equipo nuevo no puede deshacerle el filtro.</summary>
+    private void RefrescarAreasYLineas()
+    {
+        // Asignar la PROPIEDAD y no el campo: el setter generado ya avisa y
+        // refresca la vista, y solo cuando el valor cambia de verdad.
+        AreaFilter = Rellenar(Areas, Machines.Select(m => m.Area), AreaFilter);
+        LineFilter = Rellenar(Lineas, Machines.Select(m => m.Line), LineFilter);
+
+        static string Rellenar(
+            ObservableCollection<string> destino, IEnumerable<string> valores, string elegido)
+        {
+            var nuevas = valores
+                .Where(v => !string.IsNullOrWhiteSpace(v))
+                .Select(v => v.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(v => v, StringComparer.OrdinalIgnoreCase)
+                .Prepend(Todas)
+                .ToList();
+
+            if (nuevas.SequenceEqual(destino, StringComparer.Ordinal))
+                return elegido;
+
+            destino.Clear();
+
+            foreach (var valor in nuevas)
+                destino.Add(valor);
+
+            // Si lo elegido ya no existe -- se movio la ultima PC de esa linea --
+            // se vuelve a Todas, en vez de dejar la lista filtrada por algo que
+            // ya no aparece en el desplegable.
+            return destino.Contains(elegido, StringComparer.Ordinal) ? elegido : Todas;
+        }
+    }
 
     partial void OnSelectedMachineChanged(MachineViewModel? value)
     {
@@ -205,6 +257,7 @@ public sealed partial class MainViewModel : ObservableObject
                     if (existing is null)
                     {
                         Machines.Add(new MachineViewModel(summary));
+                        RefrescarAreasYLineas();
                         MachinesView.Refresh();
                     }
                     else
@@ -428,6 +481,12 @@ public sealed partial class MainViewModel : ObservableObject
             if (!coincide)
                 return false;
         }
+
+        if (AreaFilter != Todas && !string.Equals(machine.Area, AreaFilter, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (LineFilter != Todas && !string.Equals(machine.Line, LineFilter, StringComparison.OrdinalIgnoreCase))
+            return false;
 
         if (string.IsNullOrWhiteSpace(Filter))
             return true;

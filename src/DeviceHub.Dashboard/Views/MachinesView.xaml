@@ -22,62 +22,77 @@
                     Visibility="{Binding IsAdministrator, Converter={StaticResource BoolToVis}}" />
         </DockPanel>
 
-        <!-- KPIs: tambien son el filtro por estado -->
-        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,16">
-            <Button Style="{StaticResource KpiCard}"
+        <!-- Filtros. Las fichas de estado SON el filtro: pulsar una deja solo
+             esas y volver a pulsarla las devuelve todas. Area y linea van al
+             lado porque se combinan con ellas, no las sustituyen. -->
+        <WrapPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,14">
+            <Button Style="{StaticResource FichaFiltro}"
                     Command="{Binding FilterByStatusCommand}" CommandParameter=""
                     Background="{Binding StatusFilter, Converter={StaticResource FondoKpi}}"
                     BorderBrush="{Binding StatusFilter, Converter={StaticResource BordeKpi}}">
-                <StackPanel>
-                    <TextBlock Text="{Binding TotalCount}" Style="{StaticResource KpiNumero}" />
-                    <TextBlock Text="Todos" Style="{StaticResource Caption}" />
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="Todos" />
+                    <TextBlock Style="{StaticResource CuentaFicha}">
+                        <Run Text="(" /><Run Text="{Binding TotalCount, Mode=OneWay}" /><Run Text=")" />
+                    </TextBlock>
                 </StackPanel>
             </Button>
-
-            <Button Style="{StaticResource KpiCard}"
+            <Button Style="{StaticResource FichaFiltro}"
                     Command="{Binding FilterByStatusCommand}" CommandParameter="ONLINE"
                     Background="{Binding StatusFilter, Converter={StaticResource FondoKpi}, ConverterParameter=ONLINE}"
                     BorderBrush="{Binding StatusFilter, Converter={StaticResource BordeKpi}, ConverterParameter=ONLINE}">
-                <StackPanel>
-                    <TextBlock Text="{Binding OnlineCount}" Style="{StaticResource KpiNumero}"
-                               Foreground="{StaticResource Online}" />
-                    <TextBlock Text="Online" Style="{StaticResource Caption}" />
+                <StackPanel Orientation="Horizontal">
+                    <Ellipse Style="{StaticResource PuntoEstado}" Fill="{StaticResource Online}" />
+                    <TextBlock Text="Online" />
+                    <TextBlock Style="{StaticResource CuentaFicha}">
+                        <Run Text="(" /><Run Text="{Binding OnlineCount, Mode=OneWay}" /><Run Text=")" />
+                    </TextBlock>
                 </StackPanel>
             </Button>
-
-            <Button Style="{StaticResource KpiCard}"
+            <Button Style="{StaticResource FichaFiltro}"
                     Command="{Binding FilterByStatusCommand}" CommandParameter="UNREACHABLE"
                     Background="{Binding StatusFilter, Converter={StaticResource FondoKpi}, ConverterParameter=UNREACHABLE}"
                     BorderBrush="{Binding StatusFilter, Converter={StaticResource BordeKpi}, ConverterParameter=UNREACHABLE}">
-                <StackPanel>
-                    <TextBlock Text="{Binding UnreachableCount}" Style="{StaticResource KpiNumero}"
-                               Foreground="{StaticResource Warn}" />
-                    <TextBlock Text="Sin respuesta" Style="{StaticResource Caption}" />
+                <StackPanel Orientation="Horizontal">
+                    <Ellipse Style="{StaticResource PuntoEstado}" Fill="{StaticResource Warn}" />
+                    <TextBlock Text="Sin respuesta" />
+                    <TextBlock Style="{StaticResource CuentaFicha}">
+                        <Run Text="(" /><Run Text="{Binding UnreachableCount, Mode=OneWay}" /><Run Text=")" />
+                    </TextBlock>
                 </StackPanel>
             </Button>
-
-            <Button Style="{StaticResource KpiCard}"
+            <Button Style="{StaticResource FichaFiltro}"
                     Command="{Binding FilterByStatusCommand}" CommandParameter="OFFLINE"
                     Background="{Binding StatusFilter, Converter={StaticResource FondoKpi}, ConverterParameter=OFFLINE}"
                     BorderBrush="{Binding StatusFilter, Converter={StaticResource BordeKpi}, ConverterParameter=OFFLINE}">
-                <StackPanel>
-                    <TextBlock Text="{Binding OfflineCount}" Style="{StaticResource KpiNumero}"
-                               Foreground="{StaticResource Offline}" />
-                    <TextBlock Text="Offline" Style="{StaticResource Caption}" />
+                <StackPanel Orientation="Horizontal">
+                    <Ellipse Style="{StaticResource PuntoEstado}" Fill="{StaticResource Offline}" />
+                    <TextBlock Text="Offline" />
+                    <TextBlock Style="{StaticResource CuentaFicha}">
+                        <Run Text="(" /><Run Text="{Binding OfflineCount, Mode=OneWay}" /><Run Text=")" />
+                    </TextBlock>
                 </StackPanel>
             </Button>
-
-            <Button Style="{StaticResource KpiCard}"
+            <Button Style="{StaticResource FichaFiltro}"
                     Command="{Binding FilterByStatusCommand}" CommandParameter="CONFLICT"
                     Background="{Binding StatusFilter, Converter={StaticResource FondoKpi}, ConverterParameter=CONFLICT}"
                     BorderBrush="{Binding StatusFilter, Converter={StaticResource BordeKpi}, ConverterParameter=CONFLICT}">
-                <StackPanel>
-                    <TextBlock Text="{Binding ConflictCount}" Style="{StaticResource KpiNumero}"
-                               Foreground="{StaticResource Danger}" />
-                    <TextBlock Text="Conflicto" Style="{StaticResource Caption}" />
+                <StackPanel Orientation="Horizontal">
+                    <Ellipse Style="{StaticResource PuntoEstado}" Fill="{StaticResource Danger}" />
+                    <TextBlock Text="Conflicto" />
+                    <TextBlock Style="{StaticResource CuentaFicha}">
+                        <Run Text="(" /><Run Text="{Binding ConflictCount, Mode=OneWay}" /><Run Text=")" />
+                    </TextBlock>
                 </StackPanel>
             </Button>
-        </StackPanel>
+
+            <Border Width="1" Background="{StaticResource Line}" Margin="6,3,14,3" />
+
+            <ComboBox ItemsSource="{Binding Areas}" SelectedItem="{Binding AreaFilter}"
+                      ToolTip="Area" />
+            <ComboBox ItemsSource="{Binding Lineas}" SelectedItem="{Binding LineFilter}"
+                      ToolTip="Linea" />
+        </WrapPanel>
 
         <!-- Listado -->
         <Border Grid.Row="2" Style="{StaticResource CardPanel}" Padding="0" ClipToBounds="True">
