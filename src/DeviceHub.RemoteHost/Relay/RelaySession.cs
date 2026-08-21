@@ -551,6 +551,7 @@ public static class RelaySession
                         $"verse {_verse.Ultimo:0.0} ms (min {_verse.Base:0.0})  " +
                         $"fps {_fpsDeseado}  B-frames {Bes()}  " +
                         $"{(_comoSystem ? "SYSTEM" : "usuario (sin ventanas elevadas)")}  " +
+                        $"escritorio {_escritorio}  " +
                         $"objetivo {_bitrateDeseado / 1000} kbps ({_calidad:0.00}x)  " +
                         // Aplicados y rechazados de SendInput. Es lo que dice si
                         // la entrada llega de verdad al otro lado o se la traga
@@ -935,6 +936,14 @@ public static class RelaySession
         // El escritorio con el que se abrio ESTA captura. Todo lo que venga
         // despues se compara contra el.
         var escritorioCapturado = InputDesktop.NombreDeEntrada();
+
+        // QUE ESCRITORIO SE ESTA CAPTURANDO, en la linea que el tecnico mira.
+        //
+        // Es la diferencia entre "no se ve el UAC" y "se esta capturando
+        // Winlogon y aun asi no se ve": lo primero es que el salto no ocurrio,
+        // lo segundo es que ocurrio y la captura no da imagen. Son dos problemas
+        // distintos y hasta ahora los dos se veian igual desde el visor.
+        _escritorio = escritorioCapturado.Length == 0 ? "?" : escritorioCapturado;
 
         // CADA PASO CON SU NOMBRE. Un HRESULT suelto no dice de donde sale.
         var paso = "abrir las capturas";
@@ -2062,6 +2071,10 @@ public static class RelaySession
     /// <summary>Si el host corre como SYSTEM. Sin eso, la entrada no entra en
     /// ventanas elevadas.</summary>
     private static bool _comoSystem;
+
+    /// <summary>El escritorio que se esta capturando: Default, Winlogon, o el
+    /// que sea.</summary>
+    private static string _escritorio = "?";
 
     private static string Bes()
         => _bframes switch
