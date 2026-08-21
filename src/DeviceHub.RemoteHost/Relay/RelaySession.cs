@@ -1719,9 +1719,13 @@ public static class RelaySession
                     Info = elegida,
                     Captura = unica,
                     BitrateBase = ControlBitrate.PorResolucion(unica.Width, unica.Height, 1.0),
-                    Codificador = Codificar(
+
+                    // Con su propia etiqueta: "abrir las capturas" cubria esto
+                    // tambien, y se leia un fallo del codificador como si fuera
+                    // de la captura -- que para entonces ya funcionaba.
+                    Codificador = Etiquetar("crear el codificador", () => Codificar(
                         unica.Device, unica.Width, unica.Height,
-                        unica.AdapterLuid, unica.AdapterVendorId, opciones),
+                        unica.AdapterLuid, unica.AdapterVendorId, opciones)),
                     Version = SiguienteVersion(cuenta),
                     LayoutX = 0,
                     LayoutY = 0,

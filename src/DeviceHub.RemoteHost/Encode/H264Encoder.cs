@@ -88,8 +88,31 @@ public sealed class H264Encoder : IVideoEncoder
 
         // El gestor DXGI es lo que permite entregar texturas al MFT sin copiarlas
         // a RAM. Sin el, cada frame seria una bajada y subida de 8 MB.
-        _deviceManager = MediaFactory.MFCreateDXGIDeviceManager();
-        _deviceManager.ResetDevice(device).CheckError();
+        // ESTA ES LA LLAMADA QUE SE CAE EN UNA MAQUINA SIN GPU DE VERDAD.
+        //
+        // ResetDevice pregunta al dispositivo D3D11 por su ID3D11VideoDevice, y
+        // un dispositivo que no hace video no lo tiene: contesta E_NOINTERFACE,
+        // que traducido es "aqui no hay tuberia de video por hardware". Pasa en
+        // los servidores con adaptador de gestion, y pasa con WARP, que es el
+        // D3D11 por software al que se cae la captura en esas mismas maquinas.
+        //
+        // El HRESULT suelto no lo explicaba y mandaba a buscar el problema donde
+        // no esta -- se veia "al abrir las capturas" y la captura ya funcionaba.
+        try
+        {
+            _deviceManager = MediaFactory.MFCreateDXGIDeviceManager();
+            _deviceManager.ResetDevice(device).CheckError();
+        }
+        catch (Exception ex)
+        {
+            throw new VideoEncoderUnavailableException(
+                "Esta maquina no tiene tuberia de video por hardware: su dispositivo " +
+                "grafico no expone ID3D11VideoDevice. Es lo normal en un servidor sin " +
+                "tarjeta grafica. Dos cosas que probar, en orden: " +
+                "1) Install-WindowsFeature Server-Media-Foundation y reiniciar. " +
+                "2) Si aun asi falla, esa PC se controla con RustDesk, que trae su propio " +
+                "codificador por software y no depende de Media Foundation.", ex);
+        }
 
         var (transform, nombre, hardware) = Select(adapterLuid, vendorId);
         _transform = transform;
