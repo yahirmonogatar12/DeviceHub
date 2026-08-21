@@ -96,6 +96,36 @@ public sealed class DeviceHubClient : IDisposable
     public string Role { get; private set; } = string.Empty;
     public bool IsAdministrator => Role == "administrator";
 
+    /// <summary>
+    /// Reanuda con el token que quedo guardado, sin pedir la contrasena.
+    ///
+    /// NO se comprueba nada aqui: el unico que puede decir si ese token sigue
+    /// valiendo es el servidor, y lo va a decir en la primera llamada. Validarlo
+    /// por nuestra cuenta seria fiarse del reloj de esta PC para una decision
+    /// que no es suya.
+    /// </summary>
+    public bool Reanudar()
+    {
+        if (SesionGuardada.Leer() is not { } sesion)
+            return false;
+
+        Username = sesion.Usuario;
+        Role = sesion.Rol;
+        _auth = new Metadata { { "authorization", $"Bearer {sesion.Token}" } };
+
+        return true;
+    }
+
+    /// <summary>Cierra la sesion aqui y en el disco.</summary>
+    public void Olvidar()
+    {
+        Username = string.Empty;
+        Role = string.Empty;
+        _auth = [];
+
+        SesionGuardada.Borrar();
+    }
+
     public async Task LoginAsync(string username, string password, CancellationToken ct)
     {
         var reply = await _client.LoginAsync(
@@ -104,6 +134,12 @@ public sealed class DeviceHubClient : IDisposable
         Username = reply.Username;
         Role = reply.Role;
         _auth = new Metadata { { "authorization", $"Bearer {reply.Token}" } };
+
+        SesionGuardada.Guardar(
+            reply.Token, reply.Username, reply.Role,
+            reply.ExpiresAt is null
+                ? DateTimeOffset.UtcNow.AddHours(12)
+                : reply.ExpiresAt.ToDateTimeOffset());
     }
 
     public async IAsyncEnumerable<MachineSummary> WatchAsync(

@@ -30,7 +30,15 @@
                              Text="{Binding Filter, UpdateSourceTrigger=PropertyChanged}"
                              ToolTip="Filtra por codigo, hostname, IP, area, linea o estado" />
 
-                    <!-- Usuario y estado del servidor a la derecha -->
+                    <!-- Usuario y estado del servidor a la derecha.
+
+                         Salir hace falta ahora que la sesion sobrevive al
+                         cierre: sin el, la unica forma de dejar de estar dentro
+                         seria esperar doce horas o borrar un archivo. -->
+                    <Button DockPanel.Dock="Right" Content="Salir" Style="{StaticResource BtnLink}"
+                            Margin="10,0,0,0" Height="24" ToolTip="Cerrar la sesion en esta PC"
+                            Command="{Binding SalirCommand}" />
+
                     <TextBlock DockPanel.Dock="Right" Text="{Binding SessionLabel}"
                                Style="{StaticResource Caption}" Margin="16,0,0,0" />
 

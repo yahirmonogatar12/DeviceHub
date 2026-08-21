@@ -370,13 +370,7 @@ public sealed partial class MainViewModel : ObservableObject
         {
             await _client.LoginAsync(Username, password, CancellationToken.None);
 
-            IsLoggedIn = true;
-            SessionLabel = $"{_client.Username} ({_client.Role})";
-            StatusMessage = string.Empty;
-            OnPropertyChanged(nameof(IsAdministrator));
-
-            _watch = new CancellationTokenSource();
-            _ = WatchAsync(_watch.Token);
+            Entrar();
         }
         catch (Exception ex)
         {
@@ -386,6 +380,53 @@ public sealed partial class MainViewModel : ObservableObject
         {
             IsBusy = false;
         }
+    }
+
+    /// <summary>
+    /// Lo que pasa despues de entrar, venga de la contrasena o de la sesion
+    /// guardada. Estaba escrito dentro del login y por eso reanudar no podia
+    /// reutilizarlo.
+    /// </summary>
+    private void Entrar()
+    {
+        IsLoggedIn = true;
+        SessionLabel = $"{_client.Username} ({_client.Role})";
+        StatusMessage = string.Empty;
+        OnPropertyChanged(nameof(IsAdministrator));
+
+        _watch = new CancellationTokenSource();
+        _ = WatchAsync(_watch.Token);
+    }
+
+    /// <summary>
+    /// Reanuda la sesion guardada, si la hay y no ha caducado.
+    ///
+    /// Se entra SIN comprobar nada contra el servidor: si el token ya no vale,
+    /// la primera llamada del stream fallara con Unauthenticated y de ahi se
+    /// vuelve a la pantalla de entrada. Preguntar antes seria una ida y vuelta
+    /// mas para llegar a la misma conclusion medio segundo despues.
+    /// </summary>
+    public void ReanudarSesion()
+    {
+        if (_client.Reanudar())
+            Entrar();
+    }
+
+    /// <summary>Cierra la sesion y olvida la guardada.</summary>
+    [RelayCommand]
+    private void Salir()
+    {
+        _watch?.Cancel();
+        _client.Olvidar();
+
+        Machines.Clear();
+        SelectedMachine = null;
+        Detail = null;
+        IsLoggedIn = false;
+        SessionLabel = string.Empty;
+
+        RefreshCounts();
+        RefreshPages();
     }
 
     /// <summary>
@@ -421,6 +462,18 @@ public sealed partial class MainViewModel : ObservableObject
             }
             catch (OperationCanceledException)
             {
+                return;
+            }
+            catch (Grpc.Core.RpcException rpc)
+                when (rpc.StatusCode == Grpc.Core.StatusCode.Unauthenticated)
+            {
+                // La sesion guardada ya no vale: caduco el token, o el servidor
+                // se reinicio con otra clave de firma. NO se reintenta --
+                // insistir con una credencial rechazada es esperar a que cambie
+                // de opinion. Se olvida y se pide la contrasena.
+                Salir();
+                StatusMessage = "La sesion guardada ya no vale. Entra otra vez.";
+
                 return;
             }
             catch (Exception ex)

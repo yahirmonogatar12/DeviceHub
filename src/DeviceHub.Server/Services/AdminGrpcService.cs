@@ -88,11 +88,14 @@ public sealed class AdminGrpcService(
         limiter.Reset(throttleKey);
         await users.TouchLoginAsync(user.Username, context.CancellationToken);
 
+        var vence = DateTime.UtcNow.AddHours(_options.JwtHours);
+
         return new LoginReply
         {
-            Token = IssueJwt(user),
+            Token = IssueJwt(user, vence),
             Username = user.Username,
-            Role = user.Role
+            Role = user.Role,
+            ExpiresAt = Timestamp.FromDateTime(vence)
         };
     }
 
@@ -1082,13 +1085,16 @@ public sealed class AdminGrpcService(
         return SummaryMapper.ToProto(row);
     }
 
-    private string IssueJwt(UserRow user)
+    /// <summary>El vencimiento viene de fuera para que sea EL MISMO que se le
+    /// dice al cliente: calcularlo dos veces daria dos instantes distintos por
+    /// unos microsegundos, y el guardado seria el que no vale.</summary>
+    private string IssueJwt(UserRow user, DateTime vence)
     {
         var descriptor = new SecurityTokenDescriptor
         {
             Issuer = _options.JwtIssuer,
             Audience = _options.JwtIssuer,
-            Expires = DateTime.UtcNow.AddHours(_options.JwtHours),
+            Expires = vence,
             Subject = new ClaimsIdentity(
             [
                 new Claim(ClaimTypes.Name, user.Username),

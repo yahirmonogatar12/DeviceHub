@@ -509,6 +509,12 @@ message LoginReply {
   string token = 1;
   string username = 2;
   string role = 3;                   // viewer | technician | engineer | administrator
+
+  // Cuando deja de valer el token. Lo sabe el servidor, que es quien lo firma, y
+  // hasta ahora se lo quedaba: el dashboard guarda la sesion para no pedir la
+  // contrasena en cada arranque, y sin esto tendria que abrir el JWT por su
+  // cuenta para saber si el que tiene guardado sigue sirviendo.
+  google.protobuf.Timestamp expires_at = 4;
 }
 
 message ListMachinesRequest {
