@@ -9,8 +9,16 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
+        <!-- AL LADO, no encima. Un modal centrado tapa justo lo que se estaba
+             mirando, y al cerrarlo hay que volver a buscar la fila. Asi la tabla
+             sigue ahi y se salta de una PC a otra sin cerrar nada. -->
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+
         <!-- Titulo + accion de administrador -->
-        <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,16">
+        <DockPanel Grid.Row="0" Grid.ColumnSpan="2" LastChildFill="False" Margin="0,0,0,16">
             <TextBlock Text="Equipos" Style="{StaticResource H1}" />
             <TextBlock Style="{StaticResource Caption}" Margin="10,6,0,0" VerticalAlignment="Bottom">
                 <Run Text="{Binding TotalCount, Mode=OneWay}" /><Run Text=" registrados" />
@@ -25,7 +33,7 @@
         <!-- Filtros. Las fichas de estado SON el filtro: pulsar una deja solo
              esas y volver a pulsarla las devuelve todas. Area y linea van al
              lado porque se combinan con ellas, no las sustituyen. -->
-        <WrapPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,14">
+        <WrapPanel Grid.Row="1" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,0,0,14">
             <Button Style="{StaticResource FichaFiltro}"
                     Command="{Binding FilterByStatusCommand}" CommandParameter=""
                     Background="{Binding StatusFilter, Converter={StaticResource FondoKpi}}"
@@ -156,6 +164,118 @@
                     </DataGrid.Columns>
                 </DataGrid>
             </Grid>
+        </Border>
+
+        <!-- ================= Panel rapido ================= -->
+        <Border Grid.Row="2" Grid.Column="1" Width="330" Margin="14,0,0,0"
+                Style="{StaticResource CardPanel}" Padding="0"
+                DataContext="{Binding SelectedMachine}"
+                Visibility="{Binding DataContext.ShowQuickPanel,
+                             RelativeSource={RelativeSource AncestorType=UserControl},
+                             Converter={StaticResource BoolToVis}}">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="16">
+
+                    <DockPanel LastChildFill="False">
+                        <StackPanel>
+                            <TextBlock Text="{Binding MachineCode}" Style="{StaticResource H2}" />
+                            <TextBlock Text="{Binding Hostname}" Style="{StaticResource Caption}" />
+                        </StackPanel>
+
+                        <Button DockPanel.Dock="Right" Content="&#x2715;" Style="{StaticResource BtnLink}"
+                                VerticalAlignment="Top" Height="22" ToolTip="Cerrar"
+                                Command="{Binding DataContext.CloseQuickPanelCommand,
+                                          RelativeSource={RelativeSource AncestorType=UserControl}}" />
+                    </DockPanel>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                        <Ellipse Style="{StaticResource PuntoEstado}"
+                                 Fill="{Binding Status, Converter={StaticResource StatusBrush}}" />
+                        <TextBlock Text="{Binding StatusText}" FontWeight="SemiBold" FontSize="12" />
+                        <TextBlock Text="{Binding LastSeenAgo}" Style="{StaticResource CuentaFicha}"
+                                   Margin="10,0,0,0" />
+                    </StackPanel>
+
+                    <!-- Conectar es a lo que se viene aqui el 90 % de las veces,
+                         asi que es el unico boton solido. -->
+                    <Button Content="Conectar" Style="{StaticResource BtnPrimary}"
+                            Margin="0,14,0,0" HorizontalAlignment="Stretch"
+                            Command="{Binding DataContext.RemoteControlCommand,
+                                      RelativeSource={RelativeSource AncestorType=UserControl}}"
+                            CommandParameter="devicehub" />
+
+                    <Button Content="Ver detalles y mas acciones" Style="{StaticResource BtnGhost}"
+                            Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                            Command="{Binding DataContext.OpenDetailCommand,
+                                      RelativeSource={RelativeSource AncestorType=UserControl}}" />
+
+                    <Border Background="{StaticResource DangerSoft}" BorderBrush="{StaticResource Danger}"
+                            BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,12,0,0"
+                            Visibility="{Binding HasConflict, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="Conflicto de identidad" FontSize="12"
+                                   Foreground="{StaticResource Danger}" TextWrapping="Wrap" />
+                    </Border>
+
+                    <Border Background="{StaticResource Line}" Height="1" Margin="0,16" />
+
+                    <TextBlock Text="Informacion general" Style="{StaticResource Caption}" />
+
+                    <Grid Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="104" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="IP" Style="{StaticResource Caption}" />
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding CurrentIp}" FontSize="12" />
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Usuario" Style="{StaticResource Caption}" Margin="0,6,0,0" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding LoggedUser}" FontSize="12" Margin="0,6,0,0"
+                                   TextTrimming="CharacterEllipsis" />
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Area / Linea" Style="{StaticResource Caption}" Margin="0,6,0,0" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" FontSize="12" Margin="0,6,0,0">
+                            <Run Text="{Binding Area, Mode=OneWay}" /><Run Text=" / " /><Run Text="{Binding Line, Mode=OneWay}" />
+                        </TextBlock>
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Agente" Style="{StaticResource Caption}" Margin="0,6,0,0" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding AgentVersion}" FontSize="12" Margin="0,6,0,0" />
+
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Uptime" Style="{StaticResource Caption}" Margin="0,6,0,0" />
+                        <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Uptime}" FontSize="12" Margin="0,6,0,0" />
+
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Ultimo visto" Style="{StaticResource Caption}" Margin="0,6,0,0" />
+                        <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding LastSeenLocal}" FontSize="12" Margin="0,6,0,0" />
+                    </Grid>
+
+                    <Border Background="{StaticResource Line}" Height="1" Margin="0,16" />
+
+                    <TextBlock Text="Estadisticas rapidas" Style="{StaticResource Caption}" />
+
+                    <UniformGrid Columns="3" Margin="0,8,0,0">
+                        <StackPanel>
+                            <TextBlock Text="CPU" Style="{StaticResource Caption}" />
+                            <TextBlock Text="{Binding Cpu}" FontSize="18" FontWeight="SemiBold" />
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock Text="RAM" Style="{StaticResource Caption}" />
+                            <TextBlock Text="{Binding Memory}" FontSize="18" FontWeight="SemiBold" />
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock Text="Disco libre" Style="{StaticResource Caption}" />
+                            <TextBlock Text="{Binding DiskFree}" FontSize="18" FontWeight="SemiBold" />
+                        </StackPanel>
+                    </UniformGrid>
+                </StackPanel>
+            </ScrollViewer>
         </Border>
     </Grid>
 </UserControl>

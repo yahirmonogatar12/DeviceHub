@@ -84,11 +84,31 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _areaFilter = Todas;
     [ObservableProperty] private string _lineFilter = Todas;
 
-    // Al seleccionar una maquina se entra en su ficha a pantalla completa: en un
-    // panel lateral de 420 px las pestanas no caben y todo compite por el espacio.
-    public bool ShowList => Page == "machines" && SelectedMachine is null;
-    public bool ShowDetail => Page == "machines" && SelectedMachine is not null;
+    // DOS PASOS, no uno. Al elegir una maquina se abre un panel al lado con lo
+    // que se pregunta el 90 % de las veces -- si esta viva, que IP tiene, quien
+    // la esta usando, y conectarse -- SIN perder la lista de vista. La ficha
+    // entera, con sus seis pestanas de hardware, procesos, servicios y
+    // auditoria, se abre solo si alguien la pide.
+    //
+    // Antes un clic te sacaba de la lista, y volver costaba otro clic y una
+    // recarga. Con veinte PCs y una ronda de revision eso son cuarenta clics
+    // para mirar veinte IPs.
+    public bool ShowList => Page == "machines" && !DetailOpen;
+    public bool ShowQuickPanel => Page == "machines" && SelectedMachine is not null && !DetailOpen;
+    public bool ShowDetail => Page == "machines" && SelectedMachine is not null && DetailOpen;
     public bool ShowAudit => Page == "audit";
+
+    /// <summary>Si se pidio la ficha entera. Se apaga sola al cambiar de maquina:
+    /// elegir otra fila vuelve al panel rapido, no a la pestaña de la anterior.</summary>
+    [ObservableProperty] private bool _detailOpen;
+
+    partial void OnDetailOpenChanged(bool value) => RefreshPages();
+
+    [RelayCommand]
+    private void OpenDetail() => DetailOpen = SelectedMachine is not null;
+
+    [RelayCommand]
+    private void CloseQuickPanel() => SelectedMachine = null;
 
     public int TotalCount => Machines.Count;
     public int OnlineCount => Machines.Count(m => m.Status == MachineStatus.Online);
@@ -118,6 +138,7 @@ public sealed partial class MainViewModel : ObservableObject
     private void RefreshPages()
     {
         OnPropertyChanged(nameof(ShowList));
+        OnPropertyChanged(nameof(ShowQuickPanel));
         OnPropertyChanged(nameof(ShowDetail));
         OnPropertyChanged(nameof(ShowAudit));
     }
@@ -136,7 +157,13 @@ public sealed partial class MainViewModel : ObservableObject
 
     /// <summary>Vuelve de la ficha de un equipo al listado.</summary>
     [RelayCommand]
-    private void BackToList() => SelectedMachine = null;
+    private void BackToList()
+    {
+        // Vuelve a la LISTA, no al panel rapido: quien cierra la ficha entera
+        // quiere la tabla, no otro panel encima de ella.
+        DetailOpen = false;
+        SelectedMachine = null;
+    }
 
     [RelayCommand]
     private void Navigate(string pagina) => Page = pagina;
@@ -195,6 +222,7 @@ public sealed partial class MainViewModel : ObservableObject
     partial void OnSelectedMachineChanged(MachineViewModel? value)
     {
         Detail = null;
+        DetailOpen = false;
         RefreshPages();
 
         if (value is null)
