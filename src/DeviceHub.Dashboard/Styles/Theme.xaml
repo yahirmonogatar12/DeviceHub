@@ -15,28 +15,41 @@
     <local:BooleanToVisibilityConverter x:Key="BoolToVis" />
     <local:BytesToSizeConverter x:Key="Bytes" />
 
-    <!-- ================= Paleta ================= -->
-    <SolidColorBrush x:Key="Navy"        Color="#0B1F55" />
-    <SolidColorBrush x:Key="Primary"     Color="#146CFF" />
-    <SolidColorBrush x:Key="PrimarySoft" Color="#EAF1FF" />
-    <SolidColorBrush x:Key="Accent"      Color="#19C6D1" />
-    <SolidColorBrush x:Key="Bg"          Color="#F5F7FA" />
-    <SolidColorBrush x:Key="Card"        Color="#FFFFFF" />
-    <SolidColorBrush x:Key="Ink"         Color="#1D2939" />
-    <SolidColorBrush x:Key="Muted"       Color="#667085" />
-    <SolidColorBrush x:Key="Faint"       Color="#98A2B3" />
-    <SolidColorBrush x:Key="Line"        Color="#E4E7EC" />
+    <!-- ================= Paleta =================
 
-    <SolidColorBrush x:Key="Online"      Color="#12B76A" />
-    <SolidColorBrush x:Key="Warn"        Color="#F79009" />
-    <SolidColorBrush x:Key="Offline"     Color="#98A2B3" />
-    <SolidColorBrush x:Key="Danger"      Color="#D92D20" />
-    <SolidColorBrush x:Key="DangerSoft"  Color="#FEF3F2" />
+         GRIS NEUTRO Y ROJO, la misma del visor, y no el azul de antes.
+
+         Las dos mitades del producto se miran seguidas (se elige una PC en la
+         lista y se entra a su escritorio) y hasta ahora cambiaban de mundo por
+         el camino: azul marino sobre blanco aqui, gris casi negro alli. El
+         motivo de aquel gris sigue valiendo igual de bien aqui: alrededor de una
+         pantalla ajena va negro, y un color saturado tiñe lo que se mira.
+
+         El rojo es de acento y solo aparece donde hay algo encendido: la seccion
+         en la que estas, un conflicto, un boton peligroso. Un boton normal es
+         gris, aunque sea el principal de la pantalla. -->
+    <SolidColorBrush x:Key="Navy"        Color="#141414" />
+    <SolidColorBrush x:Key="Primary"     Color="#E04A4A" />
+    <SolidColorBrush x:Key="PrimarySoft" Color="#33292A" />
+    <SolidColorBrush x:Key="Accent"      Color="#3FB6C4" />
+    <SolidColorBrush x:Key="Bg"          Color="#1B1B1B" />
+    <SolidColorBrush x:Key="Card"        Color="#262626" />
+    <SolidColorBrush x:Key="Ink"         Color="#E8E8E8" />
+    <SolidColorBrush x:Key="Muted"       Color="#9A9A9A" />
+    <SolidColorBrush x:Key="Faint"       Color="#6E6E6E" />
+    <SolidColorBrush x:Key="Line"        Color="#3A3A3A" />
+
+    <!-- Los estados suben de luminosidad: sobre blanco un verde oscuro se lee
+         solo, sobre #1B1B1B desaparece. -->
+    <SolidColorBrush x:Key="Online"      Color="#3FBF7F" />
+    <SolidColorBrush x:Key="Warn"        Color="#E8A13A" />
+    <SolidColorBrush x:Key="Offline"     Color="#7A7A7A" />
+    <SolidColorBrush x:Key="Danger"      Color="#E5544B" />
+    <SolidColorBrush x:Key="DangerSoft"  Color="#3A2422" />
 
     <LinearGradientBrush x:Key="Brand" StartPoint="0,0" EndPoint="1,1">
-        <GradientStop Color="#0B1F55" Offset="0" />
-        <GradientStop Color="#146CFF" Offset="0.6" />
-        <GradientStop Color="#19C6D1" Offset="1" />
+        <GradientStop Color="#2D2D2D" Offset="0" />
+        <GradientStop Color="#E04A4A" Offset="1" />
     </LinearGradientBrush>
 
     <!-- ================= Tipografia ================= -->
@@ -136,10 +149,14 @@
         </Setter>
     </Style>
 
+    <!-- El principal es GRIS, no rojo. En esta paleta el rojo significa
+         "encendido" o "cuidado", y el boton de uso mas comun de la pantalla no
+         es ninguna de las dos cosas: se distingue por ser el unico solido. -->
     <Style x:Key="BtnPrimary" TargetType="Button" BasedOn="{StaticResource BtnBase}">
-        <Setter Property="Background" Value="{StaticResource Primary}" />
-        <Setter Property="Foreground" Value="White" />
-        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Background" Value="#3A3A3A" />
+        <Setter Property="Foreground" Value="{StaticResource Ink}" />
+        <Setter Property="BorderBrush" Value="#4A4A4A" />
+        <Setter Property="BorderThickness" Value="1" />
         <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
 
@@ -153,7 +170,7 @@
     <Style x:Key="BtnDanger" TargetType="Button" BasedOn="{StaticResource BtnBase}">
         <Setter Property="Background" Value="{StaticResource DangerSoft}" />
         <Setter Property="Foreground" Value="{StaticResource Danger}" />
-        <Setter Property="BorderBrush" Value="#FDA29B" />
+        <Setter Property="BorderBrush" Value="{StaticResource Danger}" />
         <Setter Property="BorderThickness" Value="1" />
     </Style>
 
@@ -170,7 +187,7 @@
          Boton normal: el resaltado sale de comparar Page con el parametro, no de
          un estado marcado. Ver MatchBrushConverter. -->
     <local:MatchBrushConverter x:Key="FondoNav" Igual="{StaticResource Primary}" Distinto="Transparent" />
-    <local:MatchBrushConverter x:Key="TextoNav" Igual="White" Distinto="#B6C2DC" />
+    <local:MatchBrushConverter x:Key="TextoNav" Igual="White" Distinto="{StaticResource Muted}" />
 
     <Style x:Key="NavItem" TargetType="Button">
         <Setter Property="Cursor" Value="Hand" />
@@ -343,7 +360,7 @@
         <Setter Property="BorderThickness" Value="0" />
         <Style.Triggers>
             <Trigger Property="IsMouseOver" Value="True">
-                <Setter Property="Background" Value="#F9FAFB" />
+                <Setter Property="Background" Value="#2F2F2F" />
             </Trigger>
             <Trigger Property="IsSelected" Value="True">
                 <Setter Property="Background" Value="{StaticResource PrimarySoft}" />
@@ -430,7 +447,7 @@
                                 <Border Background="{StaticResource Card}" BorderBrush="{StaticResource Line}"
                                         BorderThickness="1" CornerRadius="8" Padding="4" MinWidth="190">
                                     <Border.Effect>
-                                        <DropShadowEffect BlurRadius="14" ShadowDepth="2" Opacity="0.14" Color="#0B1F55" />
+                                        <DropShadowEffect BlurRadius="14" ShadowDepth="2" Opacity="0.5" Color="#000000" />
                                     </Border.Effect>
                                     <StackPanel IsItemsHost="True" />
                                 </Border>

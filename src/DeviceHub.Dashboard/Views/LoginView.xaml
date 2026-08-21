@@ -6,7 +6,7 @@
         <Border Style="{StaticResource CardPanel}" Padding="34,30" Width="360"
                 VerticalAlignment="Center" HorizontalAlignment="Center">
             <Border.Effect>
-                <DropShadowEffect BlurRadius="26" ShadowDepth="3" Opacity="0.10" Color="#0B1F55" />
+                <DropShadowEffect BlurRadius="26" ShadowDepth="3" Opacity="0.5" Color="#000000" />
             </Border.Effect>
 
             <StackPanel>

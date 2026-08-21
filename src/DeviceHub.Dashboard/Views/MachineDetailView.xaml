@@ -95,7 +95,7 @@
         </Border>
 
         <!-- Conflicto de identidad -->
-        <Border Grid.Row="1" Background="{StaticResource DangerSoft}" BorderBrush="#FDA29B"
+        <Border Grid.Row="1" Background="{StaticResource DangerSoft}" BorderBrush="{StaticResource Danger}"
                 BorderThickness="1" CornerRadius="8" Padding="16" Margin="0,0,0,14"
                 Visibility="{Binding SelectedMachine.HasConflict, Converter={StaticResource BoolToVis}}">
             <StackPanel>
@@ -147,7 +147,7 @@
                                     <TextBlock>
                                         <Run Text="{Binding LastSeenAgo, Mode=OneWay}" />
                                         <Run Text="  " />
-                                        <Run Text="{Binding LastSeenLocal, Mode=OneWay}" Foreground="#98A2B3" />
+                                        <Run Text="{Binding LastSeenLocal, Mode=OneWay}" Foreground="{StaticResource Muted}" />
                                     </TextBlock>
 
                                     <TextBlock Text="Usuario con sesion" Style="{StaticResource FieldLabel}" />
@@ -207,14 +207,14 @@
                                         <TextBlock Text="BIOS" Style="{StaticResource FieldLabel}" />
                                         <TextBlock TextWrapping="Wrap">
                                             <Run Text="{Binding BiosVersion, Mode=OneWay}" />
-                                            <Run Text="   S/N " Foreground="#98A2B3" />
+                                            <Run Text="   S/N " Foreground="{StaticResource Muted}" />
                                             <Run Text="{Binding BiosSerial, Mode=OneWay}" />
                                         </TextBlock>
 
                                         <TextBlock Text="Sistema operativo" Style="{StaticResource FieldLabel}" />
                                         <TextBlock TextWrapping="Wrap">
                                             <Run Text="{Binding OsCaption, Mode=OneWay}" />
-                                            <Run Text="  build " Foreground="#98A2B3" />
+                                            <Run Text="  build " Foreground="{StaticResource Muted}" />
                                             <Run Text="{Binding OsBuild, Mode=OneWay}" />
                                         </TextBlock>
                                     </StackPanel>

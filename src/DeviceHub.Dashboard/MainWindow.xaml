@@ -77,7 +77,7 @@
 
             <!-- Solo aparece cuando hay algo que decir. -->
             <Border Grid.Row="2" Background="{StaticResource DangerSoft}" Padding="16,8"
-                    BorderBrush="#FDA29B" BorderThickness="0,1,0,0"
+                    BorderBrush="{StaticResource Danger}" BorderThickness="0,1,0,0"
                     Visibility="{Binding StatusMessage, Converter={StaticResource BoolToVis}}">
                 <TextBlock Text="{Binding StatusMessage}" Foreground="{StaticResource Danger}"
                            FontSize="12" TextWrapping="Wrap" />

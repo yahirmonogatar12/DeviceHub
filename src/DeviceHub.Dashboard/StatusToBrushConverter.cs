@@ -9,9 +9,9 @@ public sealed class StatusToBrushConverter : IValueConverter
 {
     // Mismos tonos que Styles/Theme.xaml: el color de estado aparece en la lista
     // (converter) y en las tarjetas de KPI (XAML), y tienen que coincidir.
-    private static readonly SolidColorBrush Online = new(Color.FromRgb(0x12, 0xB7, 0x6A));
-    private static readonly SolidColorBrush Unreachable = new(Color.FromRgb(0xF7, 0x90, 0x09));
-    private static readonly SolidColorBrush Offline = new(Color.FromRgb(0x98, 0xA2, 0xB3));
+    private static readonly SolidColorBrush Online = new(Color.FromRgb(0x3F, 0xBF, 0x7F));
+    private static readonly SolidColorBrush Unreachable = new(Color.FromRgb(0xE8, 0xA1, 0x3A));
+    private static readonly SolidColorBrush Offline = new(Color.FromRgb(0x7A, 0x7A, 0x7A));
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value switch
     {
