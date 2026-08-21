@@ -148,6 +148,30 @@ public sealed partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(UnreachableCount));
         OnPropertyChanged(nameof(OfflineCount));
         OnPropertyChanged(nameof(ConflictCount));
+        OnPropertyChanged(nameof(RetiredCount));
+    }
+
+    /// <summary>
+    /// Mete en la lista lo que acaba de contestar el servidor.
+    ///
+    /// HACE FALTA porque el stream de novedades lo alimentan los AGENTES: manda
+    /// un resumen cuando una PC informa de algo. Una PC dada de baja
+    /// precisamente deja de informar -- se le corta el stream en el acto -- asi
+    /// que la novedad mas importante de todas era justo la que no iba a llegar
+    /// nunca, y la fila se quedaba en pantalla como si nada hubiera pasado.
+    /// </summary>
+    private void Aplicar(MachineSummary resumen)
+    {
+        var existente = Machines.FirstOrDefault(m => m.MachineId == resumen.MachineId);
+
+        if (existente is null)
+            return;
+
+        existente.Update(resumen);
+
+        RefrescarAreasYLineas();
+        RefreshCounts();
+        MachinesView.Refresh();
     }
 
     /// <summary>El historial se deriva de Detail: cuando llega otro, se repinta.</summary>
@@ -228,7 +252,10 @@ public sealed partial class MainViewModel : ObservableObject
 
         try
         {
-            await _client.RetireMachineAsync(new MachineRef { MachineId = maquina.MachineId }, CancellationToken.None);
+            var detalle = await _client.RetireMachineAsync(
+                new MachineRef { MachineId = maquina.MachineId }, CancellationToken.None);
+
+            Aplicar(detalle.Summary);
 
             CommandFeedback = $"{maquina.MachineCode} dada de baja.";
             SelectedMachine = null;
@@ -247,7 +274,10 @@ public sealed partial class MainViewModel : ObservableObject
 
         try
         {
-            await _client.RestoreMachineAsync(new MachineRef { MachineId = maquina.MachineId }, CancellationToken.None);
+            var detalle = await _client.RestoreMachineAsync(
+                new MachineRef { MachineId = maquina.MachineId }, CancellationToken.None);
+
+            Aplicar(detalle.Summary);
 
             CommandFeedback =
                 $"{maquina.MachineCode} reactivada. Sigue sin token: para que conecte, reenrolala.";
