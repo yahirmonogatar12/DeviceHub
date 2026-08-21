@@ -240,14 +240,15 @@ public sealed partial class MainViewModel : ObservableObject
         if (SelectedMachine is not { } maquina)
             return;
 
-        var respuesta = MessageBox.Show(
-            $"Dar de baja {maquina.MachineCode}?\n\n" +
-            "Se le quita el token: esa PC no vuelve a conectarse y sale de la lista.\n" +
-            "El historial se conserva entero, y se puede reactivar.\n\n" +
-            "Para que vuelva a conectarse habra que reenrolarla.",
-            "Dar de baja", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        // La advertencia y la contrasena en el MISMO dialogo. Un "seguro?" al
+        // que se dice que si por inercia, y despues una contrasena, no protege
+        // mas que pedirla una vez con lo que va a pasar escrito al lado.
+        var dialogo = new ConfirmarBajaWindow(_client, maquina.MachineCode)
+        {
+            Owner = Application.Current?.MainWindow
+        };
 
-        if (respuesta != MessageBoxResult.Yes)
+        if (dialogo.ShowDialog() != true)
             return;
 
         try

@@ -126,6 +126,36 @@ public sealed class DeviceHubClient : IDisposable
         SesionGuardada.Borrar();
     }
 
+    /// <summary>
+    /// Comprueba la contrasena del usuario que ya esta dentro, SIN tocar la
+    /// sesion.
+    ///
+    /// Se pregunta al servidor con un login normal y se tira la respuesta: asi
+    /// la comprobacion es la de verdad -- el mismo hash y el mismo limitador de
+    /// intentos que la pantalla de entrada -- en vez de una copia que se pueda
+    /// quedar atras. Y quedarse el token nuevo alargaria la sesion doce horas
+    /// por confirmar una accion.
+    ///
+    /// Devuelve false SOLO si la contrasena no vale. Si el servidor no contesta,
+    /// o el limitador salta, eso sale como excepcion: no es lo mismo, y decirle
+    /// a alguien que su contrasena esta mal cuando no lo esta lo manda a probar
+    /// otra.
+    /// </summary>
+    public async Task<bool> ContrasenaCorrectaAsync(string password, CancellationToken ct)
+    {
+        try
+        {
+            await _client.LoginAsync(
+                new LoginRequest { Username = Username, Password = password }, cancellationToken: ct);
+
+            return true;
+        }
+        catch (RpcException ex) when (ex.StatusCode == StatusCode.Unauthenticated)
+        {
+            return false;
+        }
+    }
+
     public async Task LoginAsync(string username, string password, CancellationToken ct)
     {
         var reply = await _client.LoginAsync(
