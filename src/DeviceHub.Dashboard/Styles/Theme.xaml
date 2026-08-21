@@ -384,10 +384,19 @@
     </Style>
 
     <!-- ================= Pestanas ================= -->
+    <!-- EL COLOR DEL TEXTO, EXPLICITO. Sin esto, lo de dentro de una pestaña
+         sale con el negro que trae el sistema: el TabItem tiene su propio
+         Foreground por ser un Control, y el contenido lo hereda de el. Sobre
+         fondo claro no se notaba porque el negro del sistema y la tinta de la
+         paleta eran casi el mismo color; sobre #1B1B1B, los valores de la ficha
+         del equipo se volvieron ilegibles, mientras las etiquetas (que si llevan
+         color propio) se quedaron leyendose. -->
     <Style TargetType="TabControl">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Padding" Value="0" />
+        <Setter Property="Foreground" Value="{StaticResource Ink}" />
+        <Setter Property="TextElement.Foreground" Value="{StaticResource Ink}" />
     </Style>
 
     <!-- El color y el grosor van SOBRE LA CABECERA, nunca sobre el TabItem: el
@@ -397,6 +406,10 @@
         <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
         <Setter Property="FontSize" Value="13" />
         <Setter Property="Cursor" Value="Hand" />
+
+        <!-- Este color es el del CONTENIDO de la pestaña, no el de su cabecera:
+             la cabecera se pinta dentro de la plantilla. Ver arriba. -->
+        <Setter Property="Foreground" Value="{StaticResource Ink}" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="TabItem">
