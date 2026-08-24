@@ -558,6 +558,9 @@ public static class RelaySession
                         $"red {_retraso.Base:0.0} ms + cola {_retraso.Encolado:0.0} ms  " +
                         $"verse {_verse.Ultimo:0.0} ms (min {_verse.Base:0.0})  " +
                         $"fps {_fpsDeseado}  B-frames {Bes()}  " +
+                        (_hilos >= 0 || _prisa >= 0
+                            ? $"hilos {_hilos}  prisa {_prisa}  "
+                            : "") +
                         $"{(_comoSystem ? "SYSTEM" : "usuario (sin ventanas elevadas)")}  " +
                         $"escritorio {_escritorio}  " +
                         $"objetivo {_bitrateDeseado / 1000} kbps ({_calidad:0.00}x)  " +
@@ -1033,6 +1036,8 @@ public static class RelaySession
         };
 
         _bframes = flujos[0].Codificador is H264Encoder mft ? mft.BFrames : -1;
+        _hilos = flujos[0].Codificador is H264Encoder m2 ? m2.Trabajadores : -1;
+        _prisa = flujos[0].Codificador is H264Encoder m3 ? m3.Prisa : -1;
 
         // COMO QUIEN CORRE, en la linea que el tecnico si mira.
         //
@@ -1481,6 +1486,25 @@ public static class RelaySession
                     if (repetidos >= RepeticionesMax)
                         continue;
 
+                    // Y NO SE REPITE SI HACE NADA QUE SE CODIFICO DE VERDAD.
+                    //
+                    // Deprisa solo mientras el codificador no haya soltado su
+                    // primera salida, que es vaciarle la tuberia. Despues, una
+                    // vez por segundo.
+                    //
+                    // Sin esto, en un codificador que no da abasto las
+                    // repeticiones COMPITEN con las capturas de verdad y ganan:
+                    // en la consola del servidor salian 327 frames por minuto
+                    // de los que solo 97 eran imagen nueva, y 85 capturas se
+                    // descartaban porque el codificador estaba ocupado
+                    // reenviando la anterior. El tecnico veia 1.6 frames
+                    // nuevos por segundo y lo llamaba lag, con razon.
+                    var ahora = Stopwatch.GetTimestamp();
+
+                    if (flujo.ConfigEnviada && ahora - ultimoCodificado < Stopwatch.Frequency)
+                        continue;
+
+                    ultimoCodificado = ahora;
                     repetidos++;
                     ultimoTimestampUs += 1_000_000L / Math.Clamp(
                         _fpsDeseado, ControlFps.Minimo, ControlFps.Maximo);
@@ -2114,6 +2138,12 @@ public static class RelaySession
     /// el mismo error que ya se corrigio una vez con los avisos de captura.
     /// </summary>
     private static int _bframes = -1;
+
+    /// <summary>
+    /// Hilos y punto de la balanza calidad/velocidad que dice el codificador.
+    /// -1 = no contesta, y en hardware es lo normal: ahi no significan nada.
+    /// </summary>
+    private static int _hilos = -1, _prisa = -1;
 
     /// <summary>Si el host corre como SYSTEM. Sin eso, la entrada no entra en
     /// ventanas elevadas.</summary>

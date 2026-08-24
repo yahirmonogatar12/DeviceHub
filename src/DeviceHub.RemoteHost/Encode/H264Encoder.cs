@@ -212,6 +212,25 @@ public sealed class H264Encoder : IVideoEncoder
     private static readonly Guid CuantasB =
         new("8d390aac-dc5c-4200-b57f-814d04babab2");
 
+    /// <summary>CODECAPI_AVEncCommonQualityVsSpeed. 0 = deprisa, 100 = bonito.</summary>
+    private static readonly Guid CalidadContraVelocidad =
+        new("98332df8-03cd-476b-89fa-3f9e442dec9f");
+
+    /// <summary>CODECAPI_AVEncNumWorkerThreads.</summary>
+    private static readonly Guid Hilos =
+        new("b0c8bf60-16f7-4951-a30b-1db1609293d6");
+
+    /// <summary>
+    /// Cuantos hilos dice el codificador que va a usar, y en que punto de la
+    /// balanza calidad/velocidad quedo. -1 si no contesta.
+    ///
+    /// Se leen y se enseñan porque un MFT puede aceptar los dos valores y no
+    /// hacerles caso, y la diferencia entre "se lo pedimos" y "lo hace" es la
+    /// diferencia entre 1.6 y 5 frames por segundo en un Xeon sin GPU.
+    /// </summary>
+    public int Trabajadores { get; private set; } = -1;
+    public int Prisa { get; private set; } = -1;
+
     /// <summary>
     /// Cuantos B-frames dice el codificador que va a emitir. -1 si no contesta.
     ///
@@ -884,7 +903,55 @@ public sealed class H264Encoder : IVideoEncoder
         }
 
         SinReordenar(transform);
+
+        if (_cpu is not null)
+            Deprisa(transform);
     }
+
+    /// <summary>
+    /// LOS DOS MANDOS DE UN CODIFICADOR POR SOFTWARE, y solo para el:
+    /// repartirlo entre los nucleos y decirle que no busque la imagen bonita.
+    ///
+    /// Es lo que hace RustDesk en la maquina sin GPU, donde no se siente lag.
+    /// Ellos no usan el H.264 de Windows -- caen a VP9 por libvpx -- pero lo
+    /// que le piden es exactamente esto: g_threads repartido entre los nucleos,
+    /// cpu_used al maximo y deadline REALTIME. Nuestro MFT corria con lo que
+    /// Windows decidiera por defecto, que para un codificador pensado para
+    /// guardar archivos es "bonito y despacio".
+    ///
+    /// El reparto de hilos copia su formula: la MITAD de los nucleos, no todos.
+    /// Esta PC no esta aqui para transmitir pantalla, esta corriendo el FCT, el
+    /// SMT y once scripts mas; quedarse la maquina entera para que el escritorio
+    /// remoto vaya fluido seria cambiar un problema por otro peor.
+    ///
+    /// En hardware no se toca ninguno de los dos: ahi el trabajo lo hace un
+    /// bloque dedicado de la GPU y estos valores no significan nada.
+    /// </summary>
+    private void Deprisa(IMFTransform transform)
+        => ConCodec(transform, codec =>
+        {
+            var api = CalidadContraVelocidad;
+            object rapido = 0u;
+
+            try { codec.SetValue(ref api, ref rapido); }
+            catch (SharpGenException) { }
+
+            api = Hilos;
+            object cuantos = (uint)Math.Clamp(Environment.ProcessorCount / 2, 2, 16);
+
+            try { codec.SetValue(ref api, ref cuantos); }
+            catch (SharpGenException) { }
+
+            api = Hilos;
+            Trabajadores = codec.GetValue(ref api, out var h) >= 0 && h is not null
+                ? Convert.ToInt32(h) : -1;
+
+            api = CalidadContraVelocidad;
+            Prisa = codec.GetValue(ref api, out var q) >= 0 && q is not null
+                ? Convert.ToInt32(q) : -1;
+
+            return true;
+        });
 
     /// <summary>
     /// Se lo pide TAMBIEN por ICodecAPI, y se lee lo que contesta.
