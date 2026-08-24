@@ -1151,10 +1151,24 @@ public sealed class H264Encoder : IVideoEncoder
             // KeyframeRequest al perder sincronia, y el relay fuerza uno cuando
             // alguien entra a la sesion.
             //
-            // Treinta segundos y no "nunca" porque un IDR periodico sigue
-            // siendo la red de seguridad si una peticion se pierde. A treinta
-            // segundos cuesta lo que costaba uno de cada veintitres.
-            Pedir(codec, TamanoGop, (uint)Math.Max(Fps * 30, 1), "GOP");
+            // CINCO SEGUNDOS, no treinta. Treinta era demasiado.
+            //
+            // Un keyframe cada 30 frames gastaba media transmision, y por eso se
+            // subio a 900 -- treinta segundos. Pero en una pantalla QUIETA los
+            // P-frames no codifican casi nada, asi que lo que se ve es el ULTIMO
+            // keyframe congelado: si ese salio borroso, y sale porque el control
+            // de bitrate arranca conservador, se queda borroso medio minuto. Y
+            // ni siquiera gasta el presupuesto: medido, 0.11 Mbps de 1191 kbps.
+            //
+            // A cinco segundos son seis IDR por medio minuto en vez de uno.
+            // Sobre una pantalla quieta los keyframes son practicamente lo unico
+            // que se manda, y seis de ellos siguen siendo una fraccion del
+            // presupuesto -- muy lejos de los treinta que motivaron el cambio.
+            //
+            // El equilibrio de verdad seria refrescar solo cuando la pantalla
+            // lleva rato quieta Y sobra ancho de banda. Eso es un controlador
+            // nuevo; esto son cinco segundos y arregla lo que se ve.
+            Pedir(codec, TamanoGop, (uint)Math.Max(Fps * 5, 1), "GOP");
 
             return true;
         });

@@ -710,7 +710,8 @@ public static class RelaySession
                         $"red {_retraso.Base:0.0} ms + cola {_retraso.Encolado:0.0} ms  " +
                         $"listo {_listo.Percentil(0.50):0.0} ms + " +
                         $"verse {_verse.Ultimo:0.0} ms (min {_verse.Base:0.0})  " +
-                        $"capturar p50 {_capturar.Percentil(0.50):0.0} ms  " +
+                        $"capturar p50 {_capturar.Percentil(0.50):0.0} " +
+                        $"p95 {_capturar.Percentil(0.95):0.0} ms  " +
                         $"codificar p50 {_codificar.Percentil(0.50):0.0} ms " +
                         $"p95 {_codificar.Percentil(0.95):0.0} ms  " +
                         (_bajar.Ultimo >= 0
