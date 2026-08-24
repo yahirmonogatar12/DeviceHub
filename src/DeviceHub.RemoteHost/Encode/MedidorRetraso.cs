@@ -52,6 +52,26 @@ public sealed class MedidorRetraso
         }
     }
 
+    /// <summary>
+    /// El percentil que se pida sobre la ventana. Negativo si no hay medidas.
+    ///
+    /// Copia y ordena sesenta numeros. Se llama una vez cada dos segundos para
+    /// pintar una linea de texto, asi que no hay nada que optimizar aqui.
+    /// </summary>
+    public double Percentil(double fraccion)
+    {
+        lock (_puerta)
+        {
+            if (_cuantas == 0)
+                return -1;
+
+            var copia = _muestras[.._cuantas];
+            Array.Sort(copia);
+
+            return copia[Math.Clamp((int)(fraccion * (copia.Length - 1)), 0, copia.Length - 1)];
+        }
+    }
+
     /// <summary>El suelo de la ventana: lo que cuesta la red cuando no hay cola.
     /// Negativo si todavia no hay medidas.</summary>
     public double Base

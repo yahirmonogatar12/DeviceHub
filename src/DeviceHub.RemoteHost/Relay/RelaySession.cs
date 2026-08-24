@@ -364,6 +364,20 @@ public static class RelaySession
     /// </summary>
     private static readonly MedidorRetraso _verse = new();
 
+    /// <summary>
+    /// LO QUE TARDA EL CODIFICADOR, que es lo unico que no se estaba midiendo.
+    ///
+    /// `verse` arranca su reloj justo ANTES de escribir en la red, o sea despues
+    /// de capturar, convertir y codificar. Mide red + descodificar + pintar, y
+    /// nada mas. En una PC con GPU eso da igual porque codificar cuesta menos de
+    /// un milisegundo; en un Xeon sin GPU, donde lo hace la CPU, es el termino
+    /// que manda -- y era justo el que no salia por ninguna parte.
+    ///
+    /// El resultado fue una sesion entera leyendo "3.9 ms" mientras el tecnico
+    /// decia que iba lento. Tenia razon el tecnico.
+    /// </summary>
+    private static readonly MedidorRetraso _codificar = new();
+
     /// <summary>Cuanto se espera un acuse antes de seguir sin el. RustDesk usa
     /// 3 s; aqui menos, porque su espera se corta en cuanto llegan todos y esta
     /// solo salta cuando el acuse se perdio de verdad.</summary>
@@ -557,6 +571,8 @@ public static class RelaySession
                         $"acuses {(_visorAcusa ? "si" : "no")}/{cuenta.AcusesPerdidos} perdidos  " +
                         $"red {_retraso.Base:0.0} ms + cola {_retraso.Encolado:0.0} ms  " +
                         $"verse {_verse.Ultimo:0.0} ms (min {_verse.Base:0.0})  " +
+                        $"codificar p50 {_codificar.Percentil(0.50):0.0} ms " +
+                        $"p95 {_codificar.Percentil(0.95):0.0} ms  " +
                         $"fps {_fpsDeseado}  B-frames {Bes()}  " +
                         (_hilos >= 0 || _prisa >= 0
                             ? $"hilos {_hilos}  prisa {_prisa}  "
@@ -1509,7 +1525,7 @@ public static class RelaySession
                     ultimoTimestampUs += 1_000_000L / Math.Clamp(
                         _fpsDeseado, ControlFps.Minimo, ControlFps.Maximo);
 
-                    producidos = flujo.Codificador.Repetir(ultimoTimestampUs);
+                    producidos = Cronometrar(() => flujo.Codificador.Repetir(ultimoTimestampUs));
 
                     if (producidos.Count == 0)
                         continue;
@@ -1549,7 +1565,7 @@ public static class RelaySession
                     ultimoTimestampUs = frame.TimestampUs;
 
                     Interlocked.Increment(ref cuenta.Capturados);
-                    producidos = flujo.Codificador.Encode(frame, cancellationToken);
+                    producidos = Cronometrar(() => flujo.Codificador.Encode(frame, cancellationToken));
                 }
 
                 foreach (var frameCodificado in producidos)
@@ -1670,6 +1686,20 @@ public static class RelaySession
     /// capturaria a rafagas para "recuperar" frames que ya no le interesan a
     /// nadie.
     /// </summary>
+    private static IReadOnlyList<EncodedFrame> Cronometrar(Func<IReadOnlyList<EncodedFrame>> codificar)
+    {
+        var desde = Stopwatch.GetTimestamp();
+
+        try
+        {
+            return codificar();
+        }
+        finally
+        {
+            _codificar.Anotar((Stopwatch.GetTimestamp() - desde) * 1000.0 / Stopwatch.Frequency);
+        }
+    }
+
     private static void Marcar(ref long siguiente, CancellationToken cancellationToken)
     {
         var intervalo = Stopwatch.Frequency / Math.Clamp(_fpsDeseado, ControlFps.Minimo, ControlFps.Maximo);
