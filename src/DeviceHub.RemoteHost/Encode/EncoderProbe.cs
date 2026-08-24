@@ -186,9 +186,32 @@ public static class EncoderProbe
         return encontrados;
     }
 
+    /// <summary>
+    /// VACIO NO ES HARDWARE.
+    ///
+    /// Estaba escrito `Attribute(activate, HardwareUrl) is not null`, y el
+    /// codificador POR SOFTWARE de Microsoft expone
+    /// MFT_ENUM_HARDWARE_URL_Attribute como cadena VACIA -- que no es null. Se
+    /// declaraba de hardware, y la linea de medidas de ILSANSERVER decia
+    /// "HW H264 Encoder MFT" sobre el codificador software de Windows.
+    ///
+    /// La ficha del propio MFT lo confirma por dos vias:
+    ///
+    ///     MFT 'H264 Encoder MFT'  hardware-url   asincrono False
+    ///
+    /// url vacia, y SINCRONO. Los MFT de hardware son asincronos: no se les
+    /// llama ProcessInput cuando uno quiere, sino cuando ellos lo piden por
+    /// evento. Uno sincrono es software.
+    ///
+    /// Importa mas de lo que parece: la politica de seleccion que hay que
+    /// escribir -- H.265 por hardware, si no H.264 por hardware, si no un
+    /// codificador pensado para tiempo real -- decide justo con este booleano.
+    /// Con la comprobacion vieja, en esta maquina habria elegido "hay hardware,
+    /// no hace falta buscar mas" mirando el codificador software.
+    /// </summary>
     private static (string, bool, IMFActivate) Describe(IMFActivate activate)
         => (Attribute(activate, FriendlyName) ?? "(sin nombre)",
-            Attribute(activate, HardwareUrl) is not null,
+            !string.IsNullOrWhiteSpace(Attribute(activate, HardwareUrl)),
             activate);
 
     /// <summary>El LUID viaja como un UINT64 con la parte alta arriba.</summary>

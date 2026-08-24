@@ -780,7 +780,8 @@ public sealed class H264Encoder : IVideoEncoder
             // falsa importa: cualquier politica automatica que decida "hardware
             // si, software no" estaria decidiendo con informacion equivocada.
             Ficha =
-                $"MFT '{candidato.Name}'  hardware-url {Atributo(candidato.Activate, HardwareUrl) ?? "(ninguno)"}  " +
+                $"MFT '{candidato.Name}'  hardware-url " +
+                $"'{Atributo(candidato.Activate, HardwareUrl) ?? "(ninguno)"}'  " +
                 $"LUID pedido {_luidPedido.HighPart:X}:{_luidPedido.LowPart:X}  " +
                 $"asincrono {Flag(transform, TransformAsync)}";
 
