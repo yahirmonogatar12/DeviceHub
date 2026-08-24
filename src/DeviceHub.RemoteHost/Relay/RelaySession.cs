@@ -496,6 +496,23 @@ public static class RelaySession
         /// </summary>
         public long SinParametros, SinConfig, Encolados, Sacados;
 
+        /// <summary>
+        /// VUELTAS DEL BUCLE DE CAPTURA. El numero que falta para saber si el
+        /// ritmo lo marca la pantalla o nosotros.
+        ///
+        /// En una Intel con H.265 por hardware salieron 392 timeouts y 80
+        /// capturas en 34 segundos: 14 vueltas por segundo cuando el objetivo
+        /// son 30 y el trabajo son 3.5 ms. Con `timeouts` solo no se distingue
+        /// "la pantalla no cambia" de "el bucle va lento", y las dos dan pocos
+        /// frames.
+        ///
+        /// Si vueltas/s se acerca a fps, el ritmo es correcto y lo que falta es
+        /// contenido. Si se queda a la mitad, el tiempo se va en algo que no
+        /// esta medido -- y con `espera` al lado se ve si es la captura o el
+        /// descanso del final.
+        /// </summary>
+        public long Vueltas;
+
         /// <summary>Frames que salieron y nadie confirmo en EsperaDeAcuseMs. Si
         /// esto sube, el visor no esta siguiendo el ritmo.</summary>
         public long AcusesPerdidos;
@@ -653,7 +670,9 @@ public static class RelaySession
                               $"pasar {_pasar.Percentil(0.50):0.0} + " +
                               $"mft {_mft.Percentil(0.50):0.0} ms)  "
                             : "") +
-                        $"espera {_esperaCaptura} ms  timeouts {_timeouts}  gop {_gop}  " +
+                        $"espera {_esperaCaptura} ms  " +
+                        $"vueltas {cuenta.Vueltas / Math.Max(reloj.Elapsed.TotalSeconds, 0.001):0}/s  " +
+                        $"timeouts {_timeouts}  gop {_gop}  " +
                         $"fps {_fpsDeseado}  B-frames {Bes()}  " +
                         $"{(_porHardware ? "HW" : "SW")} {_codificadorNombre}  " +
                         (_hilos >= 0 || _prisa >= 0
@@ -1467,6 +1486,7 @@ public static class RelaySession
                 // ellos salia en las medidas porque todas empiezan a contar
                 // despues.
                 var vuelta = Stopwatch.GetTimestamp();
+                Interlocked.Increment(ref cuenta.Vueltas);
                 var intervalo = Stopwatch.Frequency /
                     Math.Clamp(_fpsDeseado, ControlFps.Minimo, ControlFps.Maximo);
 
