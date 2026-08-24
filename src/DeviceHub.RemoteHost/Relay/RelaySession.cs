@@ -2315,6 +2315,13 @@ public static class RelaySession
         // aqui la misma cadena de comprobaciones que el ya hace. Construir dos
         // veces cuesta una vez, al abrir la sesion; el escalado se paga en cada
         // frame durante toda la sesion.
+        // El compilador no puede saber que el ultimo intento no atrapa nada y
+        // por tanto siempre asigna o lanza. Se lo decimos con una condicion que
+        // en la practica nunca es cierta, en vez de con un `!` que la callaria
+        // sin comprobar nada.
+        if (codificador is null)
+            throw new VideoEncoderUnavailableException("Ningun codificador quedo en pie.");
+
         if (!codificador.PorCpu)
             return codificador;
 
