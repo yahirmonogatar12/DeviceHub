@@ -175,8 +175,11 @@ try {
         [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11
     [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 
-    $r = Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 15
-    Write-Host "El 5443 lo sirve: HTTP $($r.StatusCode)" -ForegroundColor Green
+    # WebClient y no Invoke-WebRequest: en estas maquinas el segundo falla
+    # contra Kestrel con "Error inesperado de envio" y el primero no.
+    $texto = (New-Object Net.WebClient).DownloadString($url)
+    Write-Host "El 5443 lo sirve:" -ForegroundColor Green
+    Write-Host $texto
 }
 catch {
     # NO es prueba de que este roto. Windows PowerShell 5.1 usa la pila TLS de

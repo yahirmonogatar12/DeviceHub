@@ -49,18 +49,24 @@ try {
     $img = (Get-CimInstance Win32_Service -Filter "Name='$ServiceName'").PathName.Trim('"')
     $InstallPath = Split-Path $img -Parent
 
-    $actual = (Get-Item $img).VersionInfo.FileVersion
-    Write-Host "Instalado en $InstallPath (version $actual)"
+    Write-Host "Instalado en $InstallPath"
 
-    $manifiesto = (Invoke-WebRequest "$base/update.json" -UseBasicParsing -TimeoutSec 30).Content |
-        ConvertFrom-Json
+    # WebClient Y NO Invoke-WebRequest.
+    #
+    # En estas PCs Invoke-WebRequest falla contra Kestrel con "Error inesperado
+    # de envio" mientras WebClient, en la misma sesion y con los mismos ajustes
+    # de TLS, funciona. Son dos caminos distintos dentro de .NET Framework y uno
+    # se atraganta; averiguar cual de los dos tiene la culpa no cambia nada.
+    $web = New-Object Net.WebClient
 
+    $manifiesto = $web.DownloadString("$base/update.json") | ConvertFrom-Json
     Write-Host "El servidor ofrece $($manifiesto.version)"
 
-    if ([version]$manifiesto.version -le [version]$actual) {
-        Write-Host "Ya esta al dia. No hay nada que hacer." -ForegroundColor Green
-        return
-    }
+    # NO SE COMPARA CON LA VERSION DEL ARCHIVO. El FileVersion de estos
+    # ejecutables es 1.0.3.0 en todos -- nunca se sello -- asi que compararlo
+    # seria decidir con un numero que no significa nada. Este script se ejecuta
+    # a mano, una vez por PC, y lo que se pide es exactamente lo que se instala.
+    # De 1.77 en adelante decide el agente, que si sabe su version.
 
     $trabajo = Join-Path $env:TEMP "devicehub-bootstrap-$($manifiesto.version)"
     if (Test-Path $trabajo) { Remove-Item $trabajo -Recurse -Force }
@@ -68,7 +74,7 @@ try {
 
     $zip = Join-Path $trabajo $manifiesto.file
     Write-Host "Bajando $($manifiesto.file)..."
-    Invoke-WebRequest "$base/$($manifiesto.file)" -OutFile $zip -UseBasicParsing -TimeoutSec 600
+    $web.DownloadFile("$base/$($manifiesto.file)", $zip)
 
     $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($hash -ne $manifiesto.sha256.ToLowerInvariant()) {
@@ -123,11 +129,11 @@ try {
     Start-Sleep -Seconds 5
 
     $estado = (Get-Service $ServiceName).Status
-    $ahora  = (Get-Item $img).VersionInfo.FileVersion
 
     Write-Host ""
-    Write-Host "Servicio: $estado   version: $ahora" -ForegroundColor $(
+    Write-Host "Servicio: $estado   instalada: $($manifiesto.version)" -ForegroundColor $(
         if ($estado -eq 'Running') { 'Green' } else { 'Red' })
+    Write-Host "La version de verdad la confirma el dashboard cuando esta PC reporte."
 
     if ($estado -ne 'Running') {
         Write-Host "Para volver atras:" -ForegroundColor Yellow
