@@ -400,6 +400,21 @@ public static class RelaySession
     private static readonly MedidorRetraso _bajar = new();
     private static readonly MedidorRetraso _pasar = new();
 
+    /// <summary>
+    /// EL MFT SOLO, sin la conversion. El unico numero que decide si cambiar de
+    /// codificador serviria de algo.
+    ///
+    /// "codificar" lleva dentro bajar la textura y pasarla a NV12, que son
+    /// codigo nuestro y no cambian por usar otro codec. Lo que cambiaria al
+    /// pasar a un codificador por software pensado para tiempo real -- VP9 de
+    /// libvpx en modo REALTIME, que es lo que hace RustDesk cuando no hay
+    /// hardware -- es exactamente esta cifra y ninguna otra.
+    ///
+    /// Si sale por debajo de 5 ms, el MFT no es el problema y portar libvpx
+    /// seria trabajo grande para nada. Si sale por encima de 15, lo es.
+    /// </summary>
+    private static readonly MedidorRetraso _mft = new();
+
     /// <summary>Cuanto se espera un acuse antes de seguir sin el. RustDesk usa
     /// 3 s; aqui menos, porque su espera se corta en cuanto llegan todos y esta
     /// solo salta cuando el acuse se perdio de verdad.</summary>
@@ -598,10 +613,12 @@ public static class RelaySession
                         $"p95 {_codificar.Percentil(0.95):0.0} ms  " +
                         (_bajar.Ultimo >= 0
                             ? $"(bajar {_bajar.Percentil(0.50):0.0} + " +
-                              $"pasar {_pasar.Percentil(0.50):0.0} ms)  "
+                              $"pasar {_pasar.Percentil(0.50):0.0} + " +
+                              $"mft {_mft.Percentil(0.50):0.0} ms)  "
                             : "") +
                         $"espera {_esperaCaptura} ms  timeouts {_timeouts}  gop {_gop}  " +
                         $"fps {_fpsDeseado}  B-frames {Bes()}  " +
+                        $"{(_porHardware ? "HW" : "SW")} {_codificadorNombre}  " +
                         (_hilos >= 0 || _prisa >= 0
                             ? $"hilos {_hilos}  prisa {_prisa}  "
                             : "") +
@@ -1087,6 +1104,15 @@ public static class RelaySession
         _hilos = flujos[0].Codificador is H264Encoder m2 ? m2.Trabajadores : -1;
         _prisa = flujos[0].Codificador is H264Encoder m3 ? m3.Prisa : -1;
         _gop = flujos[0].Codificador is H264Encoder m4 ? m4.Gop : -1;
+
+        // POR HARDWARE O POR SOFTWARE, en la linea que el tecnico si mira.
+        //
+        // Es la diferencia entre un bloque dedicado de la GPU y la CPU de la
+        // maquina haciendo el trabajo mientras corre lo que sea que corra esa
+        // PC. Estaba solo en el log de eventos, que nadie abre, y es el primer
+        // dato que hace falta cuando alguien dice que va lento.
+        _porHardware = flujos[0].Codificador.Capabilities.Hardware;
+        _codificadorNombre = flujos[0].Codificador.Capabilities.Name;
 
         // COMO QUIEN CORRE, en la linea que el tecnico si mira.
         //
@@ -1631,6 +1657,15 @@ public static class RelaySession
                     {
                         _bajar.Anotar(cpu.BajarMs);
                         _pasar.Anotar(cpu.PasarMs);
+
+                        // Lo que costo la llamada entera MENOS lo que costo la
+                        // conversion. Restar y no cronometrar por dentro porque
+                        // un MFT asincrono no hace su trabajo dentro de
+                        // ProcessInput: lo hace entre medias y lo entrega por
+                        // evento, asi que medir esa llamada daria casi cero y
+                        // seria mentira.
+                        if (_codificar.Ultimo >= 0)
+                            _mft.Anotar(Math.Max(_codificar.Ultimo - cpu.BajarMs - cpu.PasarMs, 0));
                     }
                 }
 
@@ -2285,6 +2320,8 @@ public static class RelaySession
     /// treinta y pico -- es que ignoro el GOP y esta gastando media transmision
     /// en repetir lo que ya se veia.</summary>
     private static int _gop = -1;
+    private static bool _porHardware;
+    private static string _codificadorNombre = "?";
 
     /// <summary>Si el host corre como SYSTEM. Sin eso, la entrada no entra en
     /// ventanas elevadas.</summary>
