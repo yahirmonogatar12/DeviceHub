@@ -1,3 +1,5 @@
+using System.Runtime.Intrinsics;
+using System.Runtime.InteropServices;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
 
@@ -201,6 +203,27 @@ public sealed class Nv12Cpu : IDisposable
         ReadOnlySpan<byte> bgra, int strideBgra, Span<byte> nv12,
         int anchoOrigen, int altoOrigen, int ancho, int alto)
     {
+        // EL CAMINO RAPIDO SOLO CUANDO NO SE REDUCE.
+        //
+        // Vectorizar escalado y conversion a la vez seria el doble de codigo y
+        // el doble de sitios donde equivocarse, para un caso que ya no se usa:
+        // desde que se dejo de encoger la pantalla, la ruta que importa es
+        // 1:1. El vecino mas proximo se queda como esta, correcto y lento, para
+        // las pantallas que si haya que reducir.
+        //
+        // Se vectoriza SOLO la luma. Cuesta la mitad del trabajo -- un byte por
+        // pixel contra uno por cada cuatro -- y el croma sale de un pixel de
+        // cada cuatro, asi que su bucle recorre la cuarta parte. Primero el
+        // numero, y si `pasar` no baja lo suficiente, entonces el croma.
+        if (Vector128.IsHardwareAccelerated
+            && anchoOrigen == ancho && altoOrigen == alto
+            && ancho >= 16)
+        {
+            LumaVectorial(bgra, strideBgra, nv12, ancho, alto);
+            CromaEscalar(bgra, strideBgra, nv12, ancho, alto);
+            return;
+        }
+
         var croma = ancho * alto;
 
         // Una division por eje, no una por pixel.
@@ -230,6 +253,108 @@ public sealed class Nv12Cpu : IDisposable
 
                 nv12[uv] = (byte)(((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128);
                 nv12[uv + 1] = (byte)(((112 * r - 94 * g - 18 * b + 128) >> 8) + 128);
+            }
+        }
+    }
+
+    // Los coeficientes de BT.601 en rango de estudio, los mismos del bucle
+    // escalar. Si estos cambian y aquellos no, la imagen sale distinta segun la
+    // maquina -- y eso no da error, da un tono que nadie sabe de donde sale.
+    private static readonly Vector128<uint> C66 = Vector128.Create(66u);
+    private static readonly Vector128<uint> C129 = Vector128.Create(129u);
+    private static readonly Vector128<uint> C25 = Vector128.Create(25u);
+    private static readonly Vector128<uint> C128 = Vector128.Create(128u);
+    private static readonly Vector128<uint> C16 = Vector128.Create(16u);
+    private static readonly Vector128<uint> Byte = Vector128.Create(0xFFu);
+
+    /// <summary>La luma de cuatro pixeles BGRA empaquetados en cuatro uint.</summary>
+    private static Vector128<uint> Luma(Vector128<uint> pixeles)
+    {
+        var b = pixeles & Byte;
+        var g = Vector128.ShiftRightLogical(pixeles, 8) & Byte;
+        var r = Vector128.ShiftRightLogical(pixeles, 16) & Byte;
+
+        return Vector128.ShiftRightLogical(r * C66 + g * C129 + b * C25 + C128, 8) + C16;
+    }
+
+    /// <summary>
+    /// El plano de luma, dieciseis pixeles por vuelta.
+    ///
+    /// Vector128 y no Vector256 a proposito: en 256 bits las operaciones de
+    /// empaquetado trabajan por mitades independientes y hay que recolocar los
+    /// carriles despues, que es donde vive la clase de error que compila, corre
+    /// y devuelve una imagen con las columnas barajadas. Con 128 no hay cruce de
+    /// carriles y `Vector128.Narrow` hace lo que parece.
+    ///
+    /// Ademas es portable: la misma API sirve en x64 y en ARM, sin
+    /// `Avx2.IsSupported` ni una segunda version que mantener.
+    ///
+    /// Sin `/unsafe`: se usa `ref byte` con `Vector128.LoadUnsafe`, que este
+    /// repositorio ya puede compilar sin abrir esa puerta.
+    /// </summary>
+    private static void LumaVectorial(
+        ReadOnlySpan<byte> bgra, int strideBgra, Span<byte> nv12, int ancho, int alto)
+    {
+        ref var origen = ref MemoryMarshal.GetReference(bgra);
+        ref var destino = ref MemoryMarshal.GetReference(nv12);
+
+        for (var y = 0; y < alto; y++)
+        {
+            var fila = (nuint)((long)y * strideBgra);
+            var salida = (nuint)((long)y * ancho);
+            var x = 0;
+
+            for (; x <= ancho - 16; x += 16)
+            {
+                var p = fila + (nuint)((long)x * 4);
+
+                var a = Luma(Vector128.LoadUnsafe(ref origen, p).AsUInt32());
+                var b = Luma(Vector128.LoadUnsafe(ref origen, p + 16).AsUInt32());
+                var c = Luma(Vector128.LoadUnsafe(ref origen, p + 32).AsUInt32());
+                var d = Luma(Vector128.LoadUnsafe(ref origen, p + 48).AsUInt32());
+
+                // uint -> ushort -> byte. Narrow TRUNCA, y aqui eso vale: la
+                // luma en rango de estudio nunca pasa de 235.
+                Vector128.Narrow(Vector128.Narrow(a, b), Vector128.Narrow(c, d))
+                    .StoreUnsafe(ref destino, salida + (nuint)x);
+            }
+
+            // La cola, que en 1280 o 1920 no existe pero en 1366 si.
+            for (; x < ancho; x++)
+            {
+                var p = (int)fila + x * 4;
+
+                int bb = bgra[p];
+                int gg = bgra[p + 1];
+                int rr = bgra[p + 2];
+
+                nv12[(int)salida + x] = (byte)(((66 * rr + 129 * gg + 25 * bb + 128) >> 8) + 16);
+            }
+        }
+    }
+
+    /// <summary>El croma, sin vectorizar: un par de bytes por cada bloque de
+    /// 2x2, o sea la cuarta parte del trabajo de la luma.</summary>
+    private static void CromaEscalar(
+        ReadOnlySpan<byte> bgra, int strideBgra, Span<byte> nv12, int ancho, int alto)
+    {
+        var croma = ancho * alto;
+
+        for (var y = 0; y < alto; y += 2)
+        {
+            var fila = y * strideBgra;
+            var uv = croma + y / 2 * ancho;
+
+            for (var x = 0; x < ancho; x += 2)
+            {
+                var p = fila + x * 4;
+
+                int b = bgra[p];
+                int g = bgra[p + 1];
+                int r = bgra[p + 2];
+
+                nv12[uv + x] = (byte)(((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128);
+                nv12[uv + x + 1] = (byte)(((112 * r - 94 * g - 18 * b + 128) >> 8) + 128);
             }
         }
     }
