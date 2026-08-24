@@ -297,7 +297,7 @@ public sealed class RemoteRelayGrpcService(
             // caducidad se mira cuando alguien intenta reconectar, y aqui nadie
             // lo intenta.
             if (papel == RemoteRole.Viewer && sesion.State == RemoteSessionState.WaitingForViewer)
-                _ = VigilarViewerAsync(sesion);
+                _ = VigilarViewerAsync(sesion, sesion.GeneracionSinViewer);
 
             // Avisar al que queda es lo que evita sesiones huerfanas: sin esto,
             // el viewer se queda mirando una imagen congelada sin saber que la
@@ -459,11 +459,13 @@ public sealed class RemoteRelayGrpcService(
     /// El espejo de VigilarRegresoAsync: si el viewer no vuelve, se cierra al
     /// host en vez de dejarlo transmitiendo para nadie.
     /// </summary>
-    private async Task VigilarViewerAsync(RemoteSession sesion)
+    private async Task VigilarViewerAsync(RemoteSession sesion, long generacion)
     {
         await Task.Delay(RemoteLeaseRegistry.Gracia);
 
-        if (sesion.HostSiElViewerNoVolvio(SessionCloseReason.ViewerGone) is not { } host)
+        // La generacion con la que arranco: si el viewer volvio y se fue otra
+        // vez, de esa se encarga el vigilante que nacio con ella.
+        if (sesion.HostSiElViewerNoVolvio(SessionCloseReason.ViewerGone, generacion) is not { } host)
         {
             log.LogInformation("Relay: la sesion {Sesion} no necesito el cierre por viewer perdido", sesion.Id);
             return;

@@ -1442,6 +1442,14 @@ public static class RelaySession
             var repetidos = 0;
             var ultimoTimestampUs = 0L;
 
+            // Cuando se pidio el ultimo keyframe, o 0 si ya llego. Ver
+            // PlazoDeKeyframe, mas abajo.
+            var keyframePedidoEn = 0L;
+
+            // El MFT no admite cambiar el bitrate en marcha. Se descubre al
+            // primer rechazo y se deja de pedir.
+            var bitrateFijo = false;
+
             while (!cancellationToken.IsCancellationRequested)
             {
                 // EL RITMO LO MARCA LA ESPERA DE LA CAPTURA, NO UN SUEÑO PREVIO.
@@ -1511,18 +1519,39 @@ public static class RelaySession
                     // que entra a una pantalla que lleva horas quieta pide su
                     // keyframe y no hay nada que se lo lleve al codificador.
                     repetidos = 0;
+                    keyframePedidoEn = Stopwatch.GetTimestamp();
 
                     // La config va DELANTE del IDR: si el visor perdio el SPS, un
                     // keyframe suelto no le sirve de nada.
                     flujo.ConfigEnviada = false;
                 }
 
-                if (flujo.BitrateDeseado != bitrateActual && flujo.BitrateDeseado > 0)
+                // "SE LO PEDI" NO ES "OCURRIO", otra vez.
+                //
+                // CambiarBitrate devuelve false cuando el MFT rechaza el valor,
+                // y aqui se apuntaba como aplicado igualmente: el codificador se
+                // quedaba con el bitrate viejo y nadie volvia a intentarlo,
+                // porque bitrateActual ya decia que estaba puesto.
+                //
+                // Si falla NO se apunta, para que el siguiente cambio lo vuelva
+                // a intentar. Y si falla el primero se deja de insistir: un MFT
+                // que no admite bitrate dinamico no lo va a admitir treinta
+                // veces por segundo, y ese reintento es trabajo y ruido.
+                if (!bitrateFijo && flujo.BitrateDeseado != bitrateActual && flujo.BitrateDeseado > 0)
                 {
                     if (flujo.Codificador.CambiarBitrate(flujo.BitrateDeseado))
+                    {
                         opciones.Escribir($"Pantalla {flujo.DisplayId}: bitrate {flujo.BitrateDeseado / 1000} kbps");
+                        bitrateActual = flujo.BitrateDeseado;
+                    }
+                    else
+                    {
+                        bitrateFijo = true;
 
-                    bitrateActual = flujo.BitrateDeseado;
+                        Avisar(opciones,
+                            $"El codificador rechazo {flujo.BitrateDeseado / 1000} kbps: " +
+                            $"la pantalla {flujo.DisplayId} se queda con el bitrate de arranque.");
+                    }
                 }
 
                 IReadOnlyList<EncodedFrame> producidos;
@@ -1574,6 +1603,41 @@ public static class RelaySession
                 // escritorio que no es el normal, y si tampoco puede se espera y
                 // se reintenta. Un dialogo delante es un estado pasajero.
                 VideoFrame? frame;
+
+                // SI EL KEYFRAME PEDIDO NO LLEGA, SE REHACE EL CODIFICADOR.
+                //
+                // Esta demostrado que este MFT ignora ForzarKeyframe(): los
+                // keyframes de una corrida caen a la distancia exacta del GOP,
+                // no cuando se piden. Y el respaldo periodico son 900 frames.
+                //
+                // En una pantalla QUIETA eso no son treinta segundos, son para
+                // siempre: las repeticiones estan acotadas a diez, asi que
+                // pasadas esas diez se deja de alimentar al codificador y el
+                // contador de 900 no avanza NUNCA. Un visor que reconecta a una
+                // consola parada se quedaria esperando un IDR que no puede
+                // llegar.
+                //
+                // Rehacer el codificador es determinista: uno nuevo emite un IDR
+                // con su SPS en el primer frame que le entra, pase lo que pase
+                // con ForceKeyFrame. Y estrena version, asi que el visor recibe
+                // configuracion nueva y no depende de la anterior.
+                //
+                // Medio segundo, y no menos: a treinta cuadros son quince frames
+                // de margen para que el MFT haga lo que se le pidio por las
+                // buenas. Rehacerlo cuesta una vez; gastarlo en cada peticion
+                // seria peor que el problema.
+                if (keyframePedidoEn != 0
+                    && Stopwatch.GetTimestamp() - keyframePedidoEn > Stopwatch.Frequency / 2)
+                {
+                    keyframePedidoEn = 0;
+
+                    Avisar(opciones,
+                        $"El codificador no solto el keyframe pedido en medio segundo; " +
+                        $"se rehace la pantalla {flujo.DisplayId}.");
+
+                    RehacerCodificador(flujo, opciones, cuenta);
+                    repetidos = 0;
+                }
 
                 var antesDeCapturar = Stopwatch.GetTimestamp();
 
@@ -1724,7 +1788,10 @@ public static class RelaySession
                     Interlocked.Increment(ref cuenta.Codificados);
 
                     if (frameCodificado.IsKeyFrame)
+                    {
                         Interlocked.Increment(ref cuenta.Claves);
+                        keyframePedidoEn = 0;   // llego; no hay que rehacer nada
+                    }
 
                     VideoConfig? config = null;
 
@@ -1735,33 +1802,31 @@ public static class RelaySession
                         var parametros = H264AnnexB.ParameterSets(
                             frameCodificado.Payload, flujo.Codificador.Codec == VideoCodec.H265);
 
+                        // UN IDR SIN PARAMETER SETS SIGUE SIENDO UN IDR.
+                        //
+                        // Si el visor YA tiene el SPS/PPS de esta version, ese
+                        // keyframe le sirve tal cual: no necesitaba
+                        // configuracion nueva. Tirarlo era desperdiciar
+                        // justamente el frame que alguien acababa de pedir para
+                        // recuperarse, y ademas el mas caro de producir.
+                        //
+                        // Solo hay que esperar cuando el visor NO conoce la
+                        // version: ahi un IDR suelto no le sirve de nada.
                         if (parametros.Length == 0)
                         {
-                            Interlocked.Increment(ref cuenta.SinParametros);
-                            continue;   // todavia no; el siguiente IDR los traera
+                            if (!flujo.ElVisorSabeDescodificar)
+                            {
+                                Interlocked.Increment(ref cuenta.SinParametros);
+                                continue;   // el siguiente IDR los traera
+                            }
                         }
-
-                        flujo.ConfigEnviada = true;
-                        flujo.ConfigConocida = flujo.Version;
-
-                        config = new VideoConfig
+                        else
                         {
-                            ConfigVersion = flujo.Version,
-                            Codec = flujo.Codificador.Codec,
-                            Width = (uint)frameCodificado.Width,
-                            Height = (uint)frameCodificado.Height,
-                            FramesPerSecond = (uint)FpsDeclarado(opciones),
-                            BitrateBitsPerSecond = (uint)flujo.BitrateBase,
-                            ParameterSets = Google.Protobuf.ByteString.CopyFrom(parametros),
-                            VisibleWidth = (uint)frameCodificado.Width,
-                            VisibleHeight = (uint)frameCodificado.Height,
+                            flujo.ConfigEnviada = true;
+                            flujo.ConfigConocida = flujo.Version;
 
-                            DisplayId = (uint)flujo.DisplayId,
-                            LayoutX = (uint)flujo.LayoutX,
-                            LayoutY = (uint)flujo.LayoutY,
-                            CanvasWidth = (uint)lienzo.Ancho,
-                            CanvasHeight = (uint)lienzo.Alto
-                        };
+                            config = ConfigDe(frameCodificado, flujo, lienzo, parametros, opciones);
+                        }
                     }
 
                     // SIN CONFIGURACION NO HAY NADA DESCODIFICABLE... LA PRIMERA VEZ.
@@ -2237,6 +2302,30 @@ public static class RelaySession
     private static string Primera(string mensaje)
         => mensaje.ReplaceLineEndings("\n").Split('\n')[0].Trim();
 
+    /// <summary>La configuracion que acompaña a un keyframe con parameter sets
+    /// nuevos. Sacada del bucle para que la rama de "sin parametros" se lea de
+    /// una vez, que es donde estaba el fallo.</summary>
+    private static VideoConfig ConfigDe(
+        EncodedFrame frame, Flujo flujo, Lienzo lienzo, byte[] parametros, RelayOptions opciones)
+        => new()
+        {
+            ConfigVersion = flujo.Version,
+            Codec = flujo.Codificador.Codec,
+            Width = (uint)frame.Width,
+            Height = (uint)frame.Height,
+            FramesPerSecond = (uint)FpsDeclarado(opciones),
+            BitrateBitsPerSecond = (uint)flujo.BitrateBase,
+            ParameterSets = Google.Protobuf.ByteString.CopyFrom(parametros),
+            VisibleWidth = (uint)frame.Width,
+            VisibleHeight = (uint)frame.Height,
+
+            DisplayId = (uint)flujo.DisplayId,
+            LayoutX = (uint)flujo.LayoutX,
+            LayoutY = (uint)flujo.LayoutY,
+            CanvasWidth = (uint)lienzo.Ancho,
+            CanvasHeight = (uint)lienzo.Alto
+        };
+
     private static H264Encoder Codificar(
         ID3D11Device device, int ancho, int alto, Vortice.Luid luid, uint vendor,
         RelayOptions opciones)
@@ -2339,6 +2428,49 @@ public static class RelaySession
         return new H264Encoder(
             device, a, b, fps, ControlBitrate.PorResolucion(a, b, _calidad),
             luid, vendor, ancho, alto);
+    }
+
+    /// <summary>
+    /// Rehace el codificador conservando la captura, y estrena version.
+    ///
+    /// Es la salida determinista cuando un MFT ignora el keyframe forzado: uno
+    /// recien creado emite un IDR con su SPS en el primer frame que le entra,
+    /// haga lo que haga con ForceKeyFrame. Cuesta unos cientos de milisegundos y
+    /// solo ocurre cuando la via normal ya fallo.
+    ///
+    /// Si la creacion falla se deja el que habia: uno que no da keyframes es
+    /// mejor que ninguno, y el aviso queda escrito.
+    /// </summary>
+    private static void RehacerCodificador(Flujo flujo, RelayOptions opciones, Contadores cuenta)
+    {
+        H264Encoder nuevo;
+
+        try
+        {
+            // Del capturador vigente y no de la pantalla original: si esto se
+            // relevo a GDI antes, el dispositivo bueno es el suyo.
+            var captura = flujo.Captura;
+
+            nuevo = Codificar(
+                captura.Device, captura.Width, captura.Height,
+                captura.AdapterLuid, captura.AdapterVendorId, opciones);
+        }
+        catch (Exception ex)
+        {
+            Avisar(opciones, $"No se pudo rehacer el codificador: {Primera(ex.Message)}");
+            return;
+        }
+
+        var anterior = flujo.Codificador;
+
+        flujo.Codificador = nuevo;
+        flujo.Version = SiguienteVersion(cuenta);
+        flujo.ConfigEnviada = false;
+
+        // ConfigConocida NO se toca: al estrenar version deja de coincidir sola,
+        // y el visor tiene que esperar la configuracion nueva -- que es correcto,
+        // porque el SPS que tenia describe al codificador que se acaba de tirar.
+        anterior.Dispose();
     }
 
     private static bool Relevar(Flujo flujo, RelayOptions opciones, Contadores cuenta)

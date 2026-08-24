@@ -183,11 +183,23 @@ public sealed class RemoteSession(string id)
         lock (_puerta)
         {
             if (ReferenceEquals(Host, conexion))
+            {
                 Host = null;
+            }
             else if (ReferenceEquals(Viewer, conexion))
+            {
                 Viewer = null;
+
+                // Una caida MAS del viewer. El vigilante que arranque ahora se
+                // lleva este numero y solo actuara si al despertar sigue siendo
+                // el mismo -- si entretanto alguien volvio y se fue otra vez, de
+                // esa se encarga el vigilante que nazca con ella.
+                GeneracionSinViewer++;
+            }
             else
+            {
                 return null;   // una conexion rechazada que nunca entro
+            }
 
             State = (Host, Viewer) switch
             {
@@ -244,11 +256,29 @@ public sealed class RemoteSession(string id)
     /// El lease tampoco lo salvaba: su caducidad se comprueba cuando alguien
     /// intenta reconectar, y aqui nadie lo intenta.
     /// </summary>
-    public RelayConnection? HostSiElViewerNoVolvio(SessionCloseReason motivo)
+    /// <summary>
+    /// Cuantas veces se ha ido el viewer. Un vigilante se lleva el numero que
+    /// habia cuando arranco y solo actua si sigue siendo el mismo.
+    ///
+    /// Sin esto habia una carrera entre generaciones: el viewer cae, arranca su
+    /// vigilante, vuelve, se cae otra vez y arranca un segundo vigilante -- y
+    /// cuando el PRIMERO despierta encuentra la sesion sin viewer y cierra el
+    /// host por una caida que no era la suya, comiendose la gracia de la
+    /// segunda. Preguntar solo por el estado actual no distingue a que caida
+    /// pertenece cada espera.
+    /// </summary>
+    public long GeneracionSinViewer { get; private set; }
+
+    public RelayConnection? HostSiElViewerNoVolvio(SessionCloseReason motivo, long generacion)
     {
         lock (_puerta)
         {
             if (Viewer is not null || Host is null)
+                return null;
+
+            // La caida que este vigilante vino a vigilar ya paso: alguien volvio
+            // y se fue otra vez, y de esa se encarga el vigilante nuevo.
+            if (generacion != GeneracionSinViewer)
                 return null;
 
             CloseReason ??= motivo.ToString();

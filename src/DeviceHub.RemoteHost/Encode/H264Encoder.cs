@@ -758,6 +758,11 @@ public sealed class H264Encoder : IVideoEncoder
         (string Name, bool Hardware, IMFActivate Activate) candidato,
         out (IMFTransform, string, bool) elegido, List<string> fallos)
     {
+        // Los rechazos son de ESTE candidato. Sin limpiarlos, un MFT que se
+        // probo y fallo dejaba sus rechazos en la ficha del que si acabo
+        // usandose, atribuyendole problemas de otro.
+        _rechazadas.Clear();
+
         if (_soloHardware && !candidato.Hardware)
         {
             fallos.Add($"{candidato.Name}: por software, y se pidio hardware");
