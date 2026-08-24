@@ -909,7 +909,8 @@ public static class RelaySession
                 while (Pendientes.TryDequeue(out var evento))
                     _entrada?.Apply(evento);
 
-                cancellationToken.WaitHandle.WaitOne(20);
+                // Se despierta con la entrada, no con el reloj.
+                WaitHandle.WaitAny([cancellationToken.WaitHandle, HayEntrada], 20);
             }
         }
         catch (OperationCanceledException)
@@ -2409,6 +2410,26 @@ public static class RelaySession
     private static readonly System.Collections.Concurrent.ConcurrentQueue<InputEvent> Pendientes = new();
 
     /// <summary>
+    /// Lo levanta el hilo de RED en cuanto encola entrada.
+    ///
+    /// Antes el hilo que aplica dormia 20 ms y volvia a mirar. Cada movimiento y
+    /// cada clic esperaban ahi una media de diez milisegundos ANTES de tocar la
+    /// maquina remota, y solo entonces empezaba lo demas: capturar, codificar,
+    /// mandar, pintar. Diez milisegundos regalados en el tramo donde mas se
+    /// notan, porque son los que van por delante de todo el resto.
+    ///
+    /// Y no salian en ninguna medida. `verse` arranca al escribir en la red y
+    /// `capturar` al pedir el frame: los dos empiezan a contar despues de esto.
+    /// Por eso la linea decia 3.7 ms mientras el escritorio iba detras del raton.
+    ///
+    /// Se conserva el tick de 20 ms como TIEMPO DE ESPERA, no como sueño: el
+    /// bucle tambien vigila el salto de escritorio, las teclas hundidas y el
+    /// bloqueo de entrada, y esos si quieren mirarse cada tanto aunque nadie
+    /// toque el raton.
+    /// </summary>
+    private static readonly AutoResetEvent HayEntrada = new(false);
+
+    /// <summary>
     /// El mismo escritor para todo. gRPC no admite dos escrituras a la vez en el
     /// stream de peticion, y aqui escriben dos sitios: el bucle de video y la
     /// respuesta al Ping.
@@ -2522,6 +2543,7 @@ public static class RelaySession
                         // pasaria por aqui, y un log por evento convierte el
                         // visor de eventos en el cuello de botella de la sesion.
                         Pendientes.Enqueue(paquete.Input);
+                        HayEntrada.Set();
                         break;
 
                     case RemotePacket.PayloadOneofCase.HostAction:
