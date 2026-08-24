@@ -15,14 +15,30 @@ namespace DeviceHub.Tests;
 public class ReducirTests
 {
     [Theory]
-    [InlineData(1280, 1024, 960, 768)]   // la consola del servidor
-    [InlineData(1920, 1080, 960, 540)]
-    [InlineData(1024, 1280, 768, 960)]   // vertical: manda el lado largo igual
-    [InlineData(800, 600, 800, 600)]     // ya cabe, no se toca
-    [InlineData(960, 960, 960, 960)]     // justo en el limite
-    public void Encoge_por_el_lado_largo(int ancho, int alto, int esperadoAncho, int esperadoAlto)
+    [InlineData(1280, 1024, 1280, 1024)]   // la consola del servidor: NO se toca
+    [InlineData(1920, 1080, 1920, 1080)]   // lo normal en planta: tampoco
+    [InlineData(2560, 1440, 1280, 720)]    // grande: a la mitad exacta
+    [InlineData(3840, 2160, 1920, 1080)]
+    [InlineData(800, 600, 800, 600)]
+    public void Solo_se_reduce_lo_que_no_cabe(int ancho, int alto, int esperadoAncho, int esperadoAlto)
     {
         Assert.Equal((esperadoAncho, esperadoAlto), Reducir.Cabe(ancho, alto));
+    }
+
+    /// <summary>
+    /// Cuando hay que reducir es a la MITAD y no a una razon cualquiera: a 0.75
+    /// el patron de pixeles que se tira cambia cada cuatro y el texto tiembla.
+    /// </summary>
+    [Theory]
+    [InlineData(2560, 1440)]
+    [InlineData(4096, 2160)]
+    public void Reducir_es_siempre_una_potencia_de_dos(int ancho, int alto)
+    {
+        var (a, b) = Reducir.Cabe(ancho, alto);
+
+        Assert.Equal(0, ancho % a);
+        Assert.Equal(0, alto % b);
+        Assert.Equal(ancho / a, alto / b);
     }
 
     [Theory]

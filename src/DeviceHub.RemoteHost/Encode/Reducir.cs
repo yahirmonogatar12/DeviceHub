@@ -10,32 +10,49 @@ namespace DeviceHub.RemoteHost.Encode;
 public static class Reducir
 {
     /// <summary>
-    /// Lado largo maximo cuando codifica la CPU.
+    /// Lado largo a partir del cual se reduce. Por debajo NO SE TOCA NADA.
     ///
-    /// 960 y no 1280 porque el coste va con el AREA: 1280x1024 -> 960x768 es un
-    /// 44% menos de pixeles que convertir y codificar. Y no menos de 960 porque
-    /// por debajo de eso el texto de una consola deja de leerse, que es
-    /// justamente para lo que se entra a estas maquinas.
+    /// RustDesk en Windows no escala: le pasa al codificador la resolucion de
+    /// captura tal cual. Su unico escalado vive en Android, se llama
+    /// ENABLE_ANDROID_SOFTWARE_ENCODING_HALF_SCALE y es a la MITAD exacta.
+    ///
+    /// Aqui se reducia 1280x1024 a 960x768, que es una razon de 0.75 por vecino
+    /// mas proximo: tira una de cada cuatro filas y columnas. Sobre el texto de
+    /// una consola, con trazos de un pixel de ancho, eso no lo empeora un poco
+    /// -- rompe las letras.
+    ///
+    /// Y se pago para nada. Medido en la maquina que motivo el escalado, la
+    /// conversion se reparte en 9.3 ms de bajar la imagen y 4.0 de procesarla, y
+    /// reducir SOLO abarata la segunda: la bajada es a resolucion completa
+    /// porque Desktop Duplication entrega la pantalla entera. Unos ocho
+    /// milisegundos de un presupuesto de cuarenta, a cambio de no poder leer.
     /// </summary>
-    public const int LadoMaximo = 960;
+    public const int LadoMaximo = 2000;
 
     /// <summary>
-    /// El tamaño al que conviene codificar. Devuelve el mismo si ya cabe.
+    /// El tamaño al que conviene codificar. Devuelve el mismo si ya cabe, que es
+    /// el caso de cualquier pantalla normal.
+    ///
+    /// Cuando no cabe se parte por la MITAD, y se repite si hace falta: 2560 ->
+    /// 1280, 3840 -> 1920. A la mitad exacta el vecino mas proximo toma un pixel
+    /// de cada dos en cada eje, que es regular y se ve; a 0.75 el patron de lo
+    /// que se tira cambia cada cuatro pixeles y el texto tiembla.
     ///
     /// Las dos medidas salen PARES siempre: NV12 guarda un par de croma por cada
     /// bloque de 2x2, asi que un lado impar no tiene representacion.
     /// </summary>
     public static (int Ancho, int Alto) Cabe(int ancho, int alto)
     {
-        var largo = Math.Max(ancho, alto);
+        if (ancho <= 0 || alto <= 0)
+            return (2, 2);
 
-        if (largo <= LadoMaximo || ancho <= 0 || alto <= 0)
-            return (Par(ancho), Par(alto));
+        while (Math.Max(ancho, alto) > LadoMaximo)
+        {
+            ancho /= 2;
+            alto /= 2;
+        }
 
-        // Se escala por el lado LARGO para que la relacion de aspecto aguante
-        // igual en una pantalla apaisada que en una vertical.
-        return (Par((int)((long)ancho * LadoMaximo / largo)),
-                Par((int)((long)alto * LadoMaximo / largo)));
+        return (Par(ancho), Par(alto));
     }
 
     /// <summary>Par y nunca cero: 1 pixel de alto no es una imagen, pero 0 no es nada.</summary>
