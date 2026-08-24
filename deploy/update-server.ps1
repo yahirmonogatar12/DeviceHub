@@ -13,13 +13,15 @@
     Aqui solo se cambian los archivos.
 
 .EXAMPLE
-    .\update-server.ps1
-    .\update-server.ps1 -Zip 'D:\descargas\DeviceHub.Server-1.77.0.zip'
+    Desde un recurso de red hay que saltarse la directiva de ejecucion: un .ps1
+    sin firmar que llega por UNC no se ejecuta con la politica por defecto.
+
+    powershell -NoProfile -ExecutionPolicy Bypass -File "\\192.168.1.10\updates\Shared\DeviceHub\update-server.ps1"
 #>
 [CmdletBinding()]
 param(
-    [string]$Zip = '\\192.168.1.10\updates\Shared\DeviceHub\DeviceHub.Server-1.77.0.zip',
-    [string]$Sha256 = '78fce34252898f57fdf392dcf151d90dfd21e323ff50112926bb50c13ffd7871',
+    [string]$Zip = '\\192.168.1.10\updates\Shared\DeviceHub\DeviceHub.Server-1.78.0.zip',
+    [string]$Sha256 = '5f20d510ce256d3982832d33602b66c61ced74d1d856c7ef08f119e1cddfaa6b',
     [string]$InstallPath = 'C:\Program Files\ILSAN\DeviceHub\Server',
     [string]$UpdatesPath = 'C:\Users\Administrator\Documents\ILSANMES\UPDATES\Shared\DeviceHub',
     [string]$ServiceName = 'DeviceHubServer'
@@ -106,15 +108,29 @@ if ($estado -ne 'Running') {
     exit 1
 }
 
-# La prueba de que el arreglo de la flota esta en pie.
+# LA PRUEBA DE QUE EL ARREGLO DE LA FLOTA ESTA EN PIE.
+#
+# Sin -SkipCertificateCheck, que no existe en Windows PowerShell 5.1 -- que es
+# el que hay en el servidor. El callback funciona en 5.1 y en 7, y se deja como
+# estaba al terminar para no dejar la sesion aceptando cualquier certificado.
+$antes = [Net.ServicePointManager]::ServerCertificateValidationCallback
+
 try {
-    $r = Invoke-WebRequest "https://localhost:5443/updates/production/update.json" `
-        -SkipCertificateCheck -TimeoutSec 10
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+
+    $r = Invoke-WebRequest 'https://localhost:5443/updates/production/update.json' `
+        -UseBasicParsing -TimeoutSec 15
+
     Write-Host ""
     Write-Host "Actualizaciones servidas por el 5443:" -ForegroundColor Green
     Write-Host $r.Content
 }
 catch {
+    Write-Host ""
     Write-Host "El endpoint de actualizaciones no contesta: $_" -ForegroundColor Red
     Write-Host "Revisa que UpdatesPath apunte a la carpeta que contiene production\update.json"
+}
+finally {
+    [Net.ServicePointManager]::ServerCertificateValidationCallback = $antes
 }

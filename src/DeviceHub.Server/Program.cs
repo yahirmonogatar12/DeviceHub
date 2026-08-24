@@ -141,7 +141,16 @@ var jwtKeyProvider = new JwtKeyProvider(options.DataDirectory);
 
 builder.WebHost.ConfigureKestrel(kestrel => kestrel.ListenAnyIP(options.Port, listen =>
 {
-    listen.Protocols = HttpProtocols.Http2; // gRPC
+    // gRPC exige HTTP/2, pero el puerto ya no solo lleva gRPC: por aqui se
+    // sirven tambien los paquetes del agente, y eso lo pide un HttpClient que
+    // por defecto habla HTTP/1.1. Con Http2 a secas ese GET fallaba y el agente
+    // caia al respaldo por SMB sin decir nada -- justo el camino que no funciona.
+    //
+    // Aceptar los dos no le quita nada a gRPC: sobre TLS el protocolo lo elige
+    // ALPN, y un cliente gRPC siempre pide h2. Lo que gana es que la URL se
+    // puede abrir desde un navegador para ver si el servidor esta sirviendo
+    // actualizaciones, que es la primera pregunta cuando una PC no se actualiza.
+    listen.Protocols = HttpProtocols.Http1AndHttp2;
     listen.UseHttps(certificate);
 }));
 

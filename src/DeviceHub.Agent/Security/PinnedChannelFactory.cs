@@ -73,7 +73,14 @@ public sealed class PinnedChannelFactory(ILogger<PinnedChannelFactory> logger)
             }
         })
         {
-            Timeout = TimeSpan.FromMinutes(10)
+            Timeout = TimeSpan.FromMinutes(10),
+
+            // El servidor escucha en HTTP/2 por gRPC. HttpClient pide HTTP/1.1
+            // salvo que se le diga otra cosa, asi que sin esto la descarga
+            // fallaba contra un servidor que solo aceptara h2 -- y el agente se
+            // iba al respaldo por SMB sin que se notara.
+            DefaultRequestVersion = System.Net.HttpVersion.Version20,
+            DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower
         };
 
     private bool Validate(X509Certificate? certificate)
