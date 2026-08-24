@@ -92,6 +92,27 @@ public static class RelaySession
 
         MediaFactory.MFStartup(true).CheckError();
 
+        // EL RELOJ DE WINDOWS, A UN MILISEGUNDO.
+        //
+        // Por defecto el temporizador del sistema tiene una granularidad de
+        // 15.6 ms, y TODAS las esperas se redondean hacia arriba: la de 33 ms
+        // de AcquireNextFrame se convierte en 46.8 reales. Medido en una PC
+        // Intel: vueltas 20/s con fps 30, que es exactamente 1000/46.8.
+        //
+        // No era cosmetico. Con 120 capturas habia 107 descartes -- frames que
+        // DXGI tenia listos y no recogimos por llegar tarde -- o sea casi la
+        // mitad de la pantalla tirada por un redondeo.
+        //
+        // Se pide 1 ms y se suelta al salir. Desde Windows 10 2004 esto afecta
+        // solo al proceso que lo pide, y RemoteHost vive lo que dura una sesion:
+        // el coste en energia esta acotado a cuando alguien esta mirando, que es
+        // justo cuando la precision hace falta. Si winmm no esta, se sigue sin
+        // ella -- se vera en `vueltas`.
+        var relojFino = TimeBeginPeriod(1) == 0;
+
+        if (!relojFino)
+            opciones.Escribir("No se pudo subir la resolucion del reloj; el ritmo ira a saltos de 15.6 ms.");
+
         try
         {
             // BUCLE DE RECONEXION DEL HOST. Fase 14.
@@ -156,6 +177,9 @@ public static class RelaySession
         }
         finally
         {
+            if (relojFino)
+                TimeEndPeriod(1);
+
             MediaFactory.MFShutdown();
         }
     }
@@ -170,6 +194,19 @@ public static class RelaySession
     /// Sin token no se vuelve: o la sesion se cerro en orden, o el relay ya la
     /// dio por muerta. Insistir solo alargaria un proceso que ya no pinta nada.
     /// </summary>
+    /// <summary>
+    /// Resolucion del temporizador del sistema, en milisegundos.
+    ///
+    /// Interop a mano y no una envoltura: son dos funciones y este repositorio
+    /// no compila con /unsafe en ningun proyecto. Mismo precedente que el resto
+    /// del interop Win32 que ya hay aqui.
+    /// </summary>
+    [System.Runtime.InteropServices.DllImport("winmm.dll", EntryPoint = "timeBeginPeriod")]
+    private static extern uint TimeBeginPeriod(uint milisegundos);
+
+    [System.Runtime.InteropServices.DllImport("winmm.dll", EntryPoint = "timeEndPeriod")]
+    private static extern uint TimeEndPeriod(uint milisegundos);
+
     private static bool PuedeVolver(DateTimeOffset desde, CancellationToken cancellationToken)
         => _tokenReconexion is { Length: > 0 }
            && !cancellationToken.IsCancellationRequested
