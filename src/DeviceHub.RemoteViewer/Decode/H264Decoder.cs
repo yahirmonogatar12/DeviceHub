@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using DeviceHub.Remote.Contracts;
 using SharpGen.Runtime;
@@ -153,26 +154,82 @@ public sealed class H264Decoder : IDisposable
     /// un decodificador reordena, y las primeras unidades no producen nada hasta
     /// que tiene contexto.
     /// </summary>
-    public IReadOnlyList<DecodedFrame> Decode(byte[] flujo, int offset, int length, long timestampUs)
+    /// <summary>
+    /// Unidades de acceso que el MFT NO acepto y se perdieron. Tiene que ser 0.
+    ///
+    /// Antes esto no existia y el frame se caia en silencio: si el decodificador
+    /// asincrono todavia no habia emitido NeedInput, Decode salia sin entregar
+    /// nada y sin decirlo. Y el visor ya habia acusado recibo, asi que el host
+    /// seguia con el siguiente. En video inter-frame eso no es perder UNA imagen
+    /// -- el 121 puede depender del 120 -- y el sintoma es corrupcion o
+    /// congelacion hasta el siguiente IDR, con todos los contadores de red
+    /// diciendo que no se perdio nada.
+    /// </summary>
+    public long NoAceptadas { get; private set; }
+
+    /// <summary>
+    /// Lo que salio, y si el MFT se quedo con la unidad.
+    ///
+    /// El booleano es el que gobierna el acuse: soltar al host por un frame que
+    /// no entro al decodificador es mentirle sobre lo que se tiene.
+    /// </summary>
+    public readonly record struct Resultado(bool Aceptada, IReadOnlyList<DecodedFrame> Salidas);
+
+    /// <summary>
+    /// Milisegundos que se espera a que el MFT pida entrada antes de rendirse.
+    ///
+    /// Corto a proposito: el flujo ya va frenado a un frame en vuelo, asi que
+    /// esperar aqui no acumula nada, y a treinta cuadros por segundo hay
+    /// treinta y tres milisegundos de presupuesto. Rendirse rapido y CONTARLO
+    /// vale mas que bloquearse: un decodificador que no pide entrada en veinte
+    /// milisegundos tiene un problema que esperar no arregla.
+    /// </summary>
+    private const int EsperaDeEntradaMs = 20;
+
+    public Resultado Decode(byte[] flujo, int offset, int length, long timestampUs)
+        => Decode(flujo, offset, length, timestampUs, EsperaDeEntradaMs);
+
+    public Resultado Decode(byte[] flujo, int offset, int length, long timestampUs, int esperaMs)
     {
         var salidas = new List<DecodedFrame>(1);
 
         DrainEvents(salidas);
 
-        if (_needInput > 0)
+        // SE ESPERA A QUE PIDA ENTRADA, no se abandona a la primera.
+        //
+        // Un MFT asincrono nace con cero peticiones pendientes: su primer
+        // NeedInput llega por evento, y puede tardar. Salir aqui sin entregar
+        // la unidad -- que es lo que se hacia -- tira el frame, y en el caso de
+        // los parameter sets tira el SPS/PPS y deja la sesion sin poder
+        // descodificar nada de lo que venga despues.
+        if (_needInput <= 0 && _events is not null && esperaMs > 0)
         {
-            Submit(flujo, offset, length, timestampUs);
+            var limite = Stopwatch.GetTimestamp() + Stopwatch.Frequency * esperaMs / 1000;
 
-            if (_needInput != int.MaxValue)
-                _needInput--;
+            while (_needInput <= 0 && Stopwatch.GetTimestamp() < limite)
+            {
+                Thread.Sleep(1);
+                DrainEvents(salidas);
+            }
         }
+
+        if (_needInput <= 0)
+        {
+            NoAceptadas++;
+            return new Resultado(false, salidas);
+        }
+
+        Submit(flujo, offset, length, timestampUs);
+
+        if (_needInput != int.MaxValue)
+            _needInput--;
 
         DrainEvents(salidas);
 
         if (_events is null)
             DrainOutputs(salidas);
 
-        return salidas;
+        return new Resultado(true, salidas);
     }
 
     /// <summary>Vacia lo que el decodificador tenga retenido. Se llama al final

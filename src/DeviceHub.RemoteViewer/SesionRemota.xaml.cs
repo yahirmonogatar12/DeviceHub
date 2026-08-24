@@ -613,8 +613,31 @@ public partial class SesionRemota : UserControl
                         {
                             var parametros = nueva.ParameterSets.ToByteArray();
 
-                            foreach (var frame in nuevoDecoder.Decode(parametros, 0, parametros.Length, 0))
+                            // LOS PARAMETER SETS NO PUEDEN PERDERSE, y hasta ahora
+                            // podian: un decodificador asincrono nace sin haber
+                            // pedido entrada, y este Decode es lo PRIMERO que se le
+                            // manda. Si su NeedInput todavia no habia llegado, el
+                            // SPS/PPS se caia en silencio y la sesion quedaba sin
+                            // poder descodificar nada de lo que viniera despues.
+                            //
+                            // Peor en una reconexion: el IDR que se fuerza a
+                            // continuacion no tiene por que volver a traerlos.
+                            //
+                            // Se espera mas que para un frame normal -- esto pasa
+                            // una vez por configuracion, no treinta veces por
+                            // segundo -- y si aun asi no entra, se dice y se pide
+                            // otra configuracion en vez de seguir a ciegas.
+                            var puesta = nuevoDecoder.Decode(
+                                parametros, 0, parametros.Length, 0, esperaMs: 250);
+
+                            foreach (var frame in puesta.Salidas)
                                 frame.Dispose();
+
+                            if (!puesta.Aceptada)
+                            {
+                                Nota("El decodificador no acepto la configuracion; se pide otra.");
+                                PedirKeyframe(pantalla, 0, KeyframeReason.DecoderBusy);
+                            }
                         }
 
                         break;
@@ -661,12 +684,6 @@ public partial class SesionRemota : UserControl
                         if (!completado)
                             break;
 
-                        // EL ACUSE, en cuanto el frame esta entero y ANTES de
-                        // descodificarlo. Es lo que le permite al host capturar
-                        // el siguiente mientras este se pinta: acusar despues
-                        // sumaria el tiempo de descodificado a cada vuelta.
-                        Acusar(pantalla, completo!.FrameId);
-
                         reconstruidos++;
 
                         if (completo!.KeyFrame)
@@ -675,8 +692,34 @@ public partial class SesionRemota : UserControl
                         Grabar(pantalla, completo, config);
 
                         var antes = Stopwatch.GetTimestamp();
-                        var salidas = decoder.Decode(completo.Payload, 0, completo.Payload.Length, completo.CaptureTimestampUs);
+                        var resultado = decoder.Decode(
+                            completo.Payload, 0, completo.Payload.Length, completo.CaptureTimestampUs);
+                        var salidas = resultado.Salidas;
                         decodificaciones.Enqueue(Micros(Stopwatch.GetTimestamp() - antes));
+
+                        // EL ACUSE, DESPUES DE QUE EL DECODIFICADOR SE QUEDE CON EL.
+                        //
+                        // Estaba antes, para que el host capturara el siguiente
+                        // mientras este se pintaba. Pero acusar un frame que el
+                        // MFT no acepto es mentirle: el host sigue al 121 creyendo
+                        // que el 120 llego, y el 121 puede depender del 120. Eso no
+                        // es perder una imagen, es romper la cadena -- corrupcion o
+                        // congelacion hasta el siguiente IDR, con todos los
+                        // contadores de red diciendo que no se perdio nada.
+                        //
+                        // Lo que se gana en solaparse no vale lo que se pierde en
+                        // saber que se tiene. Y el coste real es pequeño: el acuse
+                        // sale igual antes de PINTAR, que es lo caro.
+                        if (resultado.Aceptada)
+                        {
+                            Acusar(pantalla, completo!.FrameId);
+                        }
+                        else
+                        {
+                            // No se acusa: el host mantiene su freno, que es lo
+                            // correcto cuando el receptor no pudo con el frame.
+                            PedirKeyframe(pantalla, montador.LastGoodFrameId, KeyframeReason.DecoderBusy);
+                        }
 
                         while (decodificaciones.Count > MuestrasDeDecode)
                             decodificaciones.Dequeue();

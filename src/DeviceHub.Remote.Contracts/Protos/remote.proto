@@ -498,6 +498,12 @@ enum KeyframeReason {
   // no sea IDR, asi que sin pedirlo la pantalla se queda congelada hasta que el
   // codificador emita uno por su cuenta.
   KEYFRAME_REASON_CONGESTION = 5;
+
+  // El decodificador del visor NO acepto la unidad de acceso: su MFT no pidio
+  // entrada a tiempo. No es perdida de red -- todos los contadores diran que no
+  // se perdio nada -- pero rompe la cadena igual, porque el frame siguiente
+  // puede depender del que no entro.
+  KEYFRAME_REASON_DECODER_BUSY = 6;
 }
 
 // ---------------------------------------------------------------------------

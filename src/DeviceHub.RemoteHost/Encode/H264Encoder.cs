@@ -894,8 +894,41 @@ public sealed class H264Encoder : IVideoEncoder
 
     /// <summary>SALIDA primero y entrada despues: un codificador no sabe que
     /// entradas admite hasta saber que tiene que producir.</summary>
+    /// <summary>
+    /// EL ORDEN IMPORTA, y estaba al reves.
+    ///
+    /// Microsoft especifica que CODECAPI_AVEncMPVDefaultBPictureCount se
+    /// establece ANTES de IMFTransform::SetOutputType para el codificador H.264
+    /// de Media Foundation. Aqui se llamaba a ApplyOutputType lo primero y a
+    /// SinReordenar treinta lineas despues, o sea que el "cero B-frames" llegaba
+    /// cuando el tipo de salida ya estaba fijado y el codificador podia
+    /// ignorarlo.
+    ///
+    /// Que la lectura de vuelta diga 0 no demuestra que se aplicara: un MFT
+    /// puede contestar el valor que se le pidio y seguir reordenando. Lo mismo
+    /// vale para AVEncCommonLowLatency, que existe justamente para captura en
+    /// vivo y cuyo contrato es que una entrada produzca una salida sin retraso
+    /// por reordenamiento.
+    ///
+    /// Ahora: atributo de baja latencia -> propiedades por ICodecAPI -> tipo de
+    /// salida -> tipo de entrada -> leer lo que de verdad quedo.
+    /// </summary>
     private void Configure(IMFTransform transform, int width, int height, int fps, int bitrate)
     {
+        try
+        {
+            transform.Attributes?.Set(SinkWriterAttributeKeys.LowLatency, true);
+        }
+        catch (SharpGenException)
+        {
+            // No todos lo admiten; no es motivo para rechazar el codificador.
+        }
+
+        SinReordenar(transform);
+
+        if (_cpu is not null)
+            Deprisa(transform);
+
         ApplyOutputType(transform, width, height, fps, bitrate, Subtipo, Nombre);
 
         using var entrada = MediaFactory.MFCreateMediaType();
@@ -918,19 +951,10 @@ public sealed class H264Encoder : IVideoEncoder
                 $"El codificador no acepta NV12 de {width}x{height} como entrada: {ex.ResultCode}", ex);
         }
 
-        try
-        {
-            transform.Attributes?.Set(SinkWriterAttributeKeys.LowLatency, true);
-        }
-        catch (SharpGenException)
-        {
-            // No todos lo admiten; no es motivo para rechazar el codificador.
-        }
-
-        SinReordenar(transform);
-
-        if (_cpu is not null)
-            Deprisa(transform);
+        // Y AHORA se lee lo que de verdad quedo, con los tipos ya fijados. Antes
+        // se leia en el mismo momento de pedirlo, que es cuando un MFT mas
+        // facilmente contesta lo que le acaban de decir.
+        Leer(transform);
     }
 
     /// <summary>
@@ -967,16 +991,47 @@ public sealed class H264Encoder : IVideoEncoder
             try { codec.SetValue(ref api, ref cuantos); }
             catch (SharpGenException) { }
 
-            api = Hilos;
-            Trabajadores = codec.GetValue(ref api, out var h) >= 0 && h is not null
-                ? Convert.ToInt32(h) : -1;
+            return true;
+        });
 
-            api = CalidadContraVelocidad;
-            Prisa = codec.GetValue(ref api, out var q) >= 0 && q is not null
-                ? Convert.ToInt32(q) : -1;
+    /// <summary>
+    /// Lo que el codificador dice que va a hacer, con los tipos ya fijados.
+    ///
+    /// Separado de pedirlo a proposito: preguntar en el mismo momento de
+    /// establecer el valor es cuando un MFT mas facilmente devuelve lo que le
+    /// acaban de decir. Estas cifras salen en la linea de medidas y su unico
+    /// valor es distinguir lo que pedimos de lo que hace.
+    /// </summary>
+    private void Leer(IMFTransform transform)
+        => ConCodec(transform, codec =>
+        {
+            BFrames = Leido(codec, CuantasB);
+            Gop = Leido(codec, TamanoGop);
+
+            if (_cpu is not null)
+            {
+                Trabajadores = Leido(codec, Hilos);
+                Prisa = Leido(codec, CalidadContraVelocidad);
+            }
 
             return true;
         });
+
+    private static int Leido(ICodecAPI codec, Guid propiedad)
+    {
+        var api = propiedad;
+
+        try
+        {
+            return codec.GetValue(ref api, out var valor) >= 0 && valor is not null
+                ? Convert.ToInt32(valor)
+                : -1;
+        }
+        catch (SharpGenException)
+        {
+            return -1;
+        }
+    }
 
     /// <summary>
     /// Se lo pide TAMBIEN por ICodecAPI, y se lee lo que contesta.
@@ -1009,12 +1064,6 @@ public sealed class H264Encoder : IVideoEncoder
 
             codec.SetValue(ref api, ref cero);
 
-            api = CuantasB;
-
-            BFrames = codec.GetValue(ref api, out var leido) >= 0 && leido is not null
-                ? Convert.ToInt32(leido)
-                : -1;
-
             // NADA DE KEYFRAMES PERIODICOS CADA SEGUNDO.
             //
             // Sin decirle nada, el MFT emitia un IDR cada ~30 frames: treinta
@@ -1038,12 +1087,6 @@ public sealed class H264Encoder : IVideoEncoder
 
             try { codec.SetValue(ref api, ref gop); }
             catch (SharpGenException) { }
-
-            api = TamanoGop;
-
-            Gop = codec.GetValue(ref api, out var cuantos) >= 0 && cuantos is not null
-                ? Convert.ToInt32(cuantos)
-                : -1;
 
             return true;
         });

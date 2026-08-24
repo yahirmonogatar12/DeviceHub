@@ -117,6 +117,22 @@ public sealed class RemoteRelayGrpcService(
             return;
         }
 
+        // EL try/finally EMPIEZA AQUI, no sesenta lineas mas abajo.
+        //
+        // Entre el TryJoin y el bucle hay una escritura de auditoria a MySQL y
+        // dos escrituras de red. Cualquiera de ellas puede lanzar -- una
+        // desconexion justo durante el HelloAccepted basta -- y hasta ahora eso
+        // salia del metodo SIN pasar por Leave(): el papel quedaba ocupado por
+        // una conexion muerta y el siguiente intento se llevaba un
+        // RoleAlreadyConnected sin que hubiera nadie al otro lado.
+        var motivo = SessionCloseReason.Normal;
+        string? detalle = null;
+        var cerroOrdenado = false;
+        var usuario = credencial.UserId ?? string.Empty;
+        Task? bomba = null;
+
+        try
+        {
         // EL LEASE SE ESTABLECE AQUI, con el sitio ya ocupado, y no antes.
         //
         // Antes se hacia dentro de la autenticacion, o sea antes del TryJoin, y
@@ -130,7 +146,6 @@ public sealed class RemoteRelayGrpcService(
             credencial.SessionId, papel, credencial.MachineId, credencial.UserId, conexion);
 
         var hasta = lease.ReconnectUntil;
-        var usuario = credencial.UserId ?? string.Empty;
 
         log.LogInformation(
             "Relay: {Papel} conectado a la sesion {Sesion} (estado {Estado})",
@@ -143,7 +158,7 @@ public sealed class RemoteRelayGrpcService(
             hola.Hello.MachineId, usuario,
             $"sesion {sesion.Id} papel {papel} estado {sesion.State}", contexto.Peer);
 
-        var bomba = conexion.PumpAsync(new StreamWriter(salida), cancelacion);
+        bomba = conexion.PumpAsync(new StreamWriter(salida), cancelacion);
 
         // El token de reconexion sale por AQUI y por ningun otro sitio.
         await conexion.SendControlAsync(new RemotePacket
@@ -160,12 +175,6 @@ public sealed class RemoteRelayGrpcService(
         // HelloAccepted y fuera de cualquier candado.
         await sesion.PonerAlDiaAsync(cancelacion);
 
-        var motivo = SessionCloseReason.Normal;
-        string? detalle = null;
-        var cerroOrdenado = false;
-
-        try
-        {
             while (await entrada.MoveNext(cancelacion))
             {
                 var paquete = entrada.Current;
@@ -263,6 +272,33 @@ public sealed class RemoteRelayGrpcService(
                 _ = VigilarRegresoAsync(sesion);
             }
 
+            // EL VIEWER QUE SE VA DEJA COSAS PULSADAS AL OTRO LADO.
+            //
+            // Si el proceso del tecnico murio despues de un KeyDown, con un
+            // boton hundido o con la entrada bloqueada, su KeyUp y su
+            // UnblockInput no van a llegar nunca. El rescate que hay al
+            // reconectar no sirve para un cierre definitivo, y desde la PC de
+            // planta nadie puede soltar una tecla que el host cree pulsada:
+            // el host no ve el teclado fisico del tecnico, solo los eventos que
+            // le llegaron.
+            //
+            // El relay es el ultimo que sabe que el viewer se fue, asi que es el
+            // que tiene que decirlo. Va antes del vigilante para que llegue
+            // aunque el host se cierre a continuacion.
+            if (papel == RemoteRole.Viewer && otro is null && sesion.HostConectado is { } anfitrion)
+                await SoltarLoQueQuedoPulsadoAsync(anfitrion, sesion);
+
+            // Y EL ESPEJO DEL VIGILANTE, que solo existia en un sentido.
+            //
+            // Leave() deja al host en WaitingForViewer a proposito, para que el
+            // tecnico pueda volver. Pero si no vuelve nunca, el host seguia
+            // conectado capturando, codificando y mandando video para nadie, y
+            // la sesion no quedaba vacia jamas. El lease tampoco lo salvaba: su
+            // caducidad se mira cuando alguien intenta reconectar, y aqui nadie
+            // lo intenta.
+            if (papel == RemoteRole.Viewer && sesion.State == RemoteSessionState.WaitingForViewer)
+                _ = VigilarViewerAsync(sesion);
+
             // Avisar al que queda es lo que evita sesiones huerfanas: sin esto,
             // el viewer se queda mirando una imagen congelada sin saber que la
             // PC controlada ya no esta.
@@ -285,7 +321,8 @@ public sealed class RemoteRelayGrpcService(
 
             try
             {
-                await bomba;
+                if (bomba is not null)
+                    await bomba;
             }
             catch (Exception)
             {
@@ -388,6 +425,68 @@ public sealed class RemoteRelayGrpcService(
     /// tiempo seria sostenerlo mirando una imagen congelada que ya no se va a
     /// mover nunca.
     /// </summary>
+    /// <summary>
+    /// Suelta teclas, botones y el bloqueo de entrada en la PC controlada.
+    ///
+    /// Los dos, y en este orden: una tecla hundida se nota y se arregla; una PC
+    /// con la entrada bloqueada y sin nadie que la desbloquee hay que ir a
+    /// reiniciarla.
+    /// </summary>
+    private async Task SoltarLoQueQuedoPulsadoAsync(RelayConnection host, RemoteSession sesion)
+    {
+        foreach (var accion in new[]
+                 {
+                     HostAction.Types.Kind.HostActionReleaseInput,
+                     HostAction.Types.Kind.HostActionUnblockInput
+                 })
+        {
+            try
+            {
+                await host.SendControlAsync(
+                    new RemotePacket { HostAction = new HostAction { Kind = accion } },
+                    CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning(
+                    "Relay: no se pudo mandar {Accion} al host de la sesion {Sesion}: {Error}",
+                    accion, sesion.Id, ex.Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// El espejo de VigilarRegresoAsync: si el viewer no vuelve, se cierra al
+    /// host en vez de dejarlo transmitiendo para nadie.
+    /// </summary>
+    private async Task VigilarViewerAsync(RemoteSession sesion)
+    {
+        await Task.Delay(RemoteLeaseRegistry.Gracia);
+
+        if (sesion.HostSiElViewerNoVolvio(SessionCloseReason.ViewerGone) is not { } host)
+        {
+            log.LogInformation("Relay: la sesion {Sesion} no necesito el cierre por viewer perdido", sesion.Id);
+            return;
+        }
+
+        log.LogWarning("Relay: el viewer de la sesion {Sesion} no volvio; se cierra al host", sesion.Id);
+
+        try
+        {
+            await host.SendControlAsync(new RemotePacket
+            {
+                Close = new SessionClose
+                {
+                    Reason = SessionCloseReason.ViewerGone,
+                    Detail = "El tecnico no volvio a conectarse."
+                }
+            }, CancellationToken.None);
+        }
+        catch (Exception)
+        {
+        }
+    }
+
     private async Task VigilarRegresoAsync(RemoteSession sesion)
     {
         await Task.Delay(RemoteLeaseRegistry.Gracia);

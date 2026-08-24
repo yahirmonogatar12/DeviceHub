@@ -132,7 +132,7 @@ public partial class PlayerWindow : Window
                     var antes = Stopwatch.GetTimestamp();
 
                     var frames = decoder.Decode(
-                        flujo, unidad.Offset, unidad.Length, presentados * intervaloUs);
+                        flujo, unidad.Offset, unidad.Length, presentados * intervaloUs).Salidas;
 
                     latencias.Add(Micros(Stopwatch.GetTimestamp() - antes));
 

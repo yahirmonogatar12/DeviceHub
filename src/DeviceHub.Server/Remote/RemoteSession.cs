@@ -84,10 +84,19 @@ public sealed class RemoteSession(string id)
     /// </summary>
     public DisplayList? Displays { get; private set; }
 
-    public long FramesReceived { get; private set; }
-    public long FramesForwarded { get; private set; }
-    public long BytesForwarded { get; private set; }
-    public long ControlForwarded { get; private set; }
+    /// <summary>
+    /// Contadores del relay. INTERLOCKED porque los escriben caminos que pueden
+    /// correr a la vez -- un host y un viewer tienen cada uno su bomba -- y
+    /// Snapshot() los lee bajo un candado que los escritores no toman. Con ++ se
+    /// pierden incrementos, y un contador que a veces cuenta de menos es peor
+    /// que no tenerlo: se usan para decidir si algo se esta descartando.
+    /// </summary>
+    private long _framesReceived, _framesForwarded, _bytesForwarded, _controlForwarded, _idrRequested;
+
+    public long FramesReceived => Interlocked.Read(ref _framesReceived);
+    public long FramesForwarded => Interlocked.Read(ref _framesForwarded);
+    public long BytesForwarded => Interlocked.Read(ref _bytesForwarded);
+    public long ControlForwarded => Interlocked.Read(ref _controlForwarded);
 
     public string? CloseReason { get; private set; }
 
@@ -222,6 +231,39 @@ public sealed class RemoteSession(string id)
         }
     }
 
+    /// <summary>
+    /// El HOST, si el viewer no volvio dentro de su gracia. El espejo de
+    /// ViewerSiElHostNoVolvio, que existia solo en un sentido.
+    ///
+    /// Sin esto, un viewer que se cae y no vuelve dejaba la sesion en
+    /// WaitingForViewer PARA SIEMPRE: el host seguia conectado, capturando,
+    /// codificando y mandando video al relay para nadie, y la sesion nunca
+    /// quedaba vacia. En una PC de planta eso es una pantalla que se sigue
+    /// grabando y un codificador comiendo CPU sin que nadie lo mire.
+    ///
+    /// El lease tampoco lo salvaba: su caducidad se comprueba cuando alguien
+    /// intenta reconectar, y aqui nadie lo intenta.
+    /// </summary>
+    public RelayConnection? HostSiElViewerNoVolvio(SessionCloseReason motivo)
+    {
+        lock (_puerta)
+        {
+            if (Viewer is not null || Host is null)
+                return null;
+
+            CloseReason ??= motivo.ToString();
+            State = RemoteSessionState.Closing;
+
+            return Host;
+        }
+    }
+
+    /// <summary>El host, si sigue ahi. Para hablarle cuando el viewer ya no esta.</summary>
+    public RelayConnection? HostConectado
+    {
+        get { lock (_puerta) return Host; }
+    }
+
     public bool IsEmpty
     {
         get { lock (_puerta) return Host is null && Viewer is null; }
@@ -261,7 +303,13 @@ public sealed class RemoteSession(string id)
                 colas.Count == 0 ? 0 : colas.Max(c => c.HighWater),
                 colas.Sum(c => c.Depth),
                 Viewer?.ControlHighWater ?? 0,
-                _configs.GetValueOrDefault(0u)?.ConfigVersion ?? 0);
+                // La config de CUALQUIER pantalla, no la de la 0.
+                //
+                // Los display id salen de la enumeracion de salidas del host y no
+                // tienen por que empezar en cero: en una PC donde la pantalla
+                // capturada es la 1, esta linea decia "config=v0" para siempre y
+                // parecia que el host nunca habia mandado configuracion.
+                _configs.Values.FirstOrDefault()?.ConfigVersion ?? 0);
         }
     }
 
@@ -295,12 +343,12 @@ public sealed class RemoteSession(string id)
 
                 if (agrupador.TryAdd(paquete.VideoChunk, out var frame))
                 {
-                    FramesReceived++;
+                    Interlocked.Increment(ref _framesReceived);
 
                     if (Viewer is { } viewer && viewer.SendVideo(frame!))
                     {
-                        FramesForwarded++;
-                        BytesForwarded += frame!.PayloadBytes;
+                        Interlocked.Increment(ref _framesForwarded);
+                        Interlocked.Add(ref _bytesForwarded, frame!.PayloadBytes);
                     }
                 }
 
@@ -362,7 +410,7 @@ public sealed class RemoteSession(string id)
 
         foreach (var pantalla in viewer.PantallasQuePidenIdr())
         {
-            IdrRequested++;
+            Interlocked.Increment(ref _idrRequested);
 
             await host.SendControlAsync(new RemotePacket
             {
@@ -377,7 +425,7 @@ public sealed class RemoteSession(string id)
 
     /// <summary>Cuantos IDR ha pedido el relay por su cuenta. Si esto sube sin
     /// parar, el problema no es el codificador: es que no cabe.</summary>
-    public long IdrRequested { get; private set; }
+    public long IdrRequested => Interlocked.Read(ref _idrRequested);
 
     /// <summary>Lo que manda la PC del tecnico: entrada y peticiones.</summary>
     public ValueTask FromViewerAsync(RemotePacket paquete, CancellationToken cancellationToken)
@@ -390,7 +438,7 @@ public sealed class RemoteSession(string id)
             return;   // el otro extremo aun no llego o ya se fue
 
         await destino.SendControlAsync(paquete, cancellationToken);
-        ControlForwarded++;
+        Interlocked.Increment(ref _controlForwarded);
     }
 }
 
