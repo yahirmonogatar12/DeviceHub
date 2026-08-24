@@ -415,6 +415,23 @@ public static class RelaySession
     /// </summary>
     private static readonly MedidorRetraso _mft = new();
 
+    /// <summary>
+    /// DEL PIXEL EN LA MANO AL PAQUETE LISTO: bajar + pasar + MFT, todo junto.
+    ///
+    /// Es la mitad que faltaba. `verse` arranca su reloj al ESCRIBIR en la red,
+    /// asi que mide red + descodificar + pintar y nada mas -- y por eso la linea
+    /// decia orgullosa "verse 4.4 ms" mientras la sesion iba claramente atrasada.
+    /// Las dos juntas si dan la cuenta honesta:
+    ///
+    ///     listo   captura -> codificado    lo nuestro
+    ///     verse   codificado -> pintado    la red y el visor
+    ///
+    /// Se mide desde que la captura DEVUELVE un frame, no desde que se le pide:
+    /// esperar a que la pantalla cambie no es trabajo, es no tener nada que
+    /// hacer, y meterlo aqui haria que un escritorio quieto pareciera lento.
+    /// </summary>
+    private static readonly MedidorRetraso _listo = new();
+
     /// <summary>Cuanto se espera un acuse antes de seguir sin el. RustDesk usa
     /// 3 s; aqui menos, porque su espera se corta en cuanto llegan todos y esta
     /// solo salta cuando el acuse se perdio de verdad.</summary>
@@ -607,6 +624,7 @@ public static class RelaySession
                         $"keyframes {cuenta.Claves}  config {cuenta.ConfigVersion}  cola {enCola}  " +
                         $"acuses {(_visorAcusa ? "si" : "no")}/{cuenta.AcusesPerdidos} perdidos  " +
                         $"red {_retraso.Base:0.0} ms + cola {_retraso.Encolado:0.0} ms  " +
+                        $"listo {_listo.Percentil(0.50):0.0} ms + " +
                         $"verse {_verse.Ultimo:0.0} ms (min {_verse.Base:0.0})  " +
                         $"capturar p50 {_capturar.Percentil(0.50):0.0} ms  " +
                         $"codificar p50 {_codificar.Percentil(0.50):0.0} ms " +
@@ -1649,7 +1667,12 @@ public static class RelaySession
                     ultimoTimestampUs = frame.TimestampUs;
 
                     Interlocked.Increment(ref cuenta.Capturados);
+                    var enLaMano = Stopwatch.GetTimestamp();
+
                     producidos = Cronometrar(() => flujo.Codificador.Encode(frame, cancellationToken));
+
+                    if (producidos.Count > 0)
+                        _listo.Anotar((Stopwatch.GetTimestamp() - enLaMano) * 1000.0 / Stopwatch.Frequency);
 
                     // Aqui y no en el informe de cada dos segundos: asi se
                     // anotan TODAS las conversiones y no una de cada sesenta.
