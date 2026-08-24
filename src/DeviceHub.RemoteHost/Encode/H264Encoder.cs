@@ -224,6 +224,13 @@ public sealed class H264Encoder : IVideoEncoder
     private static readonly Guid CuantasB =
         new("8d390aac-dc5c-4200-b57f-814d04babab2");
 
+    /// <summary>CODECAPI_AVEncMPVGOPSize. Cada cuantos frames sale un IDR.</summary>
+    private static readonly Guid TamanoGop =
+        new("95f31b26-95a4-41aa-9303-246a7fc6eef1");
+
+    /// <summary>Frames entre keyframes que dice el codificador. -1 si no contesta.</summary>
+    public int Gop { get; private set; } = -1;
+
     /// <summary>CODECAPI_AVEncCommonQualityVsSpeed. 0 = deprisa, 100 = bonito.</summary>
     private static readonly Guid CalidadContraVelocidad =
         new("98332df8-03cd-476b-89fa-3f9e442dec9f");
@@ -1000,6 +1007,36 @@ public sealed class H264Encoder : IVideoEncoder
 
             BFrames = codec.GetValue(ref api, out var leido) >= 0 && leido is not null
                 ? Convert.ToInt32(leido)
+                : -1;
+
+            // NADA DE KEYFRAMES PERIODICOS CADA SEGUNDO.
+            //
+            // Sin decirle nada, el MFT emitia un IDR cada ~30 frames: treinta
+            // keyframes en treinta y ocho segundos, casi la mitad de todos los
+            // bytes enviados, y un IDR cuesta dos o tres veces mas de codificar
+            // que un frame normal. En una PC que codifica por CPU eso es la
+            // mitad del trabajo gastada en repetir lo que ya se veia.
+            //
+            // Es lo que hace RustDesk, y lo dicen en su propio comentario:
+            // `kf_mode = VPX_KF_DISABLED; // reduce bandwidth a lot`. No los
+            // desactivan porque no hagan falta, sino porque los que hacen falta
+            // se piden -- y ese camino aqui ya existe: el visor manda
+            // KeyframeRequest al perder sincronia, y el relay fuerza uno cuando
+            // alguien entra a la sesion.
+            //
+            // Treinta segundos y no "nunca" porque un IDR periodico sigue
+            // siendo la red de seguridad si una peticion se pierde. A treinta
+            // segundos cuesta lo que costaba uno de cada veintitres.
+            api = TamanoGop;
+            object gop = (uint)Math.Max(Fps * 30, 1);
+
+            try { codec.SetValue(ref api, ref gop); }
+            catch (SharpGenException) { }
+
+            api = TamanoGop;
+
+            Gop = codec.GetValue(ref api, out var cuantos) >= 0 && cuantos is not null
+                ? Convert.ToInt32(cuantos)
                 : -1;
 
             return true;

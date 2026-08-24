@@ -585,7 +585,7 @@ public static class RelaySession
                         $"capturar p50 {_capturar.Percentil(0.50):0.0} ms  " +
                         $"codificar p50 {_codificar.Percentil(0.50):0.0} ms " +
                         $"p95 {_codificar.Percentil(0.95):0.0} ms  " +
-                        $"espera {_esperaCaptura} ms  timeouts {_timeouts}  " +
+                        $"espera {_esperaCaptura} ms  timeouts {_timeouts}  gop {_gop}  " +
                         $"fps {_fpsDeseado}  B-frames {Bes()}  " +
                         (_hilos >= 0 || _prisa >= 0
                             ? $"hilos {_hilos}  prisa {_prisa}  "
@@ -1070,6 +1070,7 @@ public static class RelaySession
         _bframes = flujos[0].Codificador is H264Encoder mft ? mft.BFrames : -1;
         _hilos = flujos[0].Codificador is H264Encoder m2 ? m2.Trabajadores : -1;
         _prisa = flujos[0].Codificador is H264Encoder m3 ? m3.Prisa : -1;
+        _gop = flujos[0].Codificador is H264Encoder m4 ? m4.Gop : -1;
 
         // COMO QUIEN CORRE, en la linea que el tecnico si mira.
         //
@@ -2255,6 +2256,11 @@ public static class RelaySession
     /// treinta segundos de pantalla quieta, y con 100 ms serian noventa.</summary>
     private static long _timeouts;
     private static int _esperaCaptura;
+
+    /// <summary>Frames entre keyframes que dice el codificador. Si sale bajo --
+    /// treinta y pico -- es que ignoro el GOP y esta gastando media transmision
+    /// en repetir lo que ya se veia.</summary>
+    private static int _gop = -1;
 
     /// <summary>Si el host corre como SYSTEM. Sin eso, la entrada no entra en
     /// ventanas elevadas.</summary>
