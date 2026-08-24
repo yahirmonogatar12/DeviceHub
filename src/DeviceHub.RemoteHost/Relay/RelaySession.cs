@@ -275,7 +275,18 @@ public static class RelaySession
     /// El ancho de banda en una LAN de planta es gratis; la nitidez no. Los
     /// otros dos modos siguen ahi para una red que de verdad no de.
     /// </summary>
-    private static double _calidad = ControlBitrate.CalidadFiel;
+    /// <summary>
+    /// La calidad de arranque: DE RAPIDA REACCION.
+    ///
+    /// Estaba en Fiel al original, que gasta tres veces mas bitrate para que un
+    /// escritorio de planta se vea marginalmente mejor. Lo que se hace en estas
+    /// sesiones es leer una tabla y pulsar botones, no mirar fotografias, y el
+    /// tecnico que quiera nitidez la sube desde el menu -- que sigue estando.
+    ///
+    /// Al revés no funcionaba igual: quien entra a arreglar algo no abre un menu
+    /// a ver si hay algo mas rapido, asume que asi es como va.
+    /// </summary>
+    private static double _calidad = ControlBitrate.CalidadRapida;
 
     /// <summary>Codec de arranque. H.265 por defecto: misma calidad con un
     /// 30-40 % menos de bits, y es lo que usa RustDesk en esta planta. Si la GPU
