@@ -41,6 +41,21 @@ public sealed class AgentOptions
     public string UpdateShare { get; set; } = string.Empty;
 
     /// <summary>
+    /// Anillo de despliegue que se pide al SERVIDOR. Vacio = no se pregunta.
+    ///
+    /// El agente ya no necesita saber donde vive el recurso: se lo pide a la
+    /// misma maquina con la que ya habla, por el mismo puerto y con el mismo
+    /// certificado pinado. Eso importa porque la configuracion de cada PC solo
+    /// se puede cambiar yendo a esa PC, y las que hay que arreglar son
+    /// justamente las que no se pueden actualizar.
+    ///
+    /// UpdateShare sigue existiendo como respaldo: donde SMB funciona -- el
+    /// propio servidor, sin ir mas lejos -- sirve igual, y asi el servidor puede
+    /// actualizarse antes de que exista el endpoint.
+    /// </summary>
+    public string UpdateRing { get; set; } = "production";
+
+    /// <summary>
     /// Thumbprint del certificado con el que se firman los paquetes.
     ///
     /// Vacio significa que la unica proteccion de la flota es la ACL del recurso

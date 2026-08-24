@@ -2061,7 +2061,37 @@ public static class RelaySession
             }
         }
 
-        return new H264Encoder(device, ancho, alto, fps, bitrate, luid, vendor);
+        var codificador = new H264Encoder(device, ancho, alto, fps, bitrate, luid, vendor);
+
+        // SIN GPU, MENOS PIXELES.
+        //
+        // En una maquina sin tuberia de video la conversion a NV12 y el
+        // codificador los hace la CPU, y el coste va con el AREA. Codificar
+        // 1280x1024 ahi cuesta cuatro veces mas que a media resolucion, y era la
+        // diferencia entre ver el escritorio y verlo medio segundo tarde.
+        //
+        // Se decide DESPUES de construirlo porque quien sabe si hay tuberia de
+        // video es el propio codificador, y averiguarlo por fuera seria repetir
+        // aqui la misma cadena de comprobaciones que el ya hace. Construir dos
+        // veces cuesta una vez, al abrir la sesion; el escalado se paga en cada
+        // frame durante toda la sesion.
+        if (!codificador.PorCpu)
+            return codificador;
+
+        var (a, b) = Reducir.Cabe(ancho, alto);
+
+        if (a == ancho && b == alto)
+            return codificador;
+
+        Avisar(opciones,
+            $"Sin GPU para convertir: se codifica a {a}x{b} en vez de {ancho}x{alto} " +
+            $"({100 - a * b * 100L / (ancho * alto)}% menos de pixeles).");
+
+        codificador.Dispose();
+
+        return new H264Encoder(
+            device, a, b, fps, ControlBitrate.PorResolucion(a, b, _calidad),
+            luid, vendor, ancho, alto);
     }
 
     private static bool Relevar(Flujo flujo, RelayOptions opciones, Contadores cuenta)

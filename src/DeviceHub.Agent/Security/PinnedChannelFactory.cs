@@ -56,6 +56,26 @@ public sealed class PinnedChannelFactory(ILogger<PinnedChannelFactory> logger)
         return GrpcChannel.ForAddress(address, new GrpcChannelOptions { HttpHandler = handler });
     }
 
+    /// <summary>
+    /// Un HttpClient con la MISMA validacion por pin que el canal gRPC.
+    ///
+    /// Lo usa el actualizador para bajarse el paquete del propio servidor. Que
+    /// comparta la validacion no es comodidad: si se descargara codigo que se va
+    /// a ejecutar como SYSTEM con una comprobacion de certificado mas floja que
+    /// la del heartbeat, el eslabon debil seria justamente el que mas pesa.
+    /// </summary>
+    public HttpClient CreateHttp()
+        => new(new SocketsHttpHandler
+        {
+            SslOptions = new SslClientAuthenticationOptions
+            {
+                RemoteCertificateValidationCallback = (_, certificate, _, _) => Validate(certificate)
+            }
+        })
+        {
+            Timeout = TimeSpan.FromMinutes(10)
+        };
+
     private bool Validate(X509Certificate? certificate)
     {
         if (certificate is null)

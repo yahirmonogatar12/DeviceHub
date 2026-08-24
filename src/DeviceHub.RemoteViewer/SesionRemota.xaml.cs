@@ -843,6 +843,28 @@ public partial class SesionRemota : UserControl
                     var ordenadas = decodificaciones.Order().ToList();
                     var segundos = Math.Max(reloj.Elapsed.TotalSeconds, 0.001);
 
+                    // SI NO HAY IMAGEN, LAS MEDIDAS SE ENCIENDEN SOLAS.
+                    //
+                    // Estan apagadas de fabrica porque quien entra a arreglar
+                    // algo quiere ver el escritorio, no percentiles. Pero cuando
+                    // no hay escritorio que ver, esa linea es LO UNICO que
+                    // distingue tres fallos que en pantalla son identicos --
+                    // negro: no llega video, llega y no se descodifica, o ni
+                    // siquiera hay sesion.
+                    //
+                    // Pasaron diez minutos preguntando por una captura de esa
+                    // linea que estaba a un clic de distancia y apagada por mi.
+                    if (pintados == 0 && segundos > 5 && !_medidasForzadas)
+                    {
+                        _medidasForzadas = true;
+
+                        Dispatcher.BeginInvoke(() =>
+                        {
+                            BarraEstado.Visibility = Visibility.Visible;
+                            Nota("Sin imagen: se encienden las medidas para ver por que.");
+                        });
+                    }
+
                     Mostrar(
                         $"sesion {_sesion}   {Resumen(configs)}   " +
                         $"RTT {(_rttUs < 0 ? "-" : $"{_rttUs / 1000.0:0.0} ms")}\n" +
@@ -2089,6 +2111,10 @@ public partial class SesionRemota : UserControl
     /// <summary>Como estaba la barra de datos antes de entrar en mosaico. Nace
     /// apagada, igual que ella.</summary>
     private Visibility _datosAntes = Visibility.Collapsed;
+
+    /// <summary>Ya se encendieron solas por falta de imagen. Una vez y no cada
+    /// medio segundo: el tecnico puede volver a apagarlas.</summary>
+    private bool _medidasForzadas;
 
     /// <summary>Alguien pulso encima mientras NO era interactiva. Lo escucha la
     /// consola para sacarla del mosaico.</summary>

@@ -19,7 +19,10 @@ namespace DeviceHub.Agent.Updater;
 /// seguridad de toda la flota es la ACL del recurso compartido, y el agente lo
 /// dice en el log a nivel WARNING en cada comprobacion.
 /// </summary>
-public sealed class UpdateService(AgentOptions options, ILogger<UpdateService> logger)
+public sealed class UpdateService(
+    AgentOptions options,
+    DeviceHub.Agent.Security.PinnedChannelFactory canales,
+    ILogger<UpdateService> logger)
 {
     public const string ManifestFile = "update.json";
     public const string HealthFile = "health.json";
@@ -33,26 +36,28 @@ public sealed class UpdateService(AgentOptions options, ILogger<UpdateService> l
 
     public bool TryCheckAndStage(Version currentVersion)
     {
-        if (string.IsNullOrWhiteSpace(options.UpdateShare))
+        var origen = Origen();
+
+        if (origen is null)
         {
-            // Estos dos returns no registraban NADA -- ni siquiera Debug -- asi
-            // que una PC sin recurso configurado y una al dia eran
-            // indistinguibles desde fuera. Costo una tarde averiguarlo.
-            logger.LogWarning("Sin recurso de actualizacion configurado (UpdateShare vacio)");
+            // Este return no registraba NADA -- ni siquiera Debug -- asi que una
+            // PC sin origen configurado y una al dia eran indistinguibles desde
+            // fuera. Costo una tarde averiguarlo.
+            logger.LogWarning("Sin origen de actualizaciones (ni servidor ni UpdateShare)");
             return false;
         }
 
         try
         {
-            var manifestPath = Path.Combine(options.UpdateShare, ManifestFile);
+            var texto = origen.LeerManifiesto();
 
-            if (!File.Exists(manifestPath))
+            if (texto is null)
             {
-                logger.LogWarning("No se pudo leer {Manifest} del recurso", manifestPath);
+                logger.LogWarning("No se pudo leer {Manifest} de {Origen}", ManifestFile, origen);
                 return false;
             }
 
-            var manifest = UpdateManifest.Parse(File.ReadAllText(manifestPath));
+            var manifest = UpdateManifest.Parse(texto);
 
             if (!UpdateDecision.ShouldApply(currentVersion, manifest, out var reason))
             {
@@ -61,7 +66,7 @@ public sealed class UpdateService(AgentOptions options, ILogger<UpdateService> l
             }
 
             logger.LogWarning("Actualizacion disponible: {Reason}", reason);
-            return Stage(manifest!);
+            return Stage(manifest!, origen);
         }
         catch (Exception ex)
         {
@@ -72,21 +77,45 @@ public sealed class UpdateService(AgentOptions options, ILogger<UpdateService> l
         }
     }
 
-    private bool Stage(UpdateManifest manifest)
+    /// <summary>
+    /// De donde se bajan el manifiesto y el paquete.
+    ///
+    /// Se prefiere el SERVIDOR, que es el unico camino que toda la flota tiene
+    /// demostrado: las PCs llevaban meses reportando cada treinta segundos por
+    /// el 5443 mientras ninguna conseguia leer el recurso SMB. El recurso queda
+    /// de respaldo para donde si funciona -- el propio servidor, sin ir mas
+    /// lejos -- y para poder actualizarlo A EL antes de que exista el endpoint.
+    /// </summary>
+    private IOrigenDeActualizaciones? Origen()
     {
-        var source = Path.Combine(options.UpdateShare, manifest.File);
-
-        if (!File.Exists(source))
+        if (!string.IsNullOrWhiteSpace(options.UpdateRing) && !string.IsNullOrWhiteSpace(options.ServerHost))
         {
-            logger.LogError("El manifiesto apunta a {File}, que no existe en el recurso", manifest.File);
-            return false;
+            return new PorServidor(
+                canales,
+                $"https://{options.ServerHost}:{options.ServerPort}/updates/{options.UpdateRing}",
+                Respaldo(),
+                logger);
         }
 
+        return Respaldo();
+    }
+
+    private PorRecurso? Respaldo()
+        => string.IsNullOrWhiteSpace(options.UpdateShare) ? null : new PorRecurso(options.UpdateShare);
+
+    private bool Stage(UpdateManifest manifest, IOrigenDeActualizaciones origen)
+    {
         var staging = Path.Combine(Path.GetTempPath(), $"devicehub-update-{manifest.Version}");
         Directory.CreateDirectory(staging);
 
         var localZip = Path.Combine(staging, manifest.File);
-        File.Copy(source, localZip, overwrite: true);
+
+        if (!origen.Traer(manifest.File, localZip))
+        {
+            logger.LogError("El manifiesto apunta a {File}, que no se pudo traer de {Origen}",
+                manifest.File, origen);
+            return false;
+        }
 
         // Se verifica sobre la COPIA LOCAL, no sobre el recurso: comprobar en red
         // y luego extraer del mismo sitio deja una ventana para cambiarlo en medio.

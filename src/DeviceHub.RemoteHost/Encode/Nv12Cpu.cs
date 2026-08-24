@@ -46,10 +46,15 @@ public sealed class Nv12Cpu : IDisposable
     /// </summary>
     public byte[]? Ultimo => _hay ? _nv12 : null;
 
+    /// <summary>Lo que sale, que puede ser menor que lo que entra.</summary>
     public int Ancho { get; }
     public int Alto { get; }
 
-    public Nv12Cpu(ID3D11Device device, int ancho, int alto)
+    /// <summary>Lo que entra: el tamaño real de la pantalla.</summary>
+    public int AnchoOrigen { get; }
+    public int AltoOrigen { get; }
+
+    public Nv12Cpu(ID3D11Device device, int anchoOrigen, int altoOrigen, int ancho, int alto)
     {
         if (ancho % 2 != 0 || alto % 2 != 0)
             throw new VideoEncoderUnavailableException(
@@ -59,6 +64,8 @@ public sealed class Nv12Cpu : IDisposable
         _device = device;
         Ancho = ancho;
         Alto = alto;
+        AnchoOrigen = anchoOrigen;
+        AltoOrigen = altoOrigen;
 
         // NV12: un plano de luma completo y otro de croma a la mitad de alto,
         // con U y V intercalados.
@@ -68,8 +75,10 @@ public sealed class Nv12Cpu : IDisposable
         // ella es GPU->GPU y el mapeo es lo que cuesta.
         _copia = device.CreateTexture2D(new Texture2DDescription
         {
-            Width = (uint)ancho,
-            Height = (uint)alto,
+            // Del tamaño de la PANTALLA: es lo que se baja de la GPU. El
+            // escalado ocurre despues, durante la conversion.
+            Width = (uint)anchoOrigen,
+            Height = (uint)altoOrigen,
             MipLevels = 1,
             ArraySize = 1,
             Format = Format.B8G8R8A8_UNorm,
@@ -96,14 +105,14 @@ public sealed class Nv12Cpu : IDisposable
 
         try
         {
-            var bytes = (int)mapa.RowPitch * Alto;
+            var bytes = (int)mapa.RowPitch * AltoOrigen;
 
             if (_bgra.Length < bytes)
                 _bgra = new byte[bytes];
 
             System.Runtime.InteropServices.Marshal.Copy(mapa.DataPointer, _bgra, 0, bytes);
 
-            Convertir(_bgra, (int)mapa.RowPitch, _nv12, Ancho, Alto);
+            Convertir(_bgra, (int)mapa.RowPitch, _nv12, AnchoOrigen, AltoOrigen, Ancho, Alto);
         }
         finally
         {
@@ -128,17 +137,40 @@ public sealed class Nv12Cpu : IDisposable
     /// </summary>
     public static void Convertir(
         ReadOnlySpan<byte> bgra, int strideBgra, Span<byte> nv12, int ancho, int alto)
+        => Convertir(bgra, strideBgra, nv12, ancho, alto, ancho, alto);
+
+    /// <summary>
+    /// Igual, pero REDUCIENDO de paso.
+    ///
+    /// Existe para las PCs sin GPU. Ahi el escalado lo hacia el
+    /// ID3D11VideoProcessor, que es justo la pieza que no esta, y sin el la
+    /// unica salida era codificar la pantalla entera: en un Xeon sin GPU eso
+    /// son cuatro veces mas pixeles de los que hacen falta para ver un
+    /// escritorio remoto.
+    ///
+    /// Vecino mas proximo, en punto fijo 16.16. Interpolar seria mejor imagen y
+    /// varias veces mas trabajo, y aqui el trabajo es exactamente lo que sobra.
+    /// Sobre texto se nota; sobre texto a media resolucion se nota de todas
+    /// formas, y lo que se estaba viendo antes era una imagen a medio segundo.
+    /// </summary>
+    public static void Convertir(
+        ReadOnlySpan<byte> bgra, int strideBgra, Span<byte> nv12,
+        int anchoOrigen, int altoOrigen, int ancho, int alto)
     {
         var croma = ancho * alto;
 
+        // Una division por eje, no una por pixel.
+        var pasoX = (int)(((long)anchoOrigen << 16) / ancho);
+        var pasoY = (int)(((long)altoOrigen << 16) / alto);
+
         for (var y = 0; y < alto; y++)
         {
-            var fila = y * strideBgra;
+            var fila = (y * pasoY >> 16) * strideBgra;
             var destino = y * ancho;
 
             for (var x = 0; x < ancho; x++)
             {
-                var p = fila + x * 4;
+                var p = fila + (x * pasoX >> 16) * 4;
 
                 int b = bgra[p];
                 int g = bgra[p + 1];

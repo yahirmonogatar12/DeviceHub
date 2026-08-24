@@ -12,6 +12,8 @@ using Microsoft.IdentityModel.Tokens;
 // ContentRootPath explicito: por defecto es el directorio actual, que para un
 // servicio de Windows es C:\Windows\System32. Sin esto appsettings.json se
 // ignora y el servidor arranca con los valores por defecto.
+using DeviceHub.Server.Updates;
+
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 {
     Args = args,
@@ -225,6 +227,9 @@ app.MapGrpcService<AdminGrpcService>();
 // cambia es que RemoteHost y RemoteViewer abren su PROPIA conexion, asi que un
 // keyframe atascado no retrasa el heartbeat de ningun agente.
 app.MapGrpcService<RemoteRelayGrpcService>();
+
+if (!string.IsNullOrWhiteSpace(options.UpdatesPath))
+    app.MapUpdates(options.UpdatesPath);
 
 app.Logger.LogInformation("DeviceHub Server escuchando en https://0.0.0.0:{Port} (HTTP/2)", options.Port);
 

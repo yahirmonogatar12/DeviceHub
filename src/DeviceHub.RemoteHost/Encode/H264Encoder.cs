@@ -134,12 +134,15 @@ public sealed class H264Encoder : IVideoEncoder
             _converter?.Dispose();
             _converter = null;
 
-            if (anchoEntrada is not 0 && (anchoEntrada != width || altoEntrada != height))
-                throw new VideoEncoderUnavailableException(
-                    $"Sin tuberia de video no se puede escalar de {anchoEntrada}x{altoEntrada} " +
-                    $"a {width}x{height}: el escalado lo hacia el procesador de video.");
-
-            _cpu = new Nv12Cpu(device, width, height);
+            // Ahora SI se puede escalar sin procesador de video: lo hace la
+            // misma pasada que convierte a NV12, que ya recorre todos los
+            // pixeles. Antes esto lanzaba, y por eso una PC sin GPU no tenia mas
+            // remedio que codificar la pantalla entera.
+            _cpu = new Nv12Cpu(
+                device,
+                anchoEntrada is 0 ? width : anchoEntrada,
+                altoEntrada is 0 ? height : altoEntrada,
+                width, height);
         }
 
         var (transform, nombre, hardware) = Select(adapterLuid, vendorId);
@@ -166,6 +169,15 @@ public sealed class H264Encoder : IVideoEncoder
     }
 
     public VideoEncoderCapabilities Capabilities { get; }
+
+    /// <summary>
+    /// Si la conversion a NV12 la hace la CPU porque no hay tuberia de video.
+    ///
+    /// No es lo mismo que "no es hardware": un codificador puede ser por
+    /// software y aun asi tener un ID3D11VideoProcessor que convierta y escale
+    /// en la GPU. Lo que distingue a estas maquinas es que no tienen NI eso.
+    /// </summary>
+    public bool PorCpu => _cpu is not null;
     public long Dropped { get; private set; }
 
     /// <summary>Eventos recibidos del MFT por tipo. 601 = pide entrada,

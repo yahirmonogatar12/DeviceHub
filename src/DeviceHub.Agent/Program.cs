@@ -50,6 +50,7 @@ builder.Services.AddSingleton<PinnedChannelFactory>();
 builder.Services.AddSingleton<CommandRunner>();
 builder.Services.AddSingleton(sp => new UpdateService(
     sp.GetRequiredService<IOptions<AgentOptions>>().Value,
+    sp.GetRequiredService<PinnedChannelFactory>(),
     sp.GetRequiredService<ILogger<UpdateService>>()));
 
 // Unico punto donde el agente elige motor remoto. Todo lo especifico de RustDesk

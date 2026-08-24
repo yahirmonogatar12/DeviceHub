@@ -22,4 +22,13 @@ public sealed class ServerOptions
 
     /// <summary>Dias de metricas por minuto que se conservan (Fase 6).</summary>
     public int MetricsRetentionDays { get; set; } = 30;
+
+    /// <summary>
+    /// Carpeta con los anillos de despliegue del agente. Vacio = no se sirven.
+    ///
+    /// Es la MISMA carpeta que publish-update.ps1 escribe por SMB, leida aqui en
+    /// local. El recurso compartido sigue siendo para quien publica; los agentes
+    /// ya no lo necesitan.
+    /// </summary>
+    public string UpdatesPath { get; set; } = string.Empty;
 }
