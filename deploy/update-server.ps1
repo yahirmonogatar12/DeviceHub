@@ -56,23 +56,63 @@ if (Test-Path $respaldo) { Remove-Item $respaldo -Recurse -Force }
 
 Expand-Archive -Path $Zip -DestinationPath $nuevo -Force
 
+# SEGUNDA INSTANCIA. El MES Control Center llegó a lanzar DeviceHub.Server.exe
+# a mano, y dos instancias se pelean por el 5443. Si hay una corriendo desde
+# otra carpeta, pararla no es cosa de este script.
+$otras = @(Get-Process DeviceHub.Server -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -and -not $_.Path.StartsWith($InstallPath, 'OrdinalIgnoreCase') })
+
+if ($otras.Count -gt 0) {
+    Write-Host "Hay DeviceHub.Server.exe corriendo FUERA de la instalacion:" -ForegroundColor Red
+    $otras | ForEach-Object { Write-Host "  PID $($_.Id)  $($_.Path)" }
+    throw 'Cierralo antes de seguir: dos instancias se pelean por el 5443.'
+}
+
 Write-Host "Deteniendo $ServiceName..." -ForegroundColor Yellow
 Stop-Service $ServiceName -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 5
+
+# SE ESPERA AL PROCESO, NO AL SERVICIO.
+#
+# Stop-Service vuelve cuando el SCM da el servicio por parado, y el proceso
+# puede seguir cerrando conexiones unos segundos mas. Windows mantiene el .exe
+# y sus DLL mapeados hasta que muere de verdad, y cualquier cosa que toque esa
+# carpeta antes falla con "Access denied" -- que es exactamente lo que paso.
+$limite = (Get-Date).AddSeconds(60)
+
+while ((Get-Date) -lt $limite) {
+    $vivo = Get-Process DeviceHub.Server -ErrorAction SilentlyContinue
+    if (-not $vivo) { break }
+    Start-Sleep -Seconds 2
+}
+
+$vivo = Get-Process DeviceHub.Server -ErrorAction SilentlyContinue
+if ($vivo) {
+    Write-Host "El proceso no se fue solo en 60 s; se cierra." -ForegroundColor Yellow
+    $vivo | Stop-Process -Force
+    Start-Sleep -Seconds 5
+}
+
+# RESPALDO POR COPIA Y SOBRESCRITURA EN SITIO, no moviendo la carpeta.
+#
+# Mover un directorio falla entero si UN solo archivo dentro sigue abierto, y no
+# dice cual. Copiar encima falla archivo a archivo y deja la instalacion
+# completa hasta el momento en que empieza a escribir. Ademas el respaldo es una
+# copia: si esto se tuerce a media escritura, lo de antes sigue existiendo.
+Write-Host "Respaldando en $respaldo..." -ForegroundColor Yellow
+Copy-Item $InstallPath $respaldo -Recurse -Force
 
 try {
-    Move-Item $InstallPath $respaldo
-    Move-Item $nuevo $InstallPath
+    Copy-Item (Join-Path $nuevo '*') $InstallPath -Recurse -Force
 
     # Vuelve la configuracion de ESTA maquina. El zip no la trae para no pisarla,
-    # y como el intercambio reemplaza la carpeta entera, no devolverla seria
-    # perderla -- que es exactamente como el agente se dejo sin poder
-    # actualizarse durante dos versiones.
+    # y no devolverla seria perderla -- que es exactamente como el agente se dejo
+    # sin poder actualizarse durante dos versiones.
     if (Test-Path $aSalvo) { Copy-Item $aSalvo $config -Force }
 }
 catch {
-    Write-Host "Fallo el intercambio: $_" -ForegroundColor Red
-    if (-not (Test-Path $InstallPath) -and (Test-Path $respaldo)) { Move-Item $respaldo $InstallPath }
+    Write-Host "Fallo la copia: $_" -ForegroundColor Red
+    Write-Host "Restaurando lo anterior..." -ForegroundColor Yellow
+    Copy-Item (Join-Path $respaldo '*') $InstallPath -Recurse -Force
     Start-Service $ServiceName
     throw
 }
@@ -102,8 +142,7 @@ Write-Host "Servicio: $estado" -ForegroundColor $(if ($estado -eq 'Running') { '
 if ($estado -ne 'Running') {
     Write-Host "Mira el visor de eventos. Para volver atras:" -ForegroundColor Yellow
     Write-Host "  Stop-Service $ServiceName -Force"
-    Write-Host "  Remove-Item '$InstallPath' -Recurse -Force"
-    Write-Host "  Move-Item '$respaldo' '$InstallPath'"
+    Write-Host "  Copy-Item '$respaldo\*' '$InstallPath' -Recurse -Force"
     Write-Host "  Start-Service $ServiceName"
     exit 1
 }
