@@ -397,7 +397,8 @@ public static class RelaySession
     /// escrito a mano. La nuestra es un bucle escalar pixel a pixel. Este numero
     /// dice si esa diferencia importa aqui o si el trabajo esta en otro sitio.
     /// </summary>
-    private static readonly MedidorRetraso _convertir = new();
+    private static readonly MedidorRetraso _bajar = new();
+    private static readonly MedidorRetraso _pasar = new();
 
     /// <summary>Cuanto se espera un acuse antes de seguir sin el. RustDesk usa
     /// 3 s; aqui menos, porque su espera se corta en cuanto llegan todos y esta
@@ -595,8 +596,9 @@ public static class RelaySession
                         $"capturar p50 {_capturar.Percentil(0.50):0.0} ms  " +
                         $"codificar p50 {_codificar.Percentil(0.50):0.0} ms " +
                         $"p95 {_codificar.Percentil(0.95):0.0} ms  " +
-                        (_convertir.Ultimo >= 0
-                            ? $"(convertir {_convertir.Percentil(0.50):0.0} ms)  "
+                        (_bajar.Ultimo >= 0
+                            ? $"(bajar {_bajar.Percentil(0.50):0.0} + " +
+                              $"pasar {_pasar.Percentil(0.50):0.0} ms)  "
                             : "") +
                         $"espera {_esperaCaptura} ms  timeouts {_timeouts}  gop {_gop}  " +
                         $"fps {_fpsDeseado}  B-frames {Bes()}  " +
@@ -1058,9 +1060,6 @@ public static class RelaySession
         {
             c.DescartesEncoder = flujos.Sum(f => f.Codificador.Dropped);
             c.DescartesCaptura = flujos.Sum(f => f.Captura.Dropped);
-
-            if (flujos[0].Codificador is H264Encoder cod && cod.ConversionMs >= 0)
-                _convertir.Anotar(cod.ConversionMs);
 
             _timeouts = flujos.Sum(f => f.Captura.Timeouts);
             _esperaCaptura = flujos[0].Captura.EsperaMs;
@@ -1625,6 +1624,14 @@ public static class RelaySession
 
                     Interlocked.Increment(ref cuenta.Capturados);
                     producidos = Cronometrar(() => flujo.Codificador.Encode(frame, cancellationToken));
+
+                    // Aqui y no en el informe de cada dos segundos: asi se
+                    // anotan TODAS las conversiones y no una de cada sesenta.
+                    if (flujo.Codificador is H264Encoder cpu && cpu.BajarMs >= 0)
+                    {
+                        _bajar.Anotar(cpu.BajarMs);
+                        _pasar.Anotar(cpu.PasarMs);
+                    }
                 }
 
                 foreach (var frameCodificado in producidos)

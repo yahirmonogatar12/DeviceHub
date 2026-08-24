@@ -110,6 +110,24 @@ public sealed class Nv12Cpu : IDisposable
     /// </summary>
     public double UltimoMs { get; private set; }
 
+    /// <summary>
+    /// Las DOS mitades de esa cifra, que no se arreglan igual.
+    ///
+    /// BajarMs = CopyResource + Map + Marshal.Copy. Es sacar la imagen de la
+    /// GPU, y en una maquina sin GPU la "GPU" es WARP, o sea la misma CPU
+    /// emulando una. Si manda esto, vectorizar no sirve de nada y hay que mover
+    /// menos pixeles, no procesarlos mas rapido.
+    ///
+    /// PasarMs = el bucle de BGRA a NV12. Si manda esto, es lo que RustDesk
+    /// resuelve con ARGBToNV12 de libyuv y aqui se resuelve con Vector256.
+    ///
+    /// 52 ms para 737000 pixeles son 70 ns por pixel. Un bucle escalar hace eso
+    /// en 3-5 ns, asi que la sospecha es que casi todo esta en la primera. Pero
+    /// es una sospecha, y hoy las sospechas van 0 de 3.
+    /// </summary>
+    public double BajarMs { get; private set; }
+    public double PasarMs { get; private set; }
+
     public byte[] Convertir(ID3D11Texture2D origen)
     {
         var reloj = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -128,7 +146,13 @@ public sealed class Nv12Cpu : IDisposable
 
             System.Runtime.InteropServices.Marshal.Copy(mapa.DataPointer, _bgra, 0, bytes);
 
+            var bajado = System.Diagnostics.Stopwatch.GetTimestamp();
+            BajarMs = (bajado - reloj) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+
             Convertir(_bgra, (int)mapa.RowPitch, _nv12, AnchoOrigen, AltoOrigen, Ancho, Alto);
+
+            PasarMs = (System.Diagnostics.Stopwatch.GetTimestamp() - bajado) * 1000.0
+                      / System.Diagnostics.Stopwatch.Frequency;
         }
         finally
         {

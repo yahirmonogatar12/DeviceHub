@@ -182,6 +182,8 @@ public sealed class H264Encoder : IVideoEncoder
     /// <summary>Milisegundos de la ultima conversion a NV12 por CPU, o -1 en
     /// hardware, donde la hace la GPU y no cuesta nada medible.</summary>
     public double ConversionMs => _cpu?.UltimoMs ?? -1;
+    public double BajarMs => _cpu?.BajarMs ?? -1;
+    public double PasarMs => _cpu?.PasarMs ?? -1;
     public long Dropped { get; private set; }
 
     /// <summary>Eventos recibidos del MFT por tipo. 601 = pide entrada,
