@@ -40,12 +40,31 @@ if (-not (Test-Path $target)) {
 $staging = Join-Path $env:TEMP "devicehub-pack-$Version"
 Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
 
+# LOS DOS, EN LA MISMA CARPETA. RemoteHost es quien captura la pantalla y
+# codifica: sin el aqui, el zip actualizaba el agente y dejaba el motor remoto
+# en la version que hubiera instalado el instalador. Un arreglo de captura o de
+# codificacion no llegaba NUNCA por esta via, y el sintoma era que la PC decia
+# tener la version nueva y se comportaba como la vieja.
+#
+# Mismo RID, mismo framework y mismo self-contained para los dos, que es la
+# invariante de deploy\publish.ps1: comparten los archivos del runtime, y
+# publicar uno con otra configuracion deja una carpeta con dos apps y un runtime
+# que solo le sirve a una.
 Write-Host "Publicando agente $Version..." -ForegroundColor Cyan
-dotnet publish "$root\src\DeviceHub.Agent" `
-    --configuration Release --runtime win-x64 --self-contained true `
-    -p:Version=$Version --output $staging --nologo
 
-if ($LASTEXITCODE -ne 0) { throw 'Fallo la publicacion' }
+foreach ($proyecto in @('DeviceHub.Agent', 'DeviceHub.RemoteHost')) {
+    dotnet publish "$root\src\$proyecto" `
+        --configuration Release --runtime win-x64 --self-contained true `
+        -p:Version=$Version --output $staging --nologo
+
+    if ($LASTEXITCODE -ne 0) { throw "Fallo la publicacion de $proyecto" }
+}
+
+foreach ($exe in @('DeviceHub.Agent.exe', 'DeviceHub.RemoteHost.exe')) {
+    if (-not (Test-Path (Join-Path $staging $exe))) {
+        throw "$exe no quedo en el paquete"
+    }
+}
 
 # El agente escribe su propia configuracion al instalarse; incluir la del
 # desarrollo sobrescribiria el servidor y el codigo de enrolamiento de cada PC.

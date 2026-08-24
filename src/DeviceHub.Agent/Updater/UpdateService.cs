@@ -190,9 +190,26 @@ public sealed class UpdateService(AgentOptions options, ILogger<UpdateService> l
             Stop-Service $servicio -Force -ErrorAction SilentlyContinue
             Start-Sleep -Seconds 5
 
+            # RemoteHost es OTRO proceso: parar el servicio no lo mata, y su .exe
+            # esta dentro de la carpeta que hay que mover.
+            Get-Process DeviceHub.RemoteHost -ErrorAction SilentlyContinue |
+                Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 1
+
             if (Test-Path $respaldo) { Remove-Item $respaldo -Recurse -Force }
-            Move-Item $instalado $respaldo
-            Move-Item $nuevo $instalado
+
+            # Si el intercambio falla a medias, la PC se queda con el servicio
+            # PARADO y hay que ir fisicamente a levantarla. Se deshace lo que se
+            # llego a hacer y se vuelve a arrancar lo que habia.
+            try {
+                Move-Item $instalado $respaldo
+                Move-Item $nuevo $instalado
+            }
+            catch {
+                if (-not (Test-Path $instalado)) { Move-Item $respaldo $instalado }
+                Start-Service $servicio
+                exit 1
+            }
 
             if (Test-Path $salud) { Remove-Item $salud -Force }
             Start-Service $servicio
