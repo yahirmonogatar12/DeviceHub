@@ -34,6 +34,17 @@ public sealed class Nv12Cpu : IDisposable
     /// donde lo caro es todo lo demas.
     /// </summary>
     private byte[] _bgra = [];
+    private bool _hay;
+
+    /// <summary>
+    /// El ultimo NV12 convertido, o null si todavia no se convirtio ninguno.
+    ///
+    /// Existe para RE-ALIMENTAR el codificador cuando la pantalla no cambia. Un
+    /// MFT por software retiene frames antes de soltar el primero, asi que en la
+    /// consola de un servidor quieto se tragaba dos y no producia nada: no habia
+    /// primer keyframe, y el visor se quedaba en "sin config" para siempre.
+    /// </summary>
+    public byte[]? Ultimo => _hay ? _nv12 : null;
 
     public int Ancho { get; }
     public int Alto { get; }
@@ -99,6 +110,7 @@ public sealed class Nv12Cpu : IDisposable
             contexto.Unmap(_copia, 0);
         }
 
+        _hay = true;
         return _nv12;
     }
 

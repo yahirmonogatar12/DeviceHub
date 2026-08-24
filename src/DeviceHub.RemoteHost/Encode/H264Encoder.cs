@@ -330,6 +330,28 @@ public sealed class H264Encoder : IVideoEncoder
     }
 
     public IReadOnlyList<EncodedFrame> Encode(VideoFrame frame, CancellationToken cancellationToken)
+        => Codificar(frame.TimestampUs, frame.Texture);
+
+    /// <summary>
+    /// Vuelve a codificar el ULTIMO frame, sin capturar nada nuevo.
+    ///
+    /// Es lo que hace RustDesk cuando la captura contesta que no hay imagen
+    /// nueva (su WouldBlock, nuestro WAIT_TIMEOUT): re-alimenta el codificador
+    /// con el ultimo bufer en vez de quedarse esperando. Y por el mismo motivo,
+    /// que es un motivo del codificador y no de la pantalla -- un MFT que
+    /// retiene frames no suelta el primero hasta que le entran varios, asi que
+    /// un escritorio quieto no produce NUNCA una primera imagen.
+    ///
+    /// Solo por la ruta de CPU, tambien igual que ellos: cuando el frame es una
+    /// textura no se repite. Ahi el codificador es de hardware, suelta cada
+    /// frame en cuanto entra, y ademas la superficie DXGI ya se devolvio.
+    ///
+    /// Devuelve vacio si todavia no hay nada que repetir.
+    /// </summary>
+    public IReadOnlyList<EncodedFrame> Repetir(long timestampUs)
+        => _cpu?.Ultimo is null ? [] : Codificar(timestampUs, null);
+
+    private IReadOnlyList<EncodedFrame> Codificar(long timestampUs, ID3D11Texture2D? textura)
     {
         var salidas = new List<EncodedFrame>(1);
 
@@ -347,15 +369,19 @@ public sealed class H264Encoder : IVideoEncoder
         // espera perjudica el caso que importa.
         if (_needInput > 0)
         {
-            _converter?.Convert(frame.Texture);
-            Submit(frame.TimestampUs, frame.Texture);
+            if (textura is not null)
+                _converter?.Convert(textura);
+
+            Submit(timestampUs, textura);
 
             if (_needInput != int.MaxValue)
                 _needInput--;
         }
-        else
+        else if (textura is not null)
         {
             // El codificador no pidio entrada: va por detras de la captura.
+            // Una REPETICION que no entra no es un frame perdido -- no habia
+            // imagen nueva que perder -- asi que esa no se cuenta.
             Dropped++;
         }
 
@@ -368,12 +394,10 @@ public sealed class H264Encoder : IVideoEncoder
         return salidas;
     }
 
-    private void Submit(long timestampUs, ID3D11Texture2D textura)
+    /// <summary>textura null = repetir el ultimo NV12 ya convertido.</summary>
+    private void Submit(long timestampUs, ID3D11Texture2D? textura)
     {
-        using var buffer = _cpu is null
-            ? MediaFactory.MFCreateDXGISurfaceBuffer(
-                typeof(ID3D11Texture2D).GUID, _converter!.Output, 0, false)
-            : EnMemoria(_cpu.Convertir(textura));
+        using var buffer = Entrada(textura);
 
         using var sample = MediaFactory.MFCreateSample();
         sample.AddBuffer(buffer);
@@ -403,6 +427,17 @@ public sealed class H264Encoder : IVideoEncoder
 
         _transform.ProcessInput(0, sample, 0);
         Submitted++;
+    }
+
+    private IMFMediaBuffer Entrada(ID3D11Texture2D? textura)
+    {
+        if (textura is null)
+            return EnMemoria(_cpu!.Ultimo!);
+
+        return _cpu is null
+            ? MediaFactory.MFCreateDXGISurfaceBuffer(
+                typeof(ID3D11Texture2D).GUID, _converter!.Output, 0, false)
+            : EnMemoria(_cpu.Convertir(textura));
     }
 
     /// <summary>

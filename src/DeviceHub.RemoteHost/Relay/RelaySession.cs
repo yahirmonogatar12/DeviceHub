@@ -369,6 +369,14 @@ public static class RelaySession
     /// solo salta cuando el acuse se perdio de verdad.</summary>
     private const int EsperaDeAcuseMs = 1000;
 
+    /// <summary>
+    /// Cuantas veces seguidas se re-alimenta el codificador con el ultimo frame
+    /// cuando la pantalla no cambia. Diez es lo que usa RustDesk, y basta para
+    /// vaciar la tuberia del MFT por software sin encender la CPU de una PC que
+    /// nadie esta tocando.
+    /// </summary>
+    private const int RepeticionesMax = 10;
+
     private static int _bitrateDeseado;
 
     /// <summary>Frames por segundo a los que capturar. Lo decide el hilo de red
@@ -1305,6 +1313,11 @@ public static class RelaySession
             var ultimoCodificado = 0L;
             var bitrateActual = 0;
 
+            // Repeticiones seguidas del ultimo frame, y la marca de tiempo que
+            // se les pone. Ver el bloque de "no hay imagen nueva", mas abajo.
+            var repetidos = 0;
+            var ultimoTimestampUs = 0L;
+
             while (!cancellationToken.IsCancellationRequested)
             {
                 Marcar(ref siguienteFrame, cancellationToken);
@@ -1348,6 +1361,11 @@ public static class RelaySession
                 {
                     flujo.KeyframePedido = false;
                     flujo.Codificador.ForzarKeyframe();
+
+                    // Y se reabre el cupo de repeticiones. Sin esto, un visor
+                    // que entra a una pantalla que lleva horas quieta pide su
+                    // keyframe y no hay nada que se lo lleve al codificador.
+                    repetidos = 0;
 
                     // La config va DELANTE del IDR: si el visor perdio el SPS, un
                     // keyframe suelto no le sirve de nada.
@@ -1443,11 +1461,38 @@ public static class RelaySession
                     continue;
                 }
 
-                using (frame)
+                if (frame is null)
                 {
-                    if (frame is null)
+                    // NO HAY IMAGEN NUEVA. Se re-alimenta el codificador con la
+                    // ultima, un numero acotado de veces.
+                    //
+                    // Es lo que hace RustDesk en su rama de WouldBlock, y por
+                    // el mismo motivo: el que retiene frames es el CODIFICADOR,
+                    // no la pantalla. En la consola de un servidor quieto se
+                    // capturaban dos frames y se codificaban cero -- el MFT por
+                    // software no suelta el primero hasta que le entran varios
+                    // -- asi que no habia primer keyframe y el visor se quedaba
+                    // en "sin config" para siempre.
+                    //
+                    // Acotado porque un escritorio quieto esta SANO: pasado el
+                    // cupo se calla, y no se gasta un Xeon sin GPU codificando
+                    // la misma imagen toda la noche. El cupo se reabre cuando
+                    // la pantalla cambia o cuando alguien pide un keyframe.
+                    if (repetidos >= RepeticionesMax)
                         continue;
 
+                    repetidos++;
+                    ultimoTimestampUs += 1_000_000L / Math.Clamp(
+                        _fpsDeseado, ControlFps.Minimo, ControlFps.Maximo);
+
+                    producidos = flujo.Codificador.Repetir(ultimoTimestampUs);
+
+                    if (producidos.Count == 0)
+                        continue;
+                }
+                else
+                using (frame)
+                {
                     flujo.Tapada = false;
 
                     // SUELO DE IMAGEN: un frame por segundo aunque no cambie nada.
@@ -1476,6 +1521,8 @@ public static class RelaySession
                     ultimoCodificado = ahora;
                     ultimoFrame = Stopwatch.GetTimestamp();
                     flujo.Arranco = true;
+                    repetidos = 0;
+                    ultimoTimestampUs = frame.TimestampUs;
 
                     Interlocked.Increment(ref cuenta.Capturados);
                     producidos = flujo.Codificador.Encode(frame, cancellationToken);
