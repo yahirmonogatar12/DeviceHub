@@ -457,7 +457,13 @@ public sealed class H264Decoder : IDisposable
         foreach (var activate in coleccion)
         {
             var nombre = Attribute(activate, FriendlyName) ?? "(sin nombre)";
-            var hardware = Attribute(activate, HardwareUrl) is not null;
+            // VACIO NO ES HARDWARE. La misma regla que en EncoderProbe del
+            // host, y estaba duplicada con el fallo tambien duplicado: los MFT
+            // por software de Microsoft exponen
+            // MFT_ENUM_HARDWARE_URL_Attribute como cadena VACIA, que no es null,
+            // asi que se declaraban de hardware. Arreglarlo en un lado y no en
+            // el otro deja al visor mintiendo sobre su propio descodificador.
+            var hardware = !string.IsNullOrWhiteSpace(Attribute(activate, HardwareUrl));
 
             IMFTransform? transform = null;
 

@@ -802,7 +802,10 @@ public sealed class H264Encoder : IVideoEncoder
                 $"MFT '{candidato.Name}'  hardware-url " +
                 $"'{Atributo(candidato.Activate, HardwareUrl) ?? "(ninguno)"}'  " +
                 $"LUID pedido {_luidPedido.HighPart:X}:{_luidPedido.LowPart:X}  " +
-                $"asincrono {Flag(transform, TransformAsync)}";
+                $"asincrono {Flag(transform, TransformAsync)}" +
+                (_rechazadas.Count == 0
+                    ? "  sin rechazos"
+                    : $"  RECHAZO {string.Join(", ", _rechazadas)}");
 
             elegido = (transform, candidato.Name, candidato.Hardware);
             return true;
@@ -1033,17 +1036,8 @@ public sealed class H264Encoder : IVideoEncoder
     private void Deprisa(IMFTransform transform)
         => ConCodec(transform, codec =>
         {
-            var api = CalidadContraVelocidad;
-            object rapido = 0u;
-
-            try { codec.SetValue(ref api, ref rapido); }
-            catch (SharpGenException) { }
-
-            api = Hilos;
-            object cuantos = (uint)Math.Clamp(Environment.ProcessorCount / 2, 2, 16);
-
-            try { codec.SetValue(ref api, ref cuantos); }
-            catch (SharpGenException) { }
+            Pedir(codec, CalidadContraVelocidad, 0u, "prisa");
+            Pedir(codec, Hilos, (uint)Math.Clamp(Environment.ProcessorCount / 2, 2, 16), "hilos");
 
             return true;
         });
@@ -1070,6 +1064,31 @@ public sealed class H264Encoder : IVideoEncoder
 
             return true;
         });
+
+    /// <summary>Propiedades que el codificador RECHAZO. Sale en la ficha.</summary>
+    private readonly List<string> _rechazadas = [];
+
+    /// <summary>
+    /// Pide una propiedad y mira si la aceptaron.
+    ///
+    /// SetValue es [PreserveSig]: devuelve un HRESULT y NO lanza. El
+    /// try/catch (SharpGenException) que rodeaba estas llamadas no atrapaba
+    /// nada, y un rechazo pasaba en silencio -- que es como `prisa 33` y el
+    /// keyframe forzado acabaron ignorados sin que constara en ningun sitio.
+    ///
+    /// Un rechazo no es motivo para tirar el codificador: se sigue con lo que
+    /// haya, pero queda escrito.
+    /// </summary>
+    private bool Pedir(ICodecAPI codec, Guid propiedad, object valor, string nombre)
+    {
+        var api = propiedad;
+        var hr = codec.SetValue(ref api, ref valor);
+
+        if (hr < 0)
+            _rechazadas.Add($"{nombre} 0x{hr:X8}");
+
+        return hr >= 0;
+    }
 
     private static int Leido(ICodecAPI codec, Guid propiedad)
     {
@@ -1108,15 +1127,9 @@ public sealed class H264Encoder : IVideoEncoder
     private void SinReordenar(IMFTransform transform)
         => ConCodec(transform, codec =>
         {
-            var api = BajaLatencia;
-            object si = true;
+            Pedir(codec, BajaLatencia, true, "baja latencia");
 
-            codec.SetValue(ref api, ref si);
-
-            api = CuantasB;
-            object cero = 0u;
-
-            codec.SetValue(ref api, ref cero);
+            Pedir(codec, CuantasB, 0u, "B-frames");
 
             // NADA DE KEYFRAMES PERIODICOS CADA SEGUNDO.
             //
@@ -1136,11 +1149,7 @@ public sealed class H264Encoder : IVideoEncoder
             // Treinta segundos y no "nunca" porque un IDR periodico sigue
             // siendo la red de seguridad si una peticion se pierde. A treinta
             // segundos cuesta lo que costaba uno de cada veintitres.
-            api = TamanoGop;
-            object gop = (uint)Math.Max(Fps * 30, 1);
-
-            try { codec.SetValue(ref api, ref gop); }
-            catch (SharpGenException) { }
+            Pedir(codec, TamanoGop, (uint)Math.Max(Fps * 30, 1), "GOP");
 
             return true;
         });

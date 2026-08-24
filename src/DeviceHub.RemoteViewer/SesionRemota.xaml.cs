@@ -457,6 +457,13 @@ public partial class SesionRemota : UserControl
         // suba, no su valor.
         var perdidasVistas = new Dictionary<uint, long>();
 
+        // Marca de tiempo de captura -> id de frame, por pantalla. Ocho huecos
+        // en circulo: sirve para saber a QUE frame corresponde cada imagen que
+        // devuelve el descodificador, que no tiene por que ser la del ultimo
+        // que entro.
+        var deQuienEs = new System.Collections.Concurrent.ConcurrentDictionary<uint, long[,]>();
+        var siguienteHueco = new System.Collections.Concurrent.ConcurrentDictionary<uint, int>();
+
         // LAS MEDIDAS SON DE AHORA, LOS CONTADORES SON DE LA SESION.
         //
         // Un contador -- frames, chunks, perdidas -- cuenta desde el principio y
@@ -713,6 +720,27 @@ public partial class SesionRemota : UserControl
                         if (resultado.Aceptada)
                         {
                             Acusar(pantalla, completo!.FrameId);
+
+                            // De que frame es cada imagen que salga.
+                            //
+                            // El acuse de PINTADO usaba completo.FrameId, o sea
+                            // el ultimo frame que ENTRO, y un descodificador no
+                            // devuelve necesariamente la imagen del que le acabas
+                            // de dar: puede sacar la anterior. Cuando eso pasaba,
+                            // `verse` se le adjudicaba al frame equivocado y el
+                            // numero que mide lo unico que el tecnico ve de
+                            // verdad medía otra cosa.
+                            //
+                            // La marca de tiempo de captura viaja con el chunk y
+                            // vuelve en la muestra descodificada, asi que sirve
+                            // de identificador. Ocho huecos por pantalla: el
+                            // reordenamiento que puede haber aqui es de uno o dos
+                            // frames, no de ocho.
+                            var deQuien = deQuienEs.GetOrAdd(pantalla, _ => new long[8, 2]);
+                            var hueco = siguienteHueco.AddOrUpdate(pantalla, 0, (_, v) => (v + 1) % 8);
+
+                            deQuien[hueco, 0] = completo.CaptureTimestampUs;
+                            deQuien[hueco, 1] = (long)completo.FrameId;
                         }
                         else
                         {
@@ -753,7 +781,12 @@ public partial class SesionRemota : UserControl
                                 // el, el host puede medir lo que tarda un frame
                                 // en llegar a la pantalla del tecnico, que es lo
                                 // unico que el usuario ve de verdad.
-                                Acusar(pantalla, completo.FrameId, pintado: true);
+                                // El id de la imagen QUE SE ACABA DE PINTAR, no
+                                // el del ultimo que entro. Si no se reconoce, no
+                                // se acusa: un `verse` que falta es un hueco, y
+                                // uno mal atribuido es un numero falso.
+                                if (DeQuienEsLaImagen(deQuienEs, pantalla, imagen.TimestampUs) is { } suyo)
+                                    Acusar(pantalla, suyo, pintado: true);
                                 ritmo.Marcar(reloj.Elapsed.TotalSeconds);
 
                                 if (captura is not null)
@@ -2014,6 +2047,26 @@ public partial class SesionRemota : UserControl
     /// acuse por frame convertiria esa cifra -- que sirve para saber si el
     /// teclado y el raton estan viajando -- en ruido.
     /// </summary>
+    /// <summary>
+    /// A que frame corresponde una imagen descodificada, por su marca de tiempo
+    /// de captura. Null si ya no se recuerda.
+    /// </summary>
+    private static ulong? DeQuienEsLaImagen(
+        System.Collections.Concurrent.ConcurrentDictionary<uint, long[,]> tabla,
+        uint pantalla, long timestampUs)
+    {
+        if (!tabla.TryGetValue(pantalla, out var huecos))
+            return null;
+
+        for (var i = 0; i < huecos.GetLength(0); i++)
+        {
+            if (huecos[i, 0] == timestampUs && huecos[i, 1] != 0)
+                return (ulong)huecos[i, 1];
+        }
+
+        return null;
+    }
+
     private void Acusar(uint pantalla, ulong frame, bool pintado = false)
     {
         var ok = _salida.Encolar(new RemotePacket
