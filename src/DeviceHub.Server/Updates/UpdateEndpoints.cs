@@ -39,9 +39,18 @@ public static class UpdateEndpoints
             if (!ruta.StartsWith(completa + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 return Results.NotFound();
 
-            return File.Exists(ruta)
-                ? Results.File(ruta, "application/octet-stream")
-                : Results.NotFound();
+            if (!File.Exists(ruta))
+                return Results.NotFound();
+
+            // El manifiesto como JSON y no como flujo de bytes: la primera
+            // pregunta cuando una PC no se actualiza es "que anuncia el
+            // servidor", y con octet-stream el navegador lo descarga en vez de
+            // enseñarlo.
+            var tipo = ruta.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
+                ? "application/json"
+                : "application/octet-stream";
+
+            return Results.File(ruta, tipo);
         }).AllowAnonymous();
 
         app.Logger.LogInformation("Actualizaciones del agente servidas desde {Ruta}", completa);

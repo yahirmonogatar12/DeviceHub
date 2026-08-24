@@ -154,21 +154,40 @@ if ($estado -ne 'Running') {
 # estaba al terminar para no dejar la sesion aceptando cualquier certificado.
 $antes = [Net.ServicePointManager]::ServerCertificateValidationCallback
 
+$url = 'https://localhost:5443/updates/production/update.json'
+
+# Antes que la red, lo que si es concluyente: que el manifiesto este donde
+# UpdatesPath dice. Si esto falla, no hay nada que servir y da igual el resto.
+$manifiesto = Join-Path $UpdatesPath 'production\update.json'
+
+if (Test-Path $manifiesto) {
+    Write-Host ""
+    Write-Host "Manifiesto encontrado en $manifiesto" -ForegroundColor Green
+    Write-Host (Get-Content $manifiesto -Raw)
+} else {
+    Write-Host ""
+    Write-Host "NO existe $manifiesto" -ForegroundColor Red
+    Write-Host "UpdatesPath tiene que apuntar a la carpeta que CONTIENE production\." -ForegroundColor Yellow
+}
+
 try {
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    [Net.ServicePointManager]::SecurityProtocol =
+        [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11
     [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 
-    $r = Invoke-WebRequest 'https://localhost:5443/updates/production/update.json' `
-        -UseBasicParsing -TimeoutSec 15
-
-    Write-Host ""
-    Write-Host "Actualizaciones servidas por el 5443:" -ForegroundColor Green
-    Write-Host $r.Content
+    $r = Invoke-WebRequest $url -UseBasicParsing -TimeoutSec 15
+    Write-Host "El 5443 lo sirve: HTTP $($r.StatusCode)" -ForegroundColor Green
 }
 catch {
+    # NO es prueba de que este roto. Windows PowerShell 5.1 usa la pila TLS de
+    # .NET Framework y se atraganta con Kestrel por motivos suyos, con un
+    # "unexpected error occurred on a send" que no dice nada. El agente usa otra
+    # pila entera y no le pasa.
     Write-Host ""
-    Write-Host "El endpoint de actualizaciones no contesta: $_" -ForegroundColor Red
-    Write-Host "Revisa que UpdatesPath apunte a la carpeta que contiene production\update.json"
+    Write-Host "No se pudo comprobar desde aqui: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "Eso NO significa que este roto: es la pila TLS de PowerShell 5.1." -ForegroundColor Yellow
+    Write-Host "Abre esta URL en un navegador para verlo de verdad:" -ForegroundColor Yellow
+    Write-Host "  https://192.168.1.10:5443/updates/production/update.json"
 }
 finally {
     [Net.ServicePointManager]::ServerCertificateValidationCallback = $antes
