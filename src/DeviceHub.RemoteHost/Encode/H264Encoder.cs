@@ -145,6 +145,8 @@ public sealed class H264Encoder : IVideoEncoder
                 width, height);
         }
 
+        _luidPedido = adapterLuid;
+
         var (transform, nombre, hardware) = Select(adapterLuid, vendorId);
         _transform = transform;
 
@@ -178,6 +180,24 @@ public sealed class H264Encoder : IVideoEncoder
     /// en la GPU. Lo que distingue a estas maquinas es que no tienen NI eso.
     /// </summary>
     public bool PorCpu => _cpu is not null;
+
+    /// <summary>Nombre, hardware-url, LUID y asincronia del MFT elegido, en una
+    /// linea. Se escribe una vez al abrir la sesion.</summary>
+    public string Ficha { get; private set; } = "?";
+
+    private Vortice.Luid _luidPedido;
+
+    private static string? Atributo(IMFActivate activate, Guid clave)
+    {
+        try
+        {
+            return activate.GetString(clave);
+        }
+        catch (SharpGenException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>Milisegundos de la ultima conversion a NV12 por CPU, o -1 en
     /// hardware, donde la hace la GPU y no cuesta nada medible.</summary>
@@ -749,6 +769,20 @@ public sealed class H264Encoder : IVideoEncoder
             }
 
             Configure(transform, Ancho, Alto, Fps, Bits);
+
+            // LA FICHA DEL CODIFICADOR ELEGIDO, entera y de una vez.
+            //
+            // En ILSANSERVER la linea de medidas dice "HW H264 Encoder MFT", y
+            // ese nombre es el del codificador POR SOFTWARE de Microsoft. La
+            // deteccion no va por el nombre -- va por si el IMFActivate expone
+            // MFT_ENUM_HARDWARE_URL_Attribute -- asi que antes de declarar que
+            // miente hay que ver los cuatro datos juntos. Si esa etiqueta es
+            // falsa importa: cualquier politica automatica que decida "hardware
+            // si, software no" estaria decidiendo con informacion equivocada.
+            Ficha =
+                $"MFT '{candidato.Name}'  hardware-url {Atributo(candidato.Activate, HardwareUrl) ?? "(ninguno)"}  " +
+                $"LUID pedido {_luidPedido.HighPart:X}:{_luidPedido.LowPart:X}  " +
+                $"asincrono {Flag(transform, TransformAsync)}";
 
             elegido = (transform, candidato.Name, candidato.Hardware);
             return true;

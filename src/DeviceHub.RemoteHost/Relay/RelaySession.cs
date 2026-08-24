@@ -1151,6 +1151,14 @@ public static class RelaySession
         _porHardware = flujos[0].Codificador.Capabilities.Hardware;
         _codificadorNombre = flujos[0].Codificador.Capabilities.Name;
 
+        // Y la ficha entera al log, UNA vez. Aqui y no en la linea de medidas
+        // porque no cambia: es la identidad del codificador, no una medida.
+        foreach (var flujo in flujos)
+        {
+            if (flujo.Codificador is H264Encoder ficha)
+                opciones.Escribir($"Pantalla {flujo.DisplayId}: {ficha.Ficha}");
+        }
+
         // COMO QUIEN CORRE, en la linea que el tecnico si mira.
         //
         // Decide mas de lo que parece: SendInput no entra en una ventana
@@ -1734,7 +1742,7 @@ public static class RelaySession
                         }
 
                         flujo.ConfigEnviada = true;
-                        flujo.ConfigAlgunaVez = true;
+                        flujo.ConfigConocida = flujo.Version;
 
                         config = new VideoConfig
                         {
@@ -1771,7 +1779,7 @@ public static class RelaySession
                     // puede seguir descodificando. Solo hace falta esperar
                     // cuando no la ha tenido NUNCA -- primera conexion o cambio
                     // de resolucion, que estrena version.
-                    if (!flujo.ConfigEnviada && !flujo.ConfigAlgunaVez)
+                    if (!flujo.ConfigEnviada && !flujo.ElVisorSabeDescodificar)
                     {
                         Interlocked.Increment(ref cuenta.SinConfig);
                         continue;
@@ -1995,12 +2003,22 @@ public static class RelaySession
         public bool ConfigEnviada { get; set; }
 
         /// <summary>
-        /// Si el visor llego a recibir la configuracion alguna vez en esta
-        /// version. Distinto de ConfigEnviada, que se apaga con cada peticion de
-        /// keyframe: quien ya tiene el SPS no lo pierde porque alguien pida un
-        /// IDR, y hacerle esperar tira frames perfectamente utiles.
+        /// La VERSION cuya configuracion llego a recibir el visor, o 0 si
+        /// ninguna. Los dos conceptos que se habian confundido son:
+        ///
+        ///     ConfigEnviada    la config acompaña a este frame
+        ///     ConfigConocida   el visor tiene el SPS/PPS de ESTA version
+        ///
+        /// Pedir un keyframe no invalida un SPS. Cambiar de resolucion si, y eso
+        /// estrena version -- por eso se guarda el numero y no un booleano: con
+        /// un booleano hay que acordarse de apagarlo en cada sitio donde nace
+        /// una version nueva, y olvidarlo no da error, da imagen corrupta.
+        /// En H.265 vale igual, con VPS delante.
         /// </summary>
-        public bool ConfigAlgunaVez { get; set; }
+        public uint ConfigConocida { get; set; }
+
+        /// <summary>El visor puede descodificar lo que se le mande ahora mismo.</summary>
+        public bool ElVisorSabeDescodificar => ConfigConocida == Version;
 
         /// <summary>Lo pide el hilo de red y lo atiende la bomba de ESTA
         /// pantalla, que es la unica dueña de su codificador.</summary>
@@ -2299,9 +2317,10 @@ public static class RelaySession
             flujo.Version = SiguienteVersion(cuenta);
             flujo.ConfigEnviada = false;
 
-            // Y ESTA SI: una version nueva significa que el SPS que tiene el
-            // visor descodifica otra cosa. Aqui esperar es correcto.
-            flujo.ConfigAlgunaVez = false;
+            // ConfigConocida NO se toca: al estrenar version deja de coincidir
+            // sola, que es justo lo que se queria. Una version nueva significa
+            // que el SPS que tiene el visor descodifica otra cosa, y ahi esperar
+            // es correcto.
 
             anteriorCodificador.Dispose();
             anterior.Dispose();
