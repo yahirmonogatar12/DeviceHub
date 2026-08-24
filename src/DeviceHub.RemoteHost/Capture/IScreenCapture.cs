@@ -48,6 +48,20 @@ public interface IScreenCapture : IDisposable
     /// <summary>Veces que AcquireNextFrame expiro sin novedades en pantalla.</summary>
     long Timeouts { get; }
 
+    /// <summary>
+    /// Cuanto espera la captura a que haya algo, en milisegundos.
+    ///
+    /// ES EL RITMO, no un detalle. Es lo que hace RustDesk: le pasan a su
+    /// captura la duracion de un frame como tiempo de espera y, cuando vuelve,
+    /// duermen solo lo que sobro. Asi la vuelta termina en el instante en que
+    /// hay imagen nueva.
+    ///
+    /// Nosotros esperabamos 100 ms fijos ADEMAS de dormir hasta la siguiente
+    /// ranura de 30 fps, o sea que pagabamos las dos cosas: un cambio que
+    /// ocurria durante ese sueño se quedaba esperando a que terminara.
+    /// </summary>
+    int EsperaMs { get; set; }
+
     /// <summary>Veces que hubo que recrear el duplicador por DXGI_ERROR_ACCESS_LOST.</summary>
     long AccessLostRecoveries { get; }
 

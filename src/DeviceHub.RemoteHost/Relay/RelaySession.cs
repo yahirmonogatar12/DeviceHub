@@ -378,6 +378,17 @@ public static class RelaySession
     /// </summary>
     private static readonly MedidorRetraso _codificar = new();
 
+    /// <summary>
+    /// Lo que tarda la captura en devolver algo, incluida su espera.
+    ///
+    /// Con el ritmo puesto en esa espera, este numero LEE el estado de la
+    /// pantalla: cerca del intervalo de frame significa que casi siempre expira
+    /// -- nada cambia -- y cerca de cero significa que hay imagen nueva
+    /// esperando en cada vuelta. Sin el, "1.5 FPS" no distingue una pantalla
+    /// quieta de una tuberia atascada, que es la duda que costo la tarde.
+    /// </summary>
+    private static readonly MedidorRetraso _capturar = new();
+
     /// <summary>Cuanto se espera un acuse antes de seguir sin el. RustDesk usa
     /// 3 s; aqui menos, porque su espera se corta en cuanto llegan todos y esta
     /// solo salta cuando el acuse se perdio de verdad.</summary>
@@ -571,8 +582,10 @@ public static class RelaySession
                         $"acuses {(_visorAcusa ? "si" : "no")}/{cuenta.AcusesPerdidos} perdidos  " +
                         $"red {_retraso.Base:0.0} ms + cola {_retraso.Encolado:0.0} ms  " +
                         $"verse {_verse.Ultimo:0.0} ms (min {_verse.Base:0.0})  " +
+                        $"capturar p50 {_capturar.Percentil(0.50):0.0} ms  " +
                         $"codificar p50 {_codificar.Percentil(0.50):0.0} ms " +
                         $"p95 {_codificar.Percentil(0.95):0.0} ms  " +
+                        $"espera {_esperaCaptura} ms  timeouts {_timeouts}  " +
                         $"fps {_fpsDeseado}  B-frames {Bes()}  " +
                         (_hilos >= 0 || _prisa >= 0
                             ? $"hilos {_hilos}  prisa {_prisa}  "
@@ -1031,6 +1044,9 @@ public static class RelaySession
         {
             c.DescartesEncoder = flujos.Sum(f => f.Codificador.Dropped);
             c.DescartesCaptura = flujos.Sum(f => f.Captura.Dropped);
+
+            _timeouts = flujos.Sum(f => f.Captura.Timeouts);
+            _esperaCaptura = flujos[0].Captura.EsperaMs;
         };
 
         _mostrado = (pantalla, frame) =>
@@ -1327,7 +1343,6 @@ public static class RelaySession
     {
         try
         {
-            var siguienteFrame = Stopwatch.GetTimestamp();
             var ultimoFrame = Stopwatch.GetTimestamp();
 
             // Cuando se codifico algo por ultima vez, para el suelo de imagen.
@@ -1341,7 +1356,28 @@ public static class RelaySession
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                Marcar(ref siguienteFrame, cancellationToken);
+                // EL RITMO LO MARCA LA ESPERA DE LA CAPTURA, NO UN SUEÑO PREVIO.
+                //
+                // Es como lo hace RustDesk: le pasan a su captura la duracion de
+                // un frame como tiempo de espera, y cuando vuelve duermen solo lo
+                // que sobro. La vuelta termina en el INSTANTE en que hay imagen
+                // nueva.
+                //
+                // Antes aqui se dormia hasta la siguiente ranura de 30 fps Y
+                // ADEMAS se esperaba 100 ms en AcquireNextFrame: las dos cosas.
+                // Un cambio que ocurria durante el sueño se quedaba esperando a
+                // que terminara, y despues aun podia caer en una espera de 100
+                // ms. Hasta 133 ms de retraso en cada interaccion, y ninguno de
+                // ellos salia en las medidas porque todas empiezan a contar
+                // despues.
+                var vuelta = Stopwatch.GetTimestamp();
+                var intervalo = Stopwatch.Frequency /
+                    Math.Clamp(_fpsDeseado, ControlFps.Minimo, ControlFps.Maximo);
+
+                flujo.Captura.EsperaMs = (int)Math.Max(1, intervalo * 1000 / Stopwatch.Frequency);
+
+                try
+                {
 
                 // El CURSOR, antes de decidir si hay imagen nueva. Mover el raton
                 // no cambia el escritorio, asi que ese frame se descarta -- y con
@@ -1451,6 +1487,8 @@ public static class RelaySession
                 // se reintenta. Un dialogo delante es un estado pasajero.
                 VideoFrame? frame;
 
+                var antesDeCapturar = Stopwatch.GetTimestamp();
+
                 try
                 {
                     frame = flujo.Captura.CaptureAsync(cancellationToken).GetAwaiter().GetResult();
@@ -1481,6 +1519,9 @@ public static class RelaySession
                     cancellationToken.WaitHandle.WaitOne(250);
                     continue;
                 }
+
+                _capturar.Anotar(
+                    (Stopwatch.GetTimestamp() - antesDeCapturar) * 1000.0 / Stopwatch.Frequency);
 
                 if (frame is null)
                 {
@@ -1658,6 +1699,20 @@ public static class RelaySession
                     if (frenar && !flujo.Acuse.Wait(EsperaDeAcuseMs, cancellationToken))
                         Interlocked.Increment(ref cuenta.AcusesPerdidos);
                 }
+                }
+                finally
+                {
+                    // SOLO LO QUE SOBRO, y en un finally porque este bucle sale
+                    // por `continue` en una docena de sitios. Si la vuelta ya
+                    // costo un intervalo entero -- porque la espera de la
+                    // captura se agoto, o porque codificar tardo -- no se duerme
+                    // nada y la siguiente empieza en el acto.
+                    var falta = intervalo - (Stopwatch.GetTimestamp() - vuelta);
+
+                    if (falta > 0)
+                        cancellationToken.WaitHandle.WaitOne(
+                            (int)(falta * 1000 / Stopwatch.Frequency));
+                }
             }
         }
         catch (OperationCanceledException)
@@ -1700,16 +1755,6 @@ public static class RelaySession
         }
     }
 
-    private static void Marcar(ref long siguiente, CancellationToken cancellationToken)
-    {
-        var intervalo = Stopwatch.Frequency / Math.Clamp(_fpsDeseado, ControlFps.Minimo, ControlFps.Maximo);
-        var falta = siguiente - Stopwatch.GetTimestamp();
-
-        if (falta > 0)
-            cancellationToken.WaitHandle.WaitOne((int)(falta * 1000 / Stopwatch.Frequency));
-
-        siguiente = Math.Max(siguiente + intervalo, Stopwatch.GetTimestamp());
-    }
 
     /// <summary>
     /// Cuenta algo AL TECNICO, no solo al log de la maquina.
@@ -2204,6 +2249,12 @@ public static class RelaySession
     /// -1 = no contesta, y en hardware es lo normal: ahi no significan nada.
     /// </summary>
     private static int _hilos = -1, _prisa = -1;
+
+    /// <summary>Esperas de la captura que expiraron sin novedades, y cuanto se
+    /// espera en cada una. Van juntos: 900 timeouts con 33 ms de espera son
+    /// treinta segundos de pantalla quieta, y con 100 ms serian noventa.</summary>
+    private static long _timeouts;
+    private static int _esperaCaptura;
 
     /// <summary>Si el host corre como SYSTEM. Sin eso, la entrada no entra en
     /// ventanas elevadas.</summary>

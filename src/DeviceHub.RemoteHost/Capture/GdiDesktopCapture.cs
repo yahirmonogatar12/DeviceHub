@@ -105,6 +105,10 @@ public sealed class GdiDesktopCapture : IScreenCapture
     public int DesktopTop => _origenY;
 
     public long Timeouts { get; private set; }
+
+    /// <summary>GDI no espera a nada: copia lo que hay cuando se le pide. La
+    /// propiedad existe para cumplir el contrato y no hace nada.</summary>
+    public int EsperaMs { get; set; }
     public long AccessLostRecoveries { get; private set; }
     public long ResolutionChanges => 0;
     public long Dropped => 0;

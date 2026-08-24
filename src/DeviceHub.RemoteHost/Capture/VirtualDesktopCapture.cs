@@ -82,6 +82,14 @@ public sealed class VirtualDesktopCapture : IScreenCapture
     public int DesktopTop { get; private set; }
 
     public long Timeouts { get; private set; }
+
+    /// <summary>
+    /// Se reparte a las duplicaciones de dentro. Aqui no se puede bloquear en
+    /// una sola pantalla -- esperar en el monitor 1 dejaria el 2 a 10 FPS
+    /// aunque fuera el unico moviendose -- asi que se sondean todas sin espera
+    /// y el descanso va al final.
+    /// </summary>
+    public int EsperaMs { get; set; }
     public long AccessLostRecoveries { get; private set; }
     public long ResolutionChanges { get; private set; }
     public long Dropped { get; private set; }
