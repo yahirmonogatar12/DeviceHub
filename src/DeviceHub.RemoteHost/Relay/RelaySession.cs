@@ -481,6 +481,21 @@ public static class RelaySession
         public long Capturados, Codificados, Claves, Enviados, Trozos, Bytes;
         public long DescartesEncoder, DescartesCaptura;
 
+        /// <summary>
+        /// LAS FRONTERAS ENTRE CODIFICAR Y ESCRIBIR EN EL CABLE.
+        ///
+        /// Existen porque "codificados 1172, enviados 278" no decia donde se
+        /// iban los 894 del medio. Tienen que cerrar esta identidad:
+        ///
+        ///     Codificados = SinParametros + SinConfig + Encolados
+        ///     Encolados   = Sacados + lo que quede en la cola
+        ///     Sacados     = Enviados
+        ///
+        /// Si alguna no cierra, el agujero esta entre esos dos contadores y no
+        /// hay que buscarlo en ningun otro sitio.
+        /// </summary>
+        public long SinParametros, SinConfig, Encolados, Sacados;
+
         /// <summary>Frames que salieron y nadie confirmo en EsperaDeAcuseMs. Si
         /// esto sube, el visor no esta siguiendo el ritmo.</summary>
         public long AcusesPerdidos;
@@ -575,6 +590,8 @@ public static class RelaySession
 
                 if (pieza.Grupo is not null)
                 {
+                    Interlocked.Increment(ref cuenta.Sacados);
+
                     foreach (var trozo in pieza.Grupo.Chunks)
                     {
                         await EscribirAsync(llamada, new RemotePacket
@@ -620,6 +637,8 @@ public static class RelaySession
                         $"{(int)reloj.Elapsed.TotalHours:00}:{reloj.Elapsed:mm\\:ss}  " +
                         $"capturados {cuenta.Capturados}  codificados {cuenta.Codificados}  " +
                         $"frames enviados {cuenta.Enviados}  chunks {cuenta.Trozos}  " +
+                        $"sin(param {cuenta.SinParametros}/config {cuenta.SinConfig})  " +
+                        $"encolados {cuenta.Encolados}  sacados {cuenta.Sacados}  " +
                         $"{cuenta.Bytes * 8 / reloj.Elapsed.TotalSeconds / 1_000_000:0.00} Mbps  " +
                         $"keyframes {cuenta.Claves}  config {cuenta.ConfigVersion}  cola {enCola}  " +
                         $"acuses {(_visorAcusa ? "si" : "no")}/{cuenta.AcusesPerdidos} perdidos  " +
@@ -1709,9 +1728,13 @@ public static class RelaySession
                             frameCodificado.Payload, flujo.Codificador.Codec == VideoCodec.H265);
 
                         if (parametros.Length == 0)
+                        {
+                            Interlocked.Increment(ref cuenta.SinParametros);
                             continue;   // todavia no; el siguiente IDR los traera
+                        }
 
                         flujo.ConfigEnviada = true;
+                        flujo.ConfigAlgunaVez = true;
 
                         config = new VideoConfig
                         {
@@ -1733,8 +1756,26 @@ public static class RelaySession
                         };
                     }
 
-                    if (!flujo.ConfigEnviada)
-                        continue;   // sin configuracion no hay nada descodificable
+                    // SIN CONFIGURACION NO HAY NADA DESCODIFICABLE... LA PRIMERA VEZ.
+                    //
+                    // Aqui estaban los 894 frames que faltaban. ConfigEnviada se
+                    // pone en false CADA VEZ que alguien pide un keyframe, y
+                    // mientras este en false este continue tira todo. Antes eso
+                    // costaba segundo y medio porque el MFT emitia un IDR cada
+                    // treinta frames; con gop 900 -- puesto esta misma tarde para
+                    // ahorrar ancho de banda -- pasa a costar medio minuto, y en
+                    // esta maquina ForzarKeyframe() ni siquiera se respeta.
+                    //
+                    // Pero un visor que YA recibio la configuracion no la ha
+                    // perdido porque alguien pida un IDR: tiene su SPS/PPS y
+                    // puede seguir descodificando. Solo hace falta esperar
+                    // cuando no la ha tenido NUNCA -- primera conexion o cambio
+                    // de resolucion, que estrena version.
+                    if (!flujo.ConfigEnviada && !flujo.ConfigAlgunaVez)
+                    {
+                        Interlocked.Increment(ref cuenta.SinConfig);
+                        continue;
+                    }
 
                     // El numero de frame es de la SESION y lo comparten los
                     // hilos: los reensambladores descartan como atrasado todo id
@@ -1769,6 +1810,8 @@ public static class RelaySession
 
                     salida.WriteAsync(new Enviable(config, grupo), cancellationToken)
                         .AsTask().GetAwaiter().GetResult();
+
+                    Interlocked.Increment(ref cuenta.Encolados);
 
                     // Y aqui se espera. Parece que frena y hace lo contrario:
                     // sin esto caben doce frames entre la cola del host y la del
@@ -1950,6 +1993,14 @@ public static class RelaySession
         public bool Tapada { get; set; }
 
         public bool ConfigEnviada { get; set; }
+
+        /// <summary>
+        /// Si el visor llego a recibir la configuracion alguna vez en esta
+        /// version. Distinto de ConfigEnviada, que se apaga con cada peticion de
+        /// keyframe: quien ya tiene el SPS no lo pierde porque alguien pida un
+        /// IDR, y hacerle esperar tira frames perfectamente utiles.
+        /// </summary>
+        public bool ConfigAlgunaVez { get; set; }
 
         /// <summary>Lo pide el hilo de red y lo atiende la bomba de ESTA
         /// pantalla, que es la unica dueña de su codificador.</summary>
@@ -2247,6 +2298,10 @@ public static class RelaySession
             flujo.Codificador = codificador;
             flujo.Version = SiguienteVersion(cuenta);
             flujo.ConfigEnviada = false;
+
+            // Y ESTA SI: una version nueva significa que el SPS que tiene el
+            // visor descodifica otra cosa. Aqui esperar es correcto.
+            flujo.ConfigAlgunaVez = false;
 
             anteriorCodificador.Dispose();
             anterior.Dispose();
