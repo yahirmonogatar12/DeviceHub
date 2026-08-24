@@ -34,20 +34,29 @@ public sealed class UpdateService(AgentOptions options, ILogger<UpdateService> l
     public bool TryCheckAndStage(Version currentVersion)
     {
         if (string.IsNullOrWhiteSpace(options.UpdateShare))
+        {
+            // Estos dos returns no registraban NADA -- ni siquiera Debug -- asi
+            // que una PC sin recurso configurado y una al dia eran
+            // indistinguibles desde fuera. Costo una tarde averiguarlo.
+            logger.LogWarning("Sin recurso de actualizacion configurado (UpdateShare vacio)");
             return false;
+        }
 
         try
         {
             var manifestPath = Path.Combine(options.UpdateShare, ManifestFile);
 
             if (!File.Exists(manifestPath))
+            {
+                logger.LogWarning("No se pudo leer {Manifest} del recurso", manifestPath);
                 return false;
+            }
 
             var manifest = UpdateManifest.Parse(File.ReadAllText(manifestPath));
 
             if (!UpdateDecision.ShouldApply(currentVersion, manifest, out var reason))
             {
-                logger.LogDebug("Sin actualizacion: {Reason}", reason);
+                logger.LogInformation("Sin actualizacion: {Reason}", reason);
                 return false;
             }
 
@@ -204,6 +213,19 @@ public sealed class UpdateService(AgentOptions options, ILogger<UpdateService> l
             try {
                 Move-Item $instalado $respaldo
                 Move-Item $nuevo $instalado
+
+                # LA CONFIGURACION ES DE ESTA PC, y el paquete no la trae a
+                # proposito: publish-update.ps1 la quita para no pisar el
+                # servidor ni el codigo de enrolamiento de cada maquina.
+                #
+                # Pero el intercambio reemplaza la carpeta ENTERA, asi que no
+                # traerla no la preserva: la BORRA. El agente arrancaba con los
+                # valores por defecto, y UpdateShare por defecto esta vacio --
+                # o sea que la primera actualizacion que se aplicaba era tambien
+                # la ultima, y el boton de actualizar contestaba "sin novedades"
+                # porque no llegaba ni a mirar el recurso.
+                $config = Join-Path $respaldo 'appsettings.json'
+                if (Test-Path $config) { Copy-Item $config $instalado -Force }
             }
             catch {
                 if (-not (Test-Path $instalado)) { Move-Item $respaldo $instalado }
