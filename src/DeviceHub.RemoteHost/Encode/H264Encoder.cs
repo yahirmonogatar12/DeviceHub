@@ -178,6 +178,10 @@ public sealed class H264Encoder : IVideoEncoder
     /// en la GPU. Lo que distingue a estas maquinas es que no tienen NI eso.
     /// </summary>
     public bool PorCpu => _cpu is not null;
+
+    /// <summary>Milisegundos de la ultima conversion a NV12 por CPU, o -1 en
+    /// hardware, donde la hace la GPU y no cuesta nada medible.</summary>
+    public double ConversionMs => _cpu?.UltimoMs ?? -1;
     public long Dropped { get; private set; }
 
     /// <summary>Eventos recibidos del MFT por tipo. 601 = pide entrada,

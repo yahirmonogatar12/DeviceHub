@@ -389,6 +389,16 @@ public static class RelaySession
     /// </summary>
     private static readonly MedidorRetraso _capturar = new();
 
+    /// <summary>
+    /// La mitad de "codificar" que es codigo NUESTRO: bajar la textura de la GPU
+    /// y pasarla a NV12. La otra mitad es el MFT, que no se puede tocar.
+    ///
+    /// RustDesk hace esta misma conversion con ARGBToNV12 de libyuv, SIMD
+    /// escrito a mano. La nuestra es un bucle escalar pixel a pixel. Este numero
+    /// dice si esa diferencia importa aqui o si el trabajo esta en otro sitio.
+    /// </summary>
+    private static readonly MedidorRetraso _convertir = new();
+
     /// <summary>Cuanto se espera un acuse antes de seguir sin el. RustDesk usa
     /// 3 s; aqui menos, porque su espera se corta en cuanto llegan todos y esta
     /// solo salta cuando el acuse se perdio de verdad.</summary>
@@ -585,6 +595,9 @@ public static class RelaySession
                         $"capturar p50 {_capturar.Percentil(0.50):0.0} ms  " +
                         $"codificar p50 {_codificar.Percentil(0.50):0.0} ms " +
                         $"p95 {_codificar.Percentil(0.95):0.0} ms  " +
+                        (_convertir.Ultimo >= 0
+                            ? $"(convertir {_convertir.Percentil(0.50):0.0} ms)  "
+                            : "") +
                         $"espera {_esperaCaptura} ms  timeouts {_timeouts}  gop {_gop}  " +
                         $"fps {_fpsDeseado}  B-frames {Bes()}  " +
                         (_hilos >= 0 || _prisa >= 0
@@ -1045,6 +1058,9 @@ public static class RelaySession
         {
             c.DescartesEncoder = flujos.Sum(f => f.Codificador.Dropped);
             c.DescartesCaptura = flujos.Sum(f => f.Captura.Dropped);
+
+            if (flujos[0].Codificador is H264Encoder cod && cod.ConversionMs >= 0)
+                _convertir.Anotar(cod.ConversionMs);
 
             _timeouts = flujos.Sum(f => f.Captura.Timeouts);
             _esperaCaptura = flujos[0].Captura.EsperaMs;

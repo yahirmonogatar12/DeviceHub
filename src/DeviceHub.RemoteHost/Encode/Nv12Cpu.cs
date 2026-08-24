@@ -95,8 +95,24 @@ public sealed class Nv12Cpu : IDisposable
     /// tiene que copiarlo antes de pedir el siguiente frame, y lo hace -- se
     /// entrega a un bufer de Media Foundation en la misma llamada.
     /// </summary>
+    /// <summary>
+    /// Lo que cuesta bajar la textura y convertirla, en milisegundos.
+    ///
+    /// SEPARADO DEL CODIFICADOR A PROPOSITO. La linea de medidas daba
+    /// "codificar 22 ms" y ahi dentro habia dos cosas distintas: esto, que es
+    /// codigo nuestro y se puede arreglar, y el MFT, que no. RustDesk hace esta
+    /// misma conversion con ARGBToNV12 de libyuv -- SIMD escrito a mano -- y
+    /// nosotros la hacemos pixel a pixel en un bucle escalar.
+    ///
+    /// Si este numero es la mayor parte de los 22 ms, vectorizar la conversion
+    /// es la respuesta y no hay que tocar el codec. Si es una fraccion pequeña,
+    /// el trabajo esta dentro del MFT y vectorizar no habria servido de nada.
+    /// </summary>
+    public double UltimoMs { get; private set; }
+
     public byte[] Convertir(ID3D11Texture2D origen)
     {
+        var reloj = System.Diagnostics.Stopwatch.GetTimestamp();
         var contexto = _device.ImmediateContext;
 
         contexto.CopyResource(_copia, origen);
@@ -120,6 +136,10 @@ public sealed class Nv12Cpu : IDisposable
         }
 
         _hay = true;
+
+        UltimoMs = (System.Diagnostics.Stopwatch.GetTimestamp() - reloj) * 1000.0
+                   / System.Diagnostics.Stopwatch.Frequency;
+
         return _nv12;
     }
 
