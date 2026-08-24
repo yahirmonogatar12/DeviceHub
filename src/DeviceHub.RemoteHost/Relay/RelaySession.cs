@@ -2232,6 +2232,11 @@ public static class RelaySession
     internal static string Etiqueta(VideoCodec codec)
         => codec == VideoCodec.H265 ? "H.265" : "H.264";
 
+    /// <summary>La primera linea de un mensaje. Un ResultCode de Media
+    /// Foundation trae parrafos y en un aviso solo cabe la cabecera.</summary>
+    private static string Primera(string mensaje)
+        => mensaje.ReplaceLineEndings("\n").Split('\n')[0].Trim();
+
     private static H264Encoder Codificar(
         ID3D11Device device, int ancho, int alto, Vortice.Luid luid, uint vendor,
         RelayOptions opciones)
@@ -2239,26 +2244,64 @@ public static class RelaySession
         var bitrate = ControlBitrate.PorResolucion(ancho, alto, _calidad);
         var fps = FpsDeclarado(opciones);
 
-        if (_codec == VideoCodec.H265)
+        // LA ESCALERA, Y CADA PELDANO DICHO EN VOZ ALTA.
+        //
+        //     H.265 por hardware
+        //     H.264 por hardware
+        //     H.264 por software, a proposito y avisando
+        //
+        // El ultimo peldano es el que faltaba. Antes se aceptaba cualquier MFT
+        // que respondiera, y un codificador de Media Foundation por software
+        // esta pensado para transcodificar archivos, no para escritorio remoto
+        // en vivo. Asi acabo el Xeon donde acabo: sin que nadie lo eligiera y
+        // sin que quedara escrito en ningun sitio.
+        //
+        // NO se cae a VP9, y no es por descarte. En esa maquina el MFT tarda
+        // 3.5 ms de los 28 que cuesta el host: el trabajo esta en bajar la
+        // imagen y convertirla -- 18.4 + 6.4 -- y eso no lo toca ningun codec.
+        var intentos = _codec == VideoCodec.H265
+            ? new[] { (VideoCodec.H265, true), (VideoCodec.H264, true), (VideoCodec.H264, false) }
+            : new[] { (VideoCodec.H264, true), (VideoCodec.H264, false) };
+
+        H264Encoder? codificador = null;
+
+        for (var i = 0; i < intentos.Length; i++)
         {
+            var (codec, hardware) = intentos[i];
+            var ultimo = i == intentos.Length - 1;
+
             try
             {
-                return new H264Encoder(
+                codificador = new H264Encoder(
                     device, ancho, alto, fps, bitrate, luid, vendor,
-                    codec: VideoCodec.H265);
+                    codec: codec, soloHardware: hardware);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!ultimo)
             {
-                Avisar(opciones, $"Sin codificador H.265 ({ex.Message.Split('\n')[0]}); se sigue en H.264.");
+                // El ULTIMO no se atrapa: si tampoco hay codificador por
+                // software no queda nada que probar, y la excepcion tiene que
+                // salir con su motivo en vez de convertirse en un null.
+                Avisar(opciones,
+                    $"Sin {(codec == VideoCodec.H265 ? "H.265" : "H.264")} por " +
+                    $"{(hardware ? "hardware" : "software")}: {Primera(ex.Message)}");
 
-                // Se apunta el resultado REAL. Si no se corrigiera, el bucle de
-                // fuera veria H.265 pedido y H.264 en marcha y rehariam la
-                // captura cada medio segundo para siempre.
-                _codec = VideoCodec.H264;
+                continue;
             }
+
+            if (!hardware)
+            {
+                Avisar(opciones,
+                    $"Sin codificador por hardware en esta PC: se usa " +
+                    $"{codificador.Capabilities.Name} por SOFTWARE.");
+            }
+
+            // El resultado REAL, no el pedido. Si no se corrigiera, el bucle de
+            // fuera veria H.265 pedido y H.264 en marcha y reharia la captura
+            // cada medio segundo para siempre.
+            _codec = codec;
+            break;
         }
 
-        var codificador = new H264Encoder(device, ancho, alto, fps, bitrate, luid, vendor);
 
         // SIN GPU, MENOS PIXELES.
         //

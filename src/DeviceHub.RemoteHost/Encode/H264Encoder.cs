@@ -83,8 +83,10 @@ public sealed class H264Encoder : IVideoEncoder
     public H264Encoder(
         ID3D11Device device, int width, int height, int framesPerSecond, int bitrate,
         Vortice.Luid adapterLuid, uint vendorId, int anchoEntrada = 0, int altoEntrada = 0,
-        VideoCodec codec = VideoCodec.H264)
+        VideoCodec codec = VideoCodec.H264, bool soloHardware = false)
     {
+        _soloHardware = soloHardware;
+
         Codec = codec;
 
         if (anchoEntrada <= 0) anchoEntrada = width;
@@ -186,6 +188,16 @@ public sealed class H264Encoder : IVideoEncoder
     public string Ficha { get; private set; } = "?";
 
     private Vortice.Luid _luidPedido;
+
+    /// <summary>
+    /// Rechazar los MFT por software en vez de aceptarlos como respaldo.
+    ///
+    /// Que exista un codificador no demuestra que sirva para escritorio remoto
+    /// en vivo: los de Media Foundation por software estan pensados para
+    /// transcodificar archivos. Quien elige recorre primero pidiendo hardware y
+    /// solo despues, a proposito y diciendolo, acepta software.
+    /// </summary>
+    private bool _soloHardware;
 
     private static string? Atributo(IMFActivate activate, Guid clave)
     {
@@ -746,6 +758,13 @@ public sealed class H264Encoder : IVideoEncoder
         (string Name, bool Hardware, IMFActivate Activate) candidato,
         out (IMFTransform, string, bool) elegido, List<string> fallos)
     {
+        if (_soloHardware && !candidato.Hardware)
+        {
+            fallos.Add($"{candidato.Name}: por software, y se pidio hardware");
+            elegido = default;
+            return false;
+        }
+
         IMFTransform? transform = null;
 
         try
