@@ -313,17 +313,19 @@ public static class RelaySession
     /// otros dos modos siguen ahi para una red que de verdad no de.
     /// </summary>
     /// <summary>
-    /// La calidad de arranque: DE RAPIDA REACCION.
+    /// La calidad de arranque: EQUILIBRADO.
     ///
-    /// Estaba en Fiel al original, que gasta tres veces mas bitrate para que un
-    /// escritorio de planta se vea marginalmente mejor. Lo que se hace en estas
-    /// sesiones es leer una tabla y pulsar botones, no mirar fotografias, y el
-    /// tecnico que quiera nitidez la sube desde el menu -- que sigue estando.
+    /// Fiel al original gasta tres veces mas bitrate para que un escritorio de
+    /// planta se vea marginalmente mejor, y De rapida reaccion se ve mal a
+    /// 1920x1080: se probo, y a ~1.2 Mbps el texto de una tabla no se lee
+    /// comodo. Equilibrado da ~1.8 Mbps ahi, que es donde se ve bien sin gastar
+    /// de mas.
     ///
-    /// Al revés no funcionaba igual: quien entra a arreglar algo no abre un menu
-    /// a ver si hay algo mas rapido, asume que asi es como va.
+    /// Los dos extremos siguen en el menu para quien los quiera. Lo que no
+    /// puede ser es que el defecto obligue a tocarlo: quien entra a arreglar
+    /// algo no abre un menu a ver si hay algo mejor, asume que asi es como va.
     /// </summary>
-    private static double _calidad = ControlBitrate.CalidadRapida;
+    private static double _calidad = ControlBitrate.CalidadEquilibrada;
 
     /// <summary>Codec de arranque. H.265 por defecto: misma calidad con un
     /// 30-40 % menos de bits, y es lo que usa RustDesk en esta planta. Si la GPU
