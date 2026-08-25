@@ -20,8 +20,8 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Zip = '\\192.168.1.10\updates\Shared\DeviceHub\DeviceHub.Dashboard-1.104.0.zip',
-    [string]$Sha256 = 'a85c3826a748b1156cb688846ab6f5edd169ed0a30c68a2616f38b3eeefa9df2',
+    [string]$Zip = '\\192.168.1.10\updates\Shared\DeviceHub\DeviceHub.Dashboard-1.105.0.zip',
+    [string]$Sha256 = '3a642a56b257aade79135a71455f5efe8df194375c6a8491d44a72ab1e904cc9',
     [string]$InstallPath = 'C:\Program Files\ILSAN\DeviceHub\Dashboard'
 )
 
