@@ -259,17 +259,31 @@ public partial class SesionRemota : UserControl
             // Bucle de reconexion. Mientras haya token vigente se vuelve a la
             // MISMA sesion sin gastar un ticket nuevo; cuando el servidor lo
             // rechaza -- porque paso la gracia -- se termina.
-            var corte = DateTimeOffset.UtcNow;
+            // LA VENTANA SE CUENTA DESDE EL CORTE, NO DESDE QUE ARRANCO. El
+            // mismo fallo que tenia el host: medir cuanto llevaba VIVA la sesion
+            // dejaba la condicion en falso para siempre pasado el primer minuto.
+            // Ver VentanaDeReconexion.
+            DateTimeOffset? corte = null;
 
             while (!_cancelacion.IsCancellationRequested)
             {
+                var inicio = DateTimeOffset.UtcNow;
+
                 try
                 {
-                    corte = DateTimeOffset.UtcNow;
                     RecibirAsync().GetAwaiter().GetResult();
                 }
-                catch (RpcException ex) when (PuedeReconectar(corte))
+                catch (RpcException ex)
                 {
+                    // La espera no se toca aqui: la reinicia el HelloAccepted,
+                    // que es una reconexion CONSEGUIDA y no una que solo duro.
+                    corte = VentanaDeReconexion.Corte(corte, inicio, DateTimeOffset.UtcNow);
+
+                    // Por `throw` y no por un filtro: la marca de la racha hay
+                    // que calcularla antes de decidir, y un `when` corre primero.
+                    if (!PuedeReconectar(corte.Value))
+                        throw;
+
                     Mostrar(
                         $"Conexion perdida ({ex.StatusCode}). Reintentando en {_espera.TotalSeconds:0.0} s...\n" +
                         $"{_cierre ?? string.Empty}");
@@ -317,10 +331,10 @@ public partial class SesionRemota : UserControl
     /// y no se reintentaria nunca. El servidor rechaza el token cuando toca, y
     /// esa es la autoridad de verdad.
     /// </summary>
-    private bool PuedeReconectar(DateTimeOffset desde)
+    private bool PuedeReconectar(DateTimeOffset desdeElCorte)
         => _token is not null
            && !_cancelacion.IsCancellationRequested
-           && DateTimeOffset.UtcNow - desde < TimeSpan.FromMinutes(1);
+           && VentanaDeReconexion.Sigue(desdeElCorte, DateTimeOffset.UtcNow);
 
     private async Task RecibirAsync()
     {

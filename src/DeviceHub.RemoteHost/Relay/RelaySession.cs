@@ -123,25 +123,42 @@ public static class RelaySession
             //
             // Se vuelve a la MISMA sesion con el token de reconexion, sin gastar
             // un ticket nuevo: el ticket es de un solo uso y ya se consumio.
-            var corte = DateTimeOffset.UtcNow;
+            // LA VENTANA SE CUENTA DESDE EL CORTE, NO DESDE QUE ARRANCO.
+            //
+            // Aqui habia `corte = UtcNow` justo antes de conectar, asi que la
+            // condicion del `when` medía cuanto llevaba VIVA la sesion. Pasado
+            // el primer minuto no volvia a ser cierta nunca y el primer tropiezo
+            // de red mataba la sesion sin un solo reintento. Ver VentanaDeReconexion.
+            DateTimeOffset? corte = null;
             var espera = TimeSpan.FromMilliseconds(250);
             var codigo = 4;
 
             while (!cancellationToken.IsCancellationRequested)
             {
+                var inicio = DateTimeOffset.UtcNow;
+
                 try
                 {
-                    corte = DateTimeOffset.UtcNow;
                     codigo = await SesionAsync(opciones, ticket, cancellationToken);
                     break;
                 }
-                catch (RpcException ex) when (PuedeVolver(corte, cancellationToken))
+                catch (RpcException ex)
                 {
+                    var ahora = DateTimeOffset.UtcNow;
+
                     // Una sesion que aguanto un rato empieza de cero: si no, un
                     // microcorte a los diez minutos arrancaria esperando los 5 s
                     // a los que llego el corte anterior.
-                    if (DateTimeOffset.UtcNow - corte > TimeSpan.FromSeconds(10))
+                    if (ahora - inicio > VentanaDeReconexion.Aguanto)
                         espera = TimeSpan.FromMilliseconds(250);
+
+                    corte = VentanaDeReconexion.Corte(corte, inicio, ahora);
+
+                    // Se sale por `throw` y no por un filtro, porque la marca de
+                    // la racha hay que calcularla ANTES de decidir y un `when`
+                    // corre antes que el cuerpo.
+                    if (!PuedeVolver(corte.Value, cancellationToken))
+                        throw;
 
                     opciones.Escribir(
                         $"Conexion con el relay perdida ({ex.StatusCode}). " +
@@ -207,10 +224,10 @@ public static class RelaySession
     [System.Runtime.InteropServices.DllImport("winmm.dll", EntryPoint = "timeEndPeriod")]
     private static extern uint TimeEndPeriod(uint milisegundos);
 
-    private static bool PuedeVolver(DateTimeOffset desde, CancellationToken cancellationToken)
+    private static bool PuedeVolver(DateTimeOffset desdeElCorte, CancellationToken cancellationToken)
         => _tokenReconexion is { Length: > 0 }
            && !cancellationToken.IsCancellationRequested
-           && DateTimeOffset.UtcNow - desde < TimeSpan.FromMinutes(1);
+           && VentanaDeReconexion.Sigue(desdeElCorte, DateTimeOffset.UtcNow);
 
     /// <summary>UNA conexion, de principio a fin. Si el cable se corta, lanza y
     /// el bucle de arriba decide si vuelve.</summary>

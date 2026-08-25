@@ -211,6 +211,25 @@ public sealed class RemoteRelayGrpcService(
             motivo = SessionCloseReason.Timeout;
             detalle = ex.Message;
         }
+        catch (IOException ex)
+        {
+            // UN CABLE QUE SE CAE NO ES UNA VIOLACION DE PROTOCOLO.
+            //
+            // Kestrel avisa de un stream roto con IOException -- "The client
+            // reset the request stream", "The request stream was aborted" -- y
+            // esto lo metia en el saco de ProtocolError. Ahi abajo, ProtocolError
+            // REVOCA el lease y pone `esperaAlHost` en false: o sea que el unico
+            // caso para el que existen los 30 s de gracia era justamente el que
+            // los saltaba. El tecnico veia "ProtocolError" y la sesion cerrada.
+            //
+            // Protocolo roto es lo que devuelve Revisar(): un paquete mal
+            // formado, un papel que no toca, otra sesion. Eso sigue revocando.
+            motivo = SessionCloseReason.Normal;
+            detalle = Recortar(ex.Message);
+            log.LogWarning(
+                "Relay: se corto el transporte del {Papel} de la sesion {Sesion}: {Error}",
+                papel, sesion.Id, ex.Message);
+        }
         catch (Exception ex)
         {
             motivo = SessionCloseReason.ProtocolError;
