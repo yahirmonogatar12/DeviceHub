@@ -23,10 +23,6 @@ namespace DeviceHub.RemoteViewer.Render;
 /// </summary>
 public static class Pared
 {
-    /// <summary>Separacion entre mosaicos. Sin ella, seis escritorios oscuros
-    /// pegados uno a otro se leen como una sola mancha.</summary>
-    public const double Separacion = 4;
-
     public readonly record struct Hueco(double X, double Y, double Ancho, double Alto);
 
     public static Hueco[] Repartir(
@@ -46,13 +42,13 @@ public static class Pared
 
         var (columnas, filas) = Cuadricula.Repartir(pantallas, ancho, alto, aspecto);
 
-        var utilAncho = ancho - Separacion * (columnas - 1);
-        var utilAlto = alto - Separacion * (filas - 1);
-
-        var anchoMosaico = Math.Max(Math.Min(utilAncho / columnas, utilAlto / filas * aspecto), 1);
+        // PEGADOS, sin separacion. Se probo con 4 px entre mosaicos para que
+        // seis escritorios oscuros no se leyeran como una mancha, y el usuario
+        // lo rechazo: prefiere la pared continua.
+        var anchoMosaico = Math.Max(Math.Min(ancho / columnas, alto / filas * aspecto), 1);
         var altoMosaico = Math.Max(anchoMosaico / aspecto, 1);
 
-        var arriba = (alto - (altoMosaico * filas + Separacion * (filas - 1))) / 2;
+        var arriba = (alto - altoMosaico * filas) / 2;
         var huecos = new Hueco[pantallas];
 
         for (var i = 0; i < pantallas; i++)
@@ -65,11 +61,11 @@ public static class Pared
             // la derecha; centrando, ese hueco se parte en dos margenes iguales
             // y la pared se lee como algo hecho a proposito.
             var enLaFila = Math.Min(columnas, pantallas - fila * columnas);
-            var izquierda = (ancho - (anchoMosaico * enLaFila + Separacion * (enLaFila - 1))) / 2;
+            var izquierda = (ancho - anchoMosaico * enLaFila) / 2;
 
             huecos[i] = new Hueco(
-                izquierda + columna * (anchoMosaico + Separacion),
-                arriba + fila * (altoMosaico + Separacion),
+                izquierda + columna * anchoMosaico,
+                arriba + fila * altoMosaico,
                 anchoMosaico,
                 altoMosaico);
         }

@@ -122,4 +122,15 @@ public class ParedTests
 
         Assert.Equal(6, huecos.Length);
     }
+
+    [Fact]
+    public void Los_mosaicos_de_una_fila_van_PEGADOS()
+    {
+        // Se probo con 4 px de separacion y el usuario la rechazo: quiere la
+        // pared continua, como estaba antes.
+        var huecos = Pared.Repartir(6, Ancho, Alto, Aspecto);
+
+        Assert.Equal(huecos[0].X + huecos[0].Ancho, huecos[1].X, 6);
+        Assert.Equal(huecos[0].Y + huecos[0].Alto, huecos[3].Y, 6);
+    }
 }
