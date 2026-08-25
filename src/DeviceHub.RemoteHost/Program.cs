@@ -48,6 +48,10 @@ if (args.Contains("--relay-test"))
         UsarH265 = args.Contains("--h265")
     }, CancellationToken.None);
 
+if (args.Contains("--audio-test"))
+    return DeviceHub.RemoteHost.Audio.AudioTest.Run(
+        Indice(args, "--seconds", 15), Texto(args, "--save"));
+
 if (args.Contains("--encode-test"))
     return EncodeTest.Run(
         Indice(args, "--adapter"), Indice(args, "--output"), Indice(args, "--seconds", 30),
@@ -70,6 +74,7 @@ Console.Error.WriteLine("""
       --capture-test                mide la captura de pantalla   (Fase 1)
       --encode-test                 mide la cadena completa       (Fase 2)
       --relay-test                  manda video al relay          (Fase 5)
+      --audio-test                  mide la captura de sonido     (Fase 26)
 
     Comunes:
       --adapter N   que GPU      (por defecto 0)
