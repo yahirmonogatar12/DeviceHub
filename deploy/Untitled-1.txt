@@ -1,0 +1,6 @@
+deploy server.
+powershell -NoProfile -ExecutionPolicy Bypass -File "\\192.168.1.10\updates\Shared\DeviceHub\update-server.ps1"
+
+
+deploy dashboard.
+powershell -NoProfile -ExecutionPolicy Bypass -File "\\192.168.1.10\updates\Shared\DeviceHub\update-dashboard.ps1"
