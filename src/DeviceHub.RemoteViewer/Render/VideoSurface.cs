@@ -41,9 +41,29 @@ public sealed class VideoSurface : HwndHost
             throw new InvalidOperationException(
                 $"No se pudo crear la ventana del video (error {Marshal.GetLastWin32Error()}).");
 
+        // ARRASTRAR UN ARCHIVO ENCIMA DEL VIDEO.
+        //
+        // Por Win32 y no por WPF, por lo mismo que el raton: esto es una ventana
+        // de verdad tapando el arbol visual, asi que un archivo soltado aqui
+        // nunca llega a AllowDrop ni a Drop. Se acepta en el HWND y se avisa
+        // hacia arriba.
+        DragAcceptFiles(_hwnd, true);
+
+        // Y ADEMAS SE ABRE EL FILTRO DE MENSAJES.
+        //
+        // Si el visor corre elevado y el Explorador no, UIPI descarta estos tres
+        // mensajes SIN ERROR: el cursor enseña que se puede soltar, se suelta, y
+        // no pasa absolutamente nada. Es un fallo que no deja rastro y que solo
+        // aparece en la PC de quien abre el dashboard como administrador.
+        foreach (var mensaje in (uint[])[WmDropFiles, WmCopyGlobalData, WmCopyData])
+            ChangeWindowMessageFilterEx(_hwnd, mensaje, MsgfltAllow, IntPtr.Zero);
+
         _listo.Set();
         return new HandleRef(this, _hwnd);
     }
+
+    /// <summary>Archivos soltados sobre el video, con sus rutas de ESTA PC.</summary>
+    public event Action<string[]>? Soltados;
 
     /// <summary>
     /// Raton sobre el video: (x, y) normalizados 0..1, el mensaje de Win32 y su
@@ -127,11 +147,78 @@ public sealed class VideoSurface : HwndHost
             Raton((double)x / ancho, (double)y / alto, msg, wParam);
         }
 
+        if (msg == WmDropFiles)
+        {
+            // DragFinish SIEMPRE, tambien si no habia nada que leer: es quien
+            // libera la memoria que el Explorador reservo para la operacion.
+            try
+            {
+                var rutas = LeerSoltados(wParam);
+
+                if (rutas.Length > 0)
+                    Soltados?.Invoke(rutas);
+            }
+            finally
+            {
+                DragFinish(wParam);
+            }
+
+            handled = true;
+            return IntPtr.Zero;
+        }
+
         return base.WndProc(hwnd, msg, wParam, lParam, ref handled);
+    }
+
+    /// <summary>
+    /// Las rutas de un HDROP.
+    ///
+    /// Se pregunta DOS veces por cada una: primero cuanto mide y despues el
+    /// texto. Reservar un MAX_PATH y confiar es lo que corta los nombres largos,
+    /// que en Windows pasan de 260 caracteres desde hace tiempo.
+    /// </summary>
+    private static string[] LeerSoltados(IntPtr hdrop)
+    {
+        var cuantas = DragQueryFile(hdrop, 0xFFFFFFFF, null, 0);
+
+        if (cuantas == 0)
+            return [];
+
+        var rutas = new string[cuantas];
+
+        for (uint i = 0; i < cuantas; i++)
+        {
+            var largo = DragQueryFile(hdrop, i, null, 0) + 1;
+            var nombre = new System.Text.StringBuilder((int)largo);
+
+            DragQueryFile(hdrop, i, nombre, largo);
+            rutas[i] = nombre.ToString();
+        }
+
+        return rutas;
     }
 
     private const int WmNcHitTest = 0x0084;
     private const int WmSetCursor = 0x0020;
+    private const uint WmDropFiles = 0x0233;
+    private const uint WmCopyData = 0x004A;
+    private const uint WmCopyGlobalData = 0x0049;
+    private const uint MsgfltAllow = 1;
+
+    [DllImport("shell32.dll")]
+    private static extern void DragAcceptFiles(IntPtr hwnd, [MarshalAs(UnmanagedType.Bool)] bool aceptar);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint DragQueryFile(
+        IntPtr hdrop, uint indice, System.Text.StringBuilder? nombre, uint largo);
+
+    [DllImport("shell32.dll")]
+    private static extern void DragFinish(IntPtr hdrop);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ChangeWindowMessageFilterEx(
+        IntPtr hwnd, uint mensaje, uint accion, IntPtr cambio);
 
     [DllImport("user32.dll")]
     private static extern IntPtr SetCursor(IntPtr cursor);

@@ -109,6 +109,11 @@ public partial class SesionRemota : UserControl
         // controlar nada.
         Video.Raton += RatonRemoto;
 
+        // La otra puerta de arrastrar y soltar. Llega desde el WndProc de la
+        // ventana del video, o sea fuera del hilo de interfaz de WPF: hay que
+        // volver a el antes de tocar el panel.
+        Video.Soltados += rutas => Dispatcher.BeginInvoke(() => Soltar(rutas));
+
 
     }
 
@@ -1619,6 +1624,82 @@ public partial class SesionRemota : UserControl
 
     // ---------------------------------------------------------------- subida
 
+    // ------------------------------------------------------ arrastrar y soltar
+
+    /// <summary>
+    /// DOS PUERTAS, y hacen falta las dos.
+    ///
+    /// Esta es la de WPF y cubre la barra, el panel de archivos y los margenes.
+    /// El video NO llega aqui: es una ventana Win32 tapando el arbol visual, asi
+    /// que lo que se suelte encima del escritorio remoto -- que es donde
+    /// cualquiera lo va a soltar -- entra por VideoSurface.Soltados.
+    /// </summary>
+    private void ArrastrandoEncima(object sender, DragEventArgs e)
+    {
+        // Sin marcar el efecto, Windows pinta el circulo rojo de prohibido y el
+        // Drop no llega a dispararse.
+        e.Effects = Interactiva && e.Data.GetDataPresent(DataFormats.FileDrop)
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+
+        e.Handled = true;
+    }
+
+    private void ArchivosSoltados(object sender, DragEventArgs e)
+    {
+        e.Handled = true;
+
+        if (e.Data.GetData(DataFormats.FileDrop) is string[] rutas)
+            Soltar(rutas);
+    }
+
+    /// <summary>
+    /// Sube a la PC remota lo que caiga en la ventana.
+    ///
+    /// A LA CARPETA QUE ESTE ABIERTA EN EL PANEL, y si no hay ninguna se abre el
+    /// panel y se pide que la elija. Inventar un destino seria peor que
+    /// preguntarlo: el host corre como SYSTEM, asi que %USERPROFILE% apunta al
+    /// perfil de SYSTEM y no al del usuario que esta sentado en esa PC -- los
+    /// archivos acabarian en un sitio donde nadie los va a buscar.
+    ///
+    /// Carpetas no, solo archivos sueltos, igual que el resto de la Fase 24.
+    /// </summary>
+    private void Soltar(IEnumerable<string> rutas)
+    {
+        if (!Interactiva)
+            return;
+
+        var plan = Transferencia.Soltado.Preparar(
+            [.. rutas.Where(File.Exists)], rutas.Any(Directory.Exists), _rutaRemota);
+
+        // El panel se abre pase lo que pase: o enseña el progreso, o enseña por
+        // que no hay progreso. Un archivo soltado que no hace nada y no dice
+        // nada es peor que no poder soltarlo.
+        PanelArchivos.Visibility = Visibility.Visible;
+
+        if (Archivos.Items.Count == 0 && string.IsNullOrEmpty(_rutaRemota))
+            PedirLista(string.Empty);
+
+        if (plan.Queja is { } queja)
+        {
+            EstadoArchivos.Text = queja;
+            return;
+        }
+
+        _cola.Clear();
+        _transferidos.Clear();
+
+        // Sin portapapeles al terminar: esto no es "copiar y pegar", es dejar
+        // unos archivos alla. Ponerlos ademas en el portapapeles remoto seria un
+        // efecto que nadie pidio.
+        _portapapelesAlFinal = false;
+
+        foreach (var (local, remoto) in plan.Subidas)
+            _cola.Enqueue((remoto, local, false));
+
+        SiguienteDeLaCola();
+    }
+
     private void Subir(object sender, RoutedEventArgs e)
     {
         if (string.IsNullOrEmpty(_rutaRemota))
@@ -1718,6 +1799,11 @@ public partial class SesionRemota : UserControl
     /// </summary>
     private readonly Queue<(string Remoto, string Local, bool Bajando)> _cola = new();
 
+    /// <summary>La tanda en curso termina poniendo el portapapeles. Cierto para
+    /// "Traer copiado" y "Llevar copiado"; falso para lo que se arrastra a la
+    /// ventana, que solo es dejar unos archivos alla.</summary>
+    private bool _portapapelesAlFinal = true;
+
     /// <summary>Rutas ya transferidas de la tanda en curso. Al vaciarse la cola,
     /// son las que van al portapapeles del destino.</summary>
     private readonly List<string> _transferidos = [];
@@ -1760,6 +1846,7 @@ public partial class SesionRemota : UserControl
 
         _cola.Clear();
         _transferidos.Clear();
+        _portapapelesAlFinal = true;
 
         foreach (var remoto in _copiadoAlla)
             _cola.Enqueue((remoto, Path.Combine(deposito, Path.GetFileName(remoto)), true));
@@ -1791,6 +1878,7 @@ public partial class SesionRemota : UserControl
 
         _cola.Clear();
         _transferidos.Clear();
+        _portapapelesAlFinal = true;
 
         // El deposito es del temporal de ALLA, no de la carpeta que este abierta:
         // pegar no deberia ensuciar el sitio donde el tecnico estuviera mirando.
@@ -1815,7 +1903,11 @@ public partial class SesionRemota : UserControl
         {
             var (remoto, local, bajando) = _cola.Dequeue();
 
-            _transferidos.Add(bajando ? local : remoto);
+            // Solo se apunta lo que va a acabar en el portapapeles. Lo que se
+            // arrastro a la ventana no: son archivos que el tecnico quiere
+            // ALLA, no una copia esperando un Ctrl+V.
+            if (_portapapelesAlFinal)
+                _transferidos.Add(bajando ? local : remoto);
 
             if (bajando)
                 IniciarBajada(remoto, local);
