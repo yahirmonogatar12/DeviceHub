@@ -273,6 +273,14 @@
 
                             <Separator />
 
+                            <!-- APAGADO de fabrica. Quien entra a arreglar una PC de
+                                 planta no espera que la suya empiece a sonar, y en una
+                                 oficina compartida eso es peor que un inconveniente. -->
+                            <MenuItem x:Name="MenuSonido" Header="Oir esta PC"
+                                      IsCheckable="True" Click="AlternarSonido" />
+
+                            <Separator />
+
                             <!-- Presentar en cuanto llega el frame, o esperar al
                                  monitor. Sin esperar hay menos retraso pero un
                                  frame puede partirse por la mitad al arrastrar

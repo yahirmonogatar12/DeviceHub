@@ -90,6 +90,7 @@ public partial class SesionRemota : UserControl
         _permitirSinConfianza = permitirSinConfianza;
         _pin = pin;
         _ticket = ticket;
+        _altavoz = new Audio.Altavoz(Nota);
 
         // La maquina CONTROLADA, que llega aparte. Ni machineId ni el hostname
         // sirven: el primero es la PC del tecnico -- el mismo para todas sus
@@ -158,6 +159,12 @@ public partial class SesionRemota : UserControl
     public void Cerrar()
     {
         Desactivar();
+
+        // El dispositivo de sonido se suelta AQUI. Un IAudioClient vivo sigue
+        // reservado en el motor de audio de Windows aunque nadie escriba en el,
+        // y con varias pestañas abiertas y cerradas eso se acumula.
+        _altavoz.Dispose();
+
         _cancelacion.Cancel();
     }
 
@@ -787,6 +794,11 @@ public partial class SesionRemota : UserControl
                                 // uno mal atribuido es un numero falso.
                                 if (DeQuienEsLaImagen(deQuienEs, pantalla, imagen.TimestampUs) is { } suyo)
                                     Acusar(pantalla, suyo, pintado: true);
+
+                                // La marca de captura de lo que se acaba de
+                                // pintar. Junto con la del sonido -- del MISMO
+                                // reloj del host -- da el desfase real.
+                                _ultimoVideoUs = imagen.TimestampUs;
                                 ritmo.Marcar(reloj.Elapsed.TotalSeconds);
 
                                 if (captura is not null)
@@ -880,6 +892,19 @@ public partial class SesionRemota : UserControl
                         RecibirCursor(paquete.Cursor);
                         break;
 
+                    case RemotePacket.PayloadOneofCase.AudioConfig:
+                        _altavoz.Configurar(paquete.AudioConfig);
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.AudioChunk:
+                        // En el hilo de RED, no en el de interfaz. Reproducir es
+                        // copiar unos cientos de bytes al bufer del dispositivo,
+                        // y pasarlo por el Dispatcher lo pondria detras de cada
+                        // repintado -- que es como se convierte un sonido en un
+                        // chasquido.
+                        _altavoz.Recibir(paquete.AudioChunk);
+                        break;
+
                     case RemotePacket.PayloadOneofCase.ClipboardFiles:
                         RecibirArchivosCopiados(paquete.ClipboardFiles);
                         break;
@@ -938,6 +963,10 @@ public partial class SesionRemota : UserControl
                         $"invalidos {montadores.Values.Sum(m => m.Rejected)}   " +
                         $"tardios {montadores.Values.Sum(m => m.Stale)}   " +
                         $"IDR {idr}   cursor {_cursoresRecibidos}   cambios de config {cambiosConfig}   " +
+                        (_altavoz.Sonando
+                            ? $"sonido {_altavoz.Paquetes} paq {_altavoz.Perdidos} perdidos " +
+                              $"desfase {_altavoz.DesfaseMs(_ultimoVideoUs):0} ms   "
+                            : "") +
                         $"RAM {proceso.PrivateMemorySize64 / 1024 / 1024} MB (inicio {ramInicio / 1024 / 1024})   " +
                         $"{reloj.Elapsed:hh\\:mm\\:ss}" +
                         (medidasDelHost.Length == 0 ? string.Empty : $"\nhost  {medidasDelHost}") +
@@ -1158,6 +1187,30 @@ public partial class SesionRemota : UserControl
     /// parpadeo. Por eso la marca si se pone aqui -- no hay nada que esperar
     /// de vuelta que pueda contradecirla.
     /// </summary>
+    /// <summary>
+    /// Enciende o apaga el sonido de la PC controlada.
+    ///
+    /// Se lo pide al HOST, no se limita a callar aqui: si solo se silenciara el
+    /// altavoz, la PC de planta seguiria capturando y codificando sonido que
+    /// nadie oye, y ahi la CPU es lo que escasea.
+    /// </summary>
+    private void AlternarSonido(object sender, RoutedEventArgs e)
+    {
+        var encender = MenuSonido.IsChecked;
+
+        if (!encender)
+            _altavoz.Apagar();
+
+        Encolar(new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = _sesion,
+            SelectAudio = new SelectAudio { Enabled = encender }
+        });
+
+        Nota(encender ? "Pidiendo el sonido de esta PC..." : "Sonido apagado.");
+    }
+
     private void ElegirCalidad(object sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem elegido || elegido.Tag is not string etiqueta)
@@ -1301,6 +1354,13 @@ public partial class SesionRemota : UserControl
     /// <summary>Ultima forma pintada. El host manda un id creciente para no tener
     /// que reconstruir el cursor de Windows cuando repite la misma.</summary>
     private ulong _formaCursor;
+
+    /// <summary>El sonido de la PC controlada. Apagado hasta que se enciende.</summary>
+    private readonly Audio.Altavoz _altavoz;
+
+    /// <summary>Marca de captura del ultimo frame PINTADO, en el reloj del host.
+    /// Se resta con la del sonido para saber el desfase.</summary>
+    private long _ultimoVideoUs;
 
     private long _cursoresRecibidos;
 

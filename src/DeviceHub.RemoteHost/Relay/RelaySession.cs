@@ -1270,6 +1270,27 @@ public static class RelaySession
                 Name = $"devicehub-pantalla-{flujo.DisplayId}"
             }));
 
+        // LA BOMBA DE SONIDO, en su propio hilo como cada pantalla.
+        //
+        // No puede ir en el bucle de captura: ahi una vuelta cuesta entre 4 y 28
+        // ms -- capturar y codificar un frame -- y WASAPI entrega paquetes cada
+        // 10. Colgarlo de ahi seria perder audio en cada frame lento, y eso no
+        // se ve como una imagen mas fea: se oye como chasquidos.
+        //
+        // Arranca APAGADA y sin abrir el dispositivo. En un servidor sin
+        // tarjeta de sonido abrirlo falla, y fallar al abrir una sesion por algo
+        // que nadie pidio seria cambiar una funcion nueva por una averia.
+        _sonido = new Audio.BombaDeSonido(
+            opciones.SesionId,
+            paquete => salida.TryWrite(new Enviable(null, null, paquete)),
+            aviso => Avisar(opciones, aviso));
+
+        bombas.Add(new Thread(() => _sonido.Bombear(pararBombas.Token))
+        {
+            IsBackground = true,
+            Name = "devicehub-sonido"
+        });
+
         foreach (var bomba in bombas)
             bomba.Start();
 
@@ -1408,6 +1429,12 @@ public static class RelaySession
 
                     foreach (var flujo in flujos)
                         flujo.KeyframePedido = true;
+
+                    // Y la configuracion del sonido con ella. Quien pide un
+                    // keyframe acaba de perder el contexto del video; si tenia
+                    // sonido, ha perdido tambien su AudioSpecificConfig -- y sin
+                    // el, los paquetes que sigan no son descodificables.
+                    _sonido?.ReenviarConfig();
                 }
 
                 if (!_keyframePorPantalla.IsEmpty)
@@ -2730,6 +2757,9 @@ public static class RelaySession
     /// <summary>Para decir el instante de la primera imagen una sola vez.</summary>
     private static bool _primeraDicha;
 
+    /// <summary>El sonido de la sesion. Null hasta que se abren los flujos.</summary>
+    private static Audio.BombaDeSonido? _sonido;
+
     private static bool _porHardware;
     private static string _codificadorNombre = "?";
 
@@ -3104,6 +3134,14 @@ public static class RelaySession
                         _bitrateDeseado = 0;   // se recalcula con la base nueva
 
                         opciones.Escribir($"Calidad puesta en {_calidad:0.00}x");
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.SelectAudio:
+                        // Se atiende en el hilo de RED, no en el de captura: no
+                        // es SendInput, no depende del escritorio, y pasarlo por
+                        // la cola de captura lo retrasaria hasta el siguiente
+                        // frame -- que con la pantalla quieta puede no llegar.
+                        _sonido?.Encender(paquete.SelectAudio.Enabled);
                         break;
 
                     case RemotePacket.PayloadOneofCase.SelectCodec:

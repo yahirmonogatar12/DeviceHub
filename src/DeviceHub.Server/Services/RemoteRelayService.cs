@@ -594,7 +594,13 @@ public sealed class RemoteRelayGrpcService(
             RemotePacket.PayloadOneofCase.Cursor or
             RemotePacket.PayloadOneofCase.Displays or
             RemotePacket.PayloadOneofCase.HostStatus or
-            RemotePacket.PayloadOneofCase.FileList => papel == RemoteRole.Host,
+            RemotePacket.PayloadOneofCase.FileList or
+
+            // El sonido de la PC controlada. Solo del host: un viewer que
+            // mandara audio estaria hablandole a la PC de planta, y eso no es
+            // esta fase ni esta pedido.
+            RemotePacket.PayloadOneofCase.AudioConfig or
+            RemotePacket.PayloadOneofCase.AudioChunk => papel == RemoteRole.Host,
 
             RemotePacket.PayloadOneofCase.Input or
             RemotePacket.PayloadOneofCase.HostAction or
@@ -604,6 +610,7 @@ public sealed class RemoteRelayGrpcService(
             RemotePacket.PayloadOneofCase.FileListRequest or
             RemotePacket.PayloadOneofCase.FileDownload or
             RemotePacket.PayloadOneofCase.KeyframeRequest or
+            RemotePacket.PayloadOneofCase.SelectAudio or
 
             // El acuse de frame. Va del visor al host y es lo que impide que el
             // host se adelante: sin reenviarlo, el freno no existe.

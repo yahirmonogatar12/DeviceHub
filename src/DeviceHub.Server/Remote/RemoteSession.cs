@@ -385,6 +385,16 @@ public sealed class RemoteSession(string id)
                 await PedirIdrSiHaceFaltaAsync(cancellationToken);
                 break;
 
+            // El SONIDO por su cola, no por la de control.
+            //
+            // La configuracion SI va por control: es un mensaje y perderlo deja
+            // al visor sin poder descodificar nada. Los paquetes no: son
+            // cuarenta y ocho por segundo y la cola de control espera cuando se
+            // llena -- con ellos dentro, un visor atascado bloquearia el teclado.
+            case RemotePacket.PayloadOneofCase.AudioChunk:
+                Viewer?.SendAudio(paquete);
+                break;
+
             default:
                 await ReenviarControlAsync(Viewer, paquete, cancellationToken);
                 break;

@@ -45,6 +45,40 @@ public sealed class RelayConnection : IDisposable
             SingleReader = true
         });
 
+    /// <summary>
+    /// El SONIDO, en su propia cola y con su propia politica. Tercera de tres.
+    ///
+    /// NO puede ir por la de control. Son unos cuarenta y ocho paquetes por
+    /// segundo, y esa cola espera cuando se llena: un visor que se atasque
+    /// llenaria los 256 huecos en cinco segundos y bloquearia con ellos el
+    /// TECLADO y el RATON, que comparten esa cola. El sonido no puede tener
+    /// rehen a la entrada.
+    ///
+    /// Y NO puede ir por la de video, que descarta por frame completo. Aqui no
+    /// hay frames: cada paquete lleva veintiun milisegundos de sonido distintos
+    /// y ninguno sustituye a otro.
+    ///
+    /// Asi que: acotada, y DESCARTANDO EL MAS VIEJO. Un paquete de sonido
+    /// atrasado no sirve -- se reproduciria despues de lo que ya se oyo -- y
+    /// tirarlo cuesta un chasquido, mientras esperar cuesta la sesion entera.
+    /// Cien paquetes son unos dos segundos: mucho mas de lo que cualquier
+    /// atasco razonable necesita, y un techo claro si algo va mal.
+    /// </summary>
+    private const int AudioCapacity = 100;
+
+    private readonly Channel<RemotePacket> _audio = Channel.CreateBounded<RemotePacket>(
+        new BoundedChannelOptions(AudioCapacity)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+            SingleReader = true
+        });
+
+    private int _audioDescartado;
+
+    /// <summary>Paquetes de sonido que se tiraron por cola llena. Si sube, el
+    /// visor no esta consumiendo y se va a oir.</summary>
+    public int AudioDescartado => _audioDescartado;
+
     private readonly SemaphoreSlim _timbre = new(0);
     private readonly CancellationTokenSource _cierre = new();
 
@@ -208,9 +242,37 @@ public sealed class RelayConnection : IDisposable
         }
     }
 
+    /// <summary>
+    /// Encola sonido. Nunca bloquea y nunca falla: si la cola esta llena, el
+    /// canal tira el mas viejo. Devuelve false solo si la conexion ya cerro.
+    /// </summary>
+    public bool SendAudio(RemotePacket paquete)
+    {
+        if (_cierre.IsCancellationRequested)
+            return false;
+
+        // Antes de escribir, para saber si esta a punto de tirar algo: el canal
+        // no avisa de lo que descarta.
+        if (_audio.Reader.Count >= AudioCapacity)
+            Interlocked.Increment(ref _audioDescartado);
+
+        if (!_audio.Writer.TryWrite(paquete))
+            return false;
+
+        _timbre.Release();
+        return true;
+    }
+
     private async Task<bool> VaciarAsync(IRemotePacketWriter writer, CancellationToken cancellationToken)
     {
         await EscribirControlAsync(writer, cancellationToken);
+
+        // EL SONIDO ANTES QUE EL VIDEO. Un frame tarde se ve como una imagen
+        // vieja; un paquete de sonido tarde se oye como un corte, y el oido lo
+        // nota mucho antes que el ojo. Son 250 bytes contra decenas de miles,
+        // asi que adelantarlo no retrasa el video de forma medible.
+        while (_audio.Reader.TryRead(out var sonido))
+            await writer.WriteAsync(sonido, cancellationToken);
 
         // Por turnos entre pantallas, un frame de cada una por vuelta. Vaciar una
         // cola entera antes de mirar la siguiente dejaria al segundo monitor
