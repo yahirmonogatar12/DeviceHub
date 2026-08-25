@@ -83,6 +83,16 @@ public sealed class InputInjector(int ancho, int alto, int izquierda, int arriba
     }
     public long Rejected { get; private set; }
 
+    /// <summary>
+    /// El pixel del escritorio que corresponde a un punto normalizado de la
+    /// pantalla capturada.
+    ///
+    /// Lo usa el pegado por arrastre, que necesita preguntarle a Windows QUE
+    /// ventana hay ahi -- y eso se pregunta en pixeles, no en 0..1.
+    /// </summary>
+    public (int X, int Y) Pixel(double x, double y)
+        => ((int)Math.Round(izquierda + x * ancho), (int)Math.Round(arriba + y * alto));
+
     public void Apply(InputEvent evento)
     {
         switch (evento.EventCase)

@@ -62,8 +62,14 @@ public sealed class VideoSurface : HwndHost
         return new HandleRef(this, _hwnd);
     }
 
-    /// <summary>Archivos soltados sobre el video, con sus rutas de ESTA PC.</summary>
-    public event Action<string[]>? Soltados;
+    /// <summary>
+    /// Archivos soltados sobre el video: sus rutas de ESTA PC y DONDE se
+    /// soltaron, normalizado 0..1 sobre la pantalla remota.
+    ///
+    /// El punto importa: es lo que permite pegarlos en la carpeta que el tecnico
+    /// tiene abierta alla, en vez de en una que haya que elegir a mano.
+    /// </summary>
+    public event Action<string[], double, double>? Soltados;
 
     /// <summary>
     /// Raton sobre el video: (x, y) normalizados 0..1, el mensaje de Win32 y su
@@ -155,8 +161,22 @@ public sealed class VideoSurface : HwndHost
             {
                 var rutas = LeerSoltados(wParam);
 
-                if (rutas.Length > 0)
-                    Soltados?.Invoke(rutas);
+                if (rutas.Length > 0 && GetClientRect(hwnd, out var lienzo))
+                {
+                    // DragQueryPoint da el punto en coordenadas de ESTA ventana,
+                    // que es justo lo que hace falta: el video ocupa el control
+                    // entero, asi que dividir por el cliente da el 0..1 de la
+                    // pantalla remota.
+                    DragQueryPoint(wParam, out var punto);
+
+                    var w = Math.Max(lienzo.Right - lienzo.Left, 1);
+                    var h = Math.Max(lienzo.Bottom - lienzo.Top, 1);
+
+                    Soltados?.Invoke(
+                        rutas,
+                        Math.Clamp((double)punto.X / w, 0, 1),
+                        Math.Clamp((double)punto.Y / h, 0, 1));
+                }
             }
             finally
             {
@@ -214,6 +234,10 @@ public sealed class VideoSurface : HwndHost
 
     [DllImport("shell32.dll")]
     private static extern void DragFinish(IntPtr hdrop);
+
+    [DllImport("shell32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DragQueryPoint(IntPtr hdrop, out POINT punto);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

@@ -631,6 +631,11 @@ public sealed class RemoteRelayGrpcService(
             RemotePacket.PayloadOneofCase.KeyframeRequest or
             RemotePacket.PayloadOneofCase.SelectAudio or
 
+            // La segunda mitad de arrastrar y soltar: el visor pide el Ctrl+V en
+            // un punto de la pantalla de alla. Solo en ese sentido -- un host
+            // que lo mandara estaria pidiendo teclas en la PC del tecnico.
+            RemotePacket.PayloadOneofCase.PasteAt or
+
             // El acuse de frame. Va del visor al host y es lo que impide que el
             // host se adelante: sin reenviarlo, el freno no existe.
             RemotePacket.PayloadOneofCase.VideoAck => papel == RemoteRole.Viewer,

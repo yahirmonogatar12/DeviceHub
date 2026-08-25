@@ -1,5 +1,8 @@
 using Xunit;
 using DeviceHub.RemoteViewer.Transferencia;
+using DeviceHub.Remote.Contracts;
+using DeviceHub.Server.Services;
+using Grpc.Core;
 
 namespace DeviceHub.Tests;
 
@@ -69,5 +72,30 @@ public class SoltadoTests
 
         foreach (var (_, remoto) in plan.Subidas)
             Assert.StartsWith(Carpeta + @"\", remoto);
+    }
+}
+
+/// <summary>
+/// La orden de pegar donde se solto. Es la unica del protocolo que hace teclear
+/// a la PC de planta sin que nadie pulse una tecla, asi que la direccion importa.
+/// </summary>
+public class PasteAtTests
+{
+    private static RemotePacket Pegar() => new()
+    {
+        ProtocolVersion = RemoteSessionProtocol.Version,
+        SessionId = "s1",
+        PasteAt = new PasteAt { X = 0.5, Y = 0.5 }
+    };
+
+    [Fact]
+    public void El_visor_puede_pedir_pegar()
+        => Assert.Null(RemoteRelayGrpcService.Revisar(Pegar(), RemoteRole.Viewer, "s1"));
+
+    [Fact]
+    public void El_host_NO_puede()
+    {
+        // Un host mandando esto estaria pidiendo teclas en la PC del tecnico.
+        Assert.NotNull(RemoteRelayGrpcService.Revisar(Pegar(), RemoteRole.Host, "s1"));
     }
 }

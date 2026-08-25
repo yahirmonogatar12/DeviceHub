@@ -112,7 +112,7 @@ public partial class SesionRemota : UserControl
         // La otra puerta de arrastrar y soltar. Llega desde el WndProc de la
         // ventana del video, o sea fuera del hilo de interfaz de WPF: hay que
         // volver a el antes de tocar el panel.
-        Video.Soltados += rutas => Dispatcher.BeginInvoke(() => Soltar(rutas));
+        Video.Soltados += (rutas, x, y) => Dispatcher.BeginInvoke(() => Soltar(rutas, (x, y)));
 
 
     }
@@ -1649,8 +1649,10 @@ public partial class SesionRemota : UserControl
     {
         e.Handled = true;
 
+        // Sin punto: lo soltado en la barra o en el panel no cae sobre ninguna
+        // carpeta de la pantalla remota, asi que va a la del panel.
         if (e.Data.GetData(DataFormats.FileDrop) is string[] rutas)
-            Soltar(rutas);
+            Soltar(rutas, null);
     }
 
     /// <summary>
@@ -1664,13 +1666,29 @@ public partial class SesionRemota : UserControl
     ///
     /// Carpetas no, solo archivos sueltos, igual que el resto de la Fase 24.
     /// </summary>
-    private void Soltar(IEnumerable<string> rutas)
+    private void Soltar(IEnumerable<string> rutas, (double X, double Y)? punto)
     {
         if (!Interactiva)
             return;
 
+        var archivos = rutas.Where(File.Exists).ToList();
+
+        // SOBRE EL ESCRITORIO REMOTO SE PEGA, NO SE COPIA A UNA CARPETA.
+        //
+        // El visor no puede saber que ruta tiene abierta el Explorador de la
+        // otra PC, y el host tampoco: corre como SYSTEM y por COM obtendria las
+        // ventanas de SYSTEM, que no son ninguna. Asi que se hace lo mismo que
+        // haria una persona -- los bytes van a un temporal, se ponen en el
+        // portapapeles de alla y se pide el Ctrl+V en ese punto. Explorer pega
+        // donde tenga abierto, que es lo que se queria.
+        if (punto is { } donde && archivos.Count > 0)
+        {
+            PegarSoltados(archivos, donde);
+            return;
+        }
+
         var plan = Transferencia.Soltado.Preparar(
-            [.. rutas.Where(File.Exists)], rutas.Any(Directory.Exists), _rutaRemota);
+            archivos, rutas.Any(Directory.Exists), _rutaRemota);
 
         // El panel se abre pase lo que pase: o enseña el progreso, o enseña por
         // que no hay progreso. Un archivo soltado que no hace nada y no dice
@@ -1697,6 +1715,33 @@ public partial class SesionRemota : UserControl
         foreach (var (local, remoto) in plan.Subidas)
             _cola.Enqueue((remoto, local, false));
 
+        SiguienteDeLaCola();
+    }
+
+    /// <summary>Donde hay que pedir el Ctrl+V cuando termine de subir, o null si
+    /// esta tanda no viene de un arrastre sobre el escritorio remoto.</summary>
+    private (double X, double Y)? _pegarEn;
+
+    private void PegarSoltados(IReadOnlyList<string> archivos, (double X, double Y) donde)
+    {
+        PanelArchivos.Visibility = Visibility.Visible;
+
+        _cola.Clear();
+        _transferidos.Clear();
+
+        // SI se toca el portapapeles de alla: es el transporte del pegado.
+        _portapapelesAlFinal = true;
+        _pegarEn = donde;
+
+        // Al temporal de ALLA y no a la carpeta abierta en el panel: estos
+        // archivos son de paso, y el Ctrl+V los deja donde de verdad van.
+        foreach (var local in archivos)
+        {
+            var remoto = $@"%TEMP%\DeviceHub\portapapeles\hacia-remoto\{Path.GetFileName(local)}";
+            _cola.Enqueue((remoto, local, false));
+        }
+
+        EstadoArchivos.Text = $"Llevando {archivos.Count} archivo(s) a donde soltaste...";
         SiguienteDeLaCola();
     }
 
@@ -1848,6 +1893,10 @@ public partial class SesionRemota : UserControl
         _transferidos.Clear();
         _portapapelesAlFinal = true;
 
+        // Una tanda de portapapeles NO es un arrastre: si quedo un punto de una
+        // tanda anterior que no llego a cerrarse, pegaria donde no toca.
+        _pegarEn = null;
+
         foreach (var remoto in _copiadoAlla)
             _cola.Enqueue((remoto, Path.Combine(deposito, Path.GetFileName(remoto)), true));
 
@@ -1879,6 +1928,10 @@ public partial class SesionRemota : UserControl
         _cola.Clear();
         _transferidos.Clear();
         _portapapelesAlFinal = true;
+
+        // Una tanda de portapapeles NO es un arrastre: si quedo un punto de una
+        // tanda anterior que no llego a cerrarse, pegaria donde no toca.
+        _pegarEn = null;
 
         // El deposito es del temporal de ALLA, no de la carpeta que este abierta:
         // pegar no deberia ensuciar el sitio donde el tecnico estuviera mirando.
@@ -1953,6 +2006,21 @@ public partial class SesionRemota : UserControl
             SessionId = _sesion,
             ClipboardFiles = orden
         });
+
+        if (_pegarEn is { } donde)
+        {
+            _pegarEn = null;
+
+            Encolar(new RemotePacket
+            {
+                ProtocolVersion = RemoteSessionProtocol.Version,
+                SessionId = _sesion,
+                PasteAt = new PasteAt { X = donde.X, Y = donde.Y }
+            });
+
+            EstadoArchivos.Text = $"{rutas.Count} archivo(s) pegados donde los soltaste.";
+            return;
+        }
 
         EstadoArchivos.Text = $"{rutas.Count} archivos listos para pegar en la PC remota.";
     }

@@ -86,6 +86,9 @@ message RemotePacket {
     AudioConfig         audio_config      = 35;
     AudioChunk          audio_chunk       = 36;
     SelectAudio         select_audio      = 37;
+
+    // Arrastrar y soltar sobre el escritorio remoto.
+    PasteAt             paste_at          = 38;
   }
 }
 
@@ -173,6 +176,28 @@ message HostStatus {
 // mandarlos por la red de planta sin que nadie lo pida seria una sorpresa cara:
 // se ANUNCIA, y el tecnico decide con un clic. RustDesk tampoco lo esconde --
 // ensena su ventana de progreso.
+// Pega en la carpeta que haya abierta BAJO ESE PUNTO de la pantalla remota.
+//
+// Es la ultima mitad de arrastrar y soltar. El visor no puede saber que ruta
+// tiene abierta el Explorador de la otra PC -- esa la sabe el Explorador y nadie
+// mas, y el host corre como SYSTEM, asi que ni siquiera puede preguntarsela por
+// COM: obtendria las ventanas de SYSTEM, que no son ninguna.
+//
+// Asi que no se pregunta la ruta: se hace lo mismo que haria el tecnico. Los
+// bytes ya subieron a un temporal (Fase 24), ya estan en el portapapeles de alla
+// (Fase 25), y esto pide el Ctrl+V. Explorer pega donde tenga abierto, que es
+// justo lo que se queria.
+//
+// EL HOST COMPRUEBA QUE AHI HAY UNA CARPETA antes de teclear nada. Un Ctrl+V a
+// ciegas sobre la ventana que hubiera debajo puede escribir en el software de
+// produccion que corre en esa PC.
+message PasteAt {
+  // Normalizadas 0..1 sobre la pantalla remota, igual que el raton: la
+  // resolucion de alla puede cambiar a media sesion.
+  double x = 1;
+  double y = 2;
+}
+
 message ClipboardFiles {
   repeated string paths = 1;
 

@@ -1065,6 +1065,24 @@ public static class RelaySession
                 while (Pendientes.TryDequeue(out var evento))
                     _entrada?.Apply(evento);
 
+                // DESPUES de la entrada: si el tecnico venia arrastrando, sus
+                // ultimos movimientos de raton van delante del Ctrl+V.
+                while (Pegados.TryDequeue(out var donde))
+                {
+                    if (_entrada is not { } inyector)
+                        continue;
+
+                    var (px, py) = inyector.Pixel(donde.X, donde.Y);
+
+                    Avisar(opciones, PegarEnPunto.Pegar(px, py) switch
+                    {
+                        PegarEnPunto.Resultado.Pegado => "Archivos pegados en la carpeta de destino.",
+                        PegarEnPunto.Resultado.NoEsUnaCarpeta =>
+                            "Ahi no hay una carpeta abierta; los archivos estan en el portapapeles.",
+                        _ => "No se pudo saber que hay en ese punto de la pantalla."
+                    });
+                }
+
                 // Se despierta con la entrada, no con el reloj.
                 WaitHandle.WaitAny([cancellationToken.WaitHandle, HayEntrada], 20);
             }
@@ -2926,6 +2944,11 @@ public static class RelaySession
     /// </summary>
     private static readonly System.Collections.Concurrent.ConcurrentQueue<InputEvent> Pendientes = new();
 
+    /// <summary>Puntos donde el tecnico solto archivos y hay que pegar. Va por
+    /// cola y no directo porque quien puede teclear es el hilo de entrada: es el
+    /// unico atado al escritorio activo.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentQueue<PasteAt> Pegados = new();
+
     /// <summary>
     /// Lo levanta el hilo de RED en cuanto encola entrada.
     ///
@@ -3198,6 +3221,12 @@ public static class RelaySession
                     case RemotePacket.PayloadOneofCase.ClipboardFiles:
                         // Anuncio del visor: el tecnico copio archivos en SU PC.
                         // No se hace nada hasta que decida traerlos.
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.PasteAt:
+                        // Como la entrada: lo atiende el hilo que puede teclear.
+                        Pegados.Enqueue(paquete.PasteAt);
+                        HayEntrada.Set();
                         break;
 
                     case RemotePacket.PayloadOneofCase.Clipboard:
