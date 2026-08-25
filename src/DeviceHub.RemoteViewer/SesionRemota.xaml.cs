@@ -1145,6 +1145,15 @@ public partial class SesionRemota : UserControl
 
     private int _videoAncho, _videoAlto;
 
+    /// <summary>
+    /// Ancho/alto de la pantalla remota, o 0 mientras no se sepa.
+    ///
+    /// Lo mira el mosaico para repartir filas y columnas: una PC de planta a
+    /// 16:9 y un servidor con un monitor 5:4 no caben igual, y el reparto que
+    /// deja la imagen mas grande depende de eso.
+    /// </summary>
+    public double Aspecto => _videoAlto > 0 ? (double)_videoAncho / _videoAlto : 0;
+
     private void ElegirEscala(object sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem elegido || elegido.Tag is not string etiqueta)
