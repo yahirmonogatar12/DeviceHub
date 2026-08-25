@@ -20,8 +20,8 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Zip = '\\192.168.1.10\updates\Shared\DeviceHub\DeviceHub.Server-1.102.0.zip',
-    [string]$Sha256 = '19e1fb4f4695d9e41e794e2516f1579ebbbd0390c24d0eed7c3a3e3db2c5d113',
+    [string]$Zip = '\\192.168.1.10\updates\Shared\DeviceHub\DeviceHub.Server-1.103.0.zip',
+    [string]$Sha256 = '765bf0a538b999aba829e6a1ce3df3129db8d294c5f2f17a10cb4c768f5e40a0',
     [string]$InstallPath = 'C:\Program Files\ILSAN\DeviceHub\Server',
     [string]$UpdatesPath = 'C:\Users\Administrator\Documents\ILSANMES\UPDATES\Shared\DeviceHub',
     [string]$ServiceName = 'DeviceHubServer'
