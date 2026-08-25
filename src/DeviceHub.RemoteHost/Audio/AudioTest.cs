@@ -13,8 +13,17 @@ namespace DeviceHub.RemoteHost.Audio;
 ///
 /// Lo que hay que saber para no engañarse: con loopback, una PC en SILENCIO no
 /// entrega paquetes. Cero bytes no significa que la captura este rota --
-/// significa que no sonaba nada. Hay que poner algo a sonar mientras corre, y
-/// por eso la salida separa paquetes de silencio de paquetes con sonido.
+/// significa que no sonaba nada.
+///
+/// Y de ahi el error que tenia esta prueba: comparaba lo capturado contra
+/// Hz x segundos, o sea daba por hecho que el sonido es continuo. En una PC de
+/// planta que emite un pitido por cada pieza, eso decia "23 %, faltan
+/// fotogramas, se oye como chasquidos" sobre una captura PERFECTA -- un hueco
+/// en sesenta segundos.
+///
+/// Lo que decide son los HUECOS, que es Windows diciendo que tiro fotogramas
+/// porque no los recogimos, y el PICO, que distingue capturar sonido de
+/// capturar silencio.
 /// </summary>
 public static class AudioTest
 {
@@ -84,10 +93,18 @@ public static class AudioTest
 
             Console.WriteLine($"Duracion:     {s:0.0} s");
             Console.WriteLine($"Capturado:    {bytes:N0} bytes");
-            Console.WriteLine($"Esperado:     {esperados:N0} bytes  ({bytes * 100.0 / Math.Max(esperados, 1):0.0} %)");
+
+            // NO es "cuanto se perdio": es cuanto tiempo hubo sonido.
+            //
+            // WASAPI en loopback no entrega un flujo continuo -- cuando no suena
+            // nada, no entrega nada. Comparar contra Hz x segundos da por hecho
+            // que el sonido es continuo, y en una PC de planta que emite un
+            // pitido por cada pieza eso es falso: salia "23 %" y "faltan
+            // fotogramas" sobre una captura perfecta.
+            Console.WriteLine($"Con sonido:   {bytes * 100.0 / Math.Max(esperados, 1):0.0} % del tiempo");
             Console.WriteLine($"Vueltas:      {vueltas:N0}  ({vacias:N0} sin nada)");
             Console.WriteLine($"Silencios:    {captura.Silencios:N0} paquetes");
-            Console.WriteLine($"Huecos:       {captura.Discontinuidades:N0}");
+            Console.WriteLine($"Huecos:       {captura.Discontinuidades:N0}   <- el que decide");
 
             if (picos.Count > 0)
             {
@@ -107,22 +124,37 @@ public static class AudioTest
 
             Console.WriteLine();
 
-            // EL PORCENTAJE ES EL NUMERO. Por debajo del 99 se estan perdiendo
-            // fotogramas, y en sonido eso no se ve como una imagen mas fea: se
-            // oye como chasquidos.
+            // LOS HUECOS SON EL NUMERO, no el porcentaje.
+            //
+            // Un hueco es Windows diciendo que tiro fotogramas porque no los
+            // recogimos a tiempo, y en sonido eso no se ve como una imagen mas
+            // fea: se oye como un chasquido. Uno al arrancar es normal.
+            //
+            // Y el PICO es el otro: sin el, una PC muda pasaria la prueba con
+            // sobresaliente, que es como se aprueba una captura de sonido que no
+            // captura sonido.
             if (bytes == 0)
             {
                 Console.WriteLine("NO SONO NADA. La captura abrio bien; simplemente no habia sonido.");
                 return 3;
             }
 
-            var porcentaje = bytes * 100.0 / Math.Max(esperados, 1);
+            if (picos.Count == 0 || picos[^1] <= 0.0001)
+            {
+                Console.WriteLine("Solo silencio. La captura funciona, pero no demuestra nada:");
+                Console.WriteLine("pon algo a sonar en esta PC y repite.");
+                return 3;
+            }
 
-            Console.WriteLine(porcentaje >= 99
-                ? "Captura COMPLETA. Se puede construir encima."
-                : $"Faltan fotogramas ({100 - porcentaje:0.0} %). Eso se oye como chasquidos.");
+            // Uno por cada diez segundos ya es demasiado: a 48 kHz cada hueco se
+            // come milisegundos de audio y se oye.
+            var tolerancia = Math.Max(1, (int)(s / 10));
 
-            return porcentaje >= 99 ? 0 : 4;
+            Console.WriteLine(captura.Discontinuidades <= tolerancia
+                ? $"Captura LIMPIA: {captura.Discontinuidades} hueco(s) en {s:0} s. Se puede construir encima."
+                : $"{captura.Discontinuidades} huecos en {s:0} s. Eso se oye como chasquidos.");
+
+            return captura.Discontinuidades <= tolerancia ? 0 : 4;
         }
     }
 
