@@ -64,6 +64,35 @@ public static class AudioTest
             var picos = new List<double>();
             var archivo = guardar is null ? null : new BinaryWriter(File.Create(guardar));
 
+            // EL CODIFICADOR, en la misma corrida. Medirlo aparte con un archivo
+            // grabado antes daria otro numero: aqui compite por la CPU con la
+            // captura, que es como va a vivir.
+            var pcm16 = new byte[bufer.Length / 2];
+            var mono = new byte[bufer.Length / 4];
+            AacEncoder? aac = null;
+            long comprimidos = 0, paquetes = 0;
+            var tiemposAac = new List<double>();
+
+            try
+            {
+                aac = new AacEncoder(captura.Formato.Hz, 1);
+                Console.WriteLine(
+                    $"AAC:          {aac.BitsPorSegundo / 1000} kbps mono, " +
+                    $"config de {aac.Configuracion.Length} bytes");
+            }
+            catch (AacNoDisponibleException ex)
+            {
+                Console.WriteLine($"AAC:          NO disponible ({ex.Message})");
+                Console.WriteLine();
+                Console.WriteLine("Lo que ese codificador dice que acepta:");
+
+                foreach (var linea in AacEncoder.Acepta())
+                    Console.WriteLine(linea);
+            }
+
+            Console.WriteLine();
+
+
             try
             {
                 while (reloj.Elapsed < limite)
@@ -81,6 +110,29 @@ public static class AudioTest
                     bytes += leidos;
                     picos.Add(Pico(bufer.AsSpan(0, leidos), captura.Formato));
                     archivo?.Write(bufer, 0, leidos);
+
+                    if (aac is null)
+                        continue;
+
+                    // flotante -> 16 bits -> mono -> AAC. Los dos primeros pasos
+                    // son nuestros y el tercero de Windows; se cronometra el
+                    // conjunto porque es lo que costara en la sesion.
+                    var desde = Stopwatch.GetTimestamp();
+
+                    var enteros = Pcm16.Convertir(bufer.AsSpan(0, leidos), pcm16);
+                    var enMono = captura.Formato.Canales == 2
+                        ? Pcm16.AMono(pcm16.AsSpan(0, enteros), mono)
+                        : 0;
+
+                    var fuente = enMono > 0 ? mono.AsSpan(0, enMono) : pcm16.AsSpan(0, enteros);
+
+                    foreach (var paquete in aac.Codificar(fuente, (long)(reloj.Elapsed.TotalSeconds * 1_000_000)))
+                    {
+                        comprimidos += paquete.Length;
+                        paquetes++;
+                    }
+
+                    tiemposAac.Add((Stopwatch.GetTimestamp() - desde) * 1000.0 / Stopwatch.Frequency);
                 }
             }
             finally
@@ -112,6 +164,26 @@ public static class AudioTest
                 Console.WriteLine($"Pico p50:     {picos[picos.Count / 2]:0.000}");
                 Console.WriteLine($"Pico maximo:  {picos[^1]:0.000}");
             }
+
+            if (aac is not null)
+            {
+                Console.WriteLine();
+                Console.WriteLine($"AAC paquetes: {paquetes:N0}");
+                Console.WriteLine($"AAC bytes:    {comprimidos:N0}  ({comprimidos * 8 / Math.Max(s, 0.001) / 1000:0} kbps de media)");
+                Console.WriteLine($"Compresion:   {(bytes > 0 ? (double)bytes / Math.Max(comprimidos, 1) : 0):0.0}x contra el PCM crudo");
+
+                if (tiemposAac.Count > 0)
+                {
+                    tiemposAac.Sort();
+                    Console.WriteLine($"AAC p50:      {tiemposAac[tiemposAac.Count / 2]:0.00} ms por bloque");
+                    Console.WriteLine($"AAC p95:      {tiemposAac[(int)(tiemposAac.Count * 0.95)]:0.00} ms");
+                }
+
+                if (aac.UltimoProblema is not null)
+                    Console.WriteLine($"AAC problema: {aac.UltimoProblema}");
+            }
+
+            aac?.Dispose();
 
             if (guardar is not null)
             {
