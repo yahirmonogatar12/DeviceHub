@@ -1141,7 +1141,7 @@ public static class RelaySession
         //
         // Con una sola pantalla la lista tiene un elemento, asi que el camino de
         // siempre no se bifurca: es el mismo bucle con N=1.
-        var flujos = Etiquetar(paso, () => AbrirFlujos(pedida, pantallas, elegida, opciones, cuenta));
+        var flujos = Etiquetar(opciones, paso, () => AbrirFlujos(pedida, pantallas, elegida, opciones, cuenta));
 
         // LO QUE SALIO, no lo que se pidio.
         //
@@ -1864,6 +1864,20 @@ public static class RelaySession
                         keyframePedidoEn = 0;   // llego; no hay que rehacer nada
                     }
 
+                    // LA PRIMERA IMAGEN, que es lo que el tecnico llama "abrio".
+                    //
+                    // Ni la auditoria del servidor ni la linea de medidas cubren
+                    // este instante: la primera dice cuando el host se conecto,
+                    // la segunda empieza a contar cuando ya hay sesion. Entre
+                    // los dos esta lo que se siente como "tarda en abrir".
+                    if (!_primeraDicha)
+                    {
+                        _primeraDicha = true;
+                        opciones.Escribir(
+                            $"Arranque: PRIMERA IMAGEN a los {DesdeElProceso():0} ms " +
+                            $"desde que arranco el proceso");
+                    }
+
                     VideoConfig? config = null;
 
                     // El SPS/PPS sale dentro del primer IDR. Se saca UNA vez y se
@@ -2068,15 +2082,53 @@ public static class RelaySession
     /// del de salida, y cada uno se arregla de una forma. La etiqueta convierte
     /// "algo esta mal" en "esto esta mal".
     /// </summary>
-    private static T Etiquetar<T>(string paso, Func<T> accion)
+    /// <summary>
+    /// Envuelve una fase del arranque: etiqueta su excepcion Y LA CRONOMETRA.
+    ///
+    /// Solo etiquetaba. Cuando el tecnico dice que tarda en conectar, la
+    /// auditoria del servidor enseña tres segundos entre pedir la sesion y que
+    /// el host aparezca, y despues todavia falta la primera imagen -- que no se
+    /// media en ningun sitio. Sin repartir esos segundos por fases, "tarda en
+    /// abrir" es una sensacion contra la que no se puede trabajar.
+    ///
+    /// El reloj arranca en el PROCESO, no aqui: buena parte de esos segundos
+    /// puede ser .NET levantandose, y eso se arregla de otra manera -- o no se
+    /// arregla -- pero hay que saberlo antes de tocar nada.
+    /// </summary>
+    private static T Etiquetar<T>(RelayOptions opciones, string paso, Func<T> accion)
     {
+        var desde = Stopwatch.GetTimestamp();
+
         try
         {
-            return accion();
+            var resultado = accion();
+
+            opciones.Escribir(
+                $"Arranque: {paso} en {(Stopwatch.GetTimestamp() - desde) * 1000.0 / Stopwatch.Frequency:0} ms " +
+                $"({DesdeElProceso():0} ms desde que arranco el proceso)");
+
+            return resultado;
         }
         catch (Exception ex)
         {
             throw new InvalidOperationException($"al {paso}: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Milisegundos desde que Windows creo ESTE proceso, no desde que empezo
+    /// nuestro codigo. La diferencia entre los dos es lo que cuesta levantar
+    /// .NET, y es justo la parte que no se ve desde dentro.
+    /// </summary>
+    private static double DesdeElProceso()
+    {
+        try
+        {
+            return (DateTime.Now - Process.GetCurrentProcess().StartTime).TotalMilliseconds;
+        }
+        catch (Exception)
+        {
+            return -1;
         }
     }
 
@@ -2258,7 +2310,7 @@ public static class RelaySession
                     // Con su propia etiqueta: "abrir las capturas" cubria esto
                     // tambien, y se leia un fallo del codificador como si fuera
                     // de la captura -- que para entonces ya funcionaba.
-                    Codificador = Etiquetar("crear el codificador", () => Codificar(
+                    Codificador = Etiquetar(opciones, "crear el codificador", () => Codificar(
                         unica.Device, unica.Width, unica.Height,
                         unica.AdapterLuid, unica.AdapterVendorId, opciones)),
                     Version = SiguienteVersion(cuenta),
@@ -2670,6 +2722,9 @@ public static class RelaySession
     /// treinta y pico -- es que ignoro el GOP y esta gastando media transmision
     /// en repetir lo que ya se veia.</summary>
     private static int _gop = -1;
+    /// <summary>Para decir el instante de la primera imagen una sola vez.</summary>
+    private static bool _primeraDicha;
+
     private static bool _porHardware;
     private static string _codificadorNombre = "?";
 
