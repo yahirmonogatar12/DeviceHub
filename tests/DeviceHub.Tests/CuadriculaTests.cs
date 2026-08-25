@@ -63,8 +63,31 @@ public class CuadriculaTests
         => Assert.Equal((1, 1), Cuadricula.Repartir(1, Ancho, Alto));
 
     [Fact]
-    public void Seis_en_una_ventana_ancha_van_en_tres_columnas()
-        => Assert.Equal((3, 2), Cuadricula.Repartir(6, Ancho, Alto));
+    public void Seis_no_pueden_dar_una_fila_entera_vacia()
+    {
+        // EL CASO QUE LO DESTAPO. UniformGrid sin Rows ni Columns no reparte
+        // ceil(raiz(n)) columnas: hace la cuadricula CUADRADA.
+        //
+        //     _rows = (int)Math.Sqrt(count);
+        //     if (_rows * _rows < count) _rows++;
+        //     _columns = _rows;
+        //
+        // Con seis: raiz(6)=2.44 -> rows=2 -> 2*2=4 < 6 -> rows=3, columns=3.
+        // Tres filas para seis pantallas, y la tercera negra entera: un tercio
+        // de la ventana tirado, y los mosaicos a 325 px de alto en vez de 487.
+        Assert.Equal((3, 2), Cuadricula.Repartir(6, Ancho, Alto));
+    }
+
+    [Theory]
+    [InlineData(7)]
+    [InlineData(8)]
+    [InlineData(9)]
+    public void A_partir_de_siete_el_3x3_ya_se_gana(int pantallas)
+    {
+        // Y entonces si, que es lo que pidio el usuario: la tercera fila
+        // aparece cuando hay algo que poner en ella.
+        Assert.Equal((3, 3), Cuadricula.Repartir(pantallas, Ancho, Alto));
+    }
 
     [Fact]
     public void La_forma_de_la_VENTANA_cambia_el_reparto()
