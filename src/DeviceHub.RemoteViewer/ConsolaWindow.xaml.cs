@@ -49,12 +49,6 @@ public partial class ConsolaWindow : Window
         PreviewKeyDown += (_, e) => { if (!_mosaico) _delante?.Sesion.Teclear(e, pulsada: true); };
         PreviewKeyUp += (_, e) => { if (!_mosaico) _delante?.Sesion.Teclear(e, pulsada: false); };
 
-        // El reparto del mosaico depende del hueco, asi que se rehace cuando el
-        // hueco cambia: redimensionar la ventana, maximizarla o pasarla a otro
-        // monitor. Sin esto, una ventana que se estira sigue con las columnas
-        // que le convenian cuando era pequeña.
-        Contenido.SizeChanged += (_, _) => Reencuadrar();
-
         Closed += (_, _) =>
         {
             foreach (var pestana in _pestanas)
@@ -63,39 +57,30 @@ public partial class ConsolaWindow : Window
     }
 
     /// <summary>
-    /// Cuantas columnas y filas tiene el mosaico AHORA.
+    /// Con que forma reparte la pared.
     ///
-    /// El UniformGrid sin Rows ni Columns reparte con una regla fija que no mira
-    /// la forma de la ventana: seis sesiones eran 3x2 tanto en una pantalla
-    /// ancha como en una vertical, y tres eran 2x2 -- una celda tirada. Ver
-    /// Cuadricula.
+    /// Lo unico que hay que decirle es el aspecto MEDIO de lo que hay abierto:
+    /// cuantas filas y columnas, y donde cae cada mosaico, lo deciden Cuadricula
+    /// y Pared con el hueco que tengan en ese momento.
+    ///
+    /// La media y no el de una: con varias pantallas de formas distintas no hay
+    /// reparto perfecto para todas, y asi el recorte se lo llevan a medias en
+    /// vez de dejar a una entera de canto.
     /// </summary>
     private void Reencuadrar()
     {
-        if (!_mosaico)
-        {
-            // Fuera del mosaico solo hay una visible; se deja fijo en vez de
-            // dejar que la regla de WPF lo deduzca cada vez.
-            (Contenido.Columns, Contenido.Rows) = (1, 1);
-            return;
-        }
-
-        // El aspecto MEDIO de lo que hay abierto. Con una sola pantalla remota
-        // es el suyo exacto; con varias distintas no hay un reparto que sea
-        // perfecto para todas, y la media reparte el recorte entre ellas en vez
-        // de dejar a una entera de canto.
         var aspectos = _pestanas
             .Select(p => p.Sesion.Aspecto)
             .Where(a => a > 0)
             .ToList();
 
-        var (columnas, filas) = Cuadricula.Repartir(
-            _pestanas.Count,
-            Contenido.ActualWidth,
-            Contenido.ActualHeight,
-            aspectos.Count > 0 ? aspectos.Average() : 16.0 / 9.0);
+        var aspecto = aspectos.Count > 0 ? aspectos.Average() : 16.0 / 9.0;
 
-        (Contenido.Columns, Contenido.Rows) = (columnas, filas);
+        if (Math.Abs(Contenido.Aspecto - aspecto) < 0.001)
+            return;
+
+        Contenido.Aspecto = aspecto;
+        Contenido.InvalidateMeasure();
     }
 
     /// <summary>Abre una sesion en una pestaña nueva y la pone delante.</summary>
