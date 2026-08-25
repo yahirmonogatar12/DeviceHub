@@ -81,7 +81,67 @@ message RemotePacket {
     VideoAck            video_ack         = 32;
     SelectCodec         select_codec      = 33;
     SelectQuality       select_quality    = 34;
+
+    // Fase 26. El sonido de la PC controlada.
+    AudioConfig         audio_config      = 35;
+    AudioChunk          audio_chunk       = 36;
+    SelectAudio         select_audio      = 37;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Sonido (Fase 26)
+// ---------------------------------------------------------------------------
+
+// Lo que el decodificador necesita ANTES del primer paquete.
+//
+// AAC no es como H.264: sus parametros no pueden viajar dentro del flujo. Viven
+// en el AudioSpecificConfig, y sin el no se puede descodificar ni un byte. Va
+// aparte por la misma razon que VideoConfig, y se reenvia al reconectar.
+message AudioConfig {
+  // Siempre AAC-LC hoy. Existe para que cambiar de codec no obligue a versionar
+  // el protocolo, igual que en video.
+  string codec = 1;
+
+  uint32 sample_rate = 2;
+  uint32 channels = 3;
+  uint32 bitrate_bits_per_second = 4;
+
+  // El AudioSpecificConfig. Dos bytes para AAC-LC, y sin ellos el otro lado no
+  // arranca.
+  bytes  parameter_sets = 5;
+
+  // Sube cada vez que el sonido se rehace -- otro dispositivo, otra frecuencia.
+  // Un paquete de la version anterior descodifica ruido, no error.
+  uint32 config_version = 6;
+}
+
+// Un bloque de AAC ya codificado.
+//
+// SIN TROCEAR, al contrario que el video: un bloque de AAC a 96 kbps son unos
+// 250 bytes, cuatro ordenes de magnitud por debajo del limite de 64 KiB que
+// obliga a fragmentar un keyframe.
+message AudioChunk {
+  uint32 config_version = 1;
+
+  // EL MISMO RELOJ QUE EL VIDEO. Esta es la pieza que no se puede añadir
+  // despues: si el sonido marcara contra otro origen, ninguna sincronia
+  // posterior podria cuadrarlos -- el desfase nace aqui y solo se podria medir.
+  //
+  // Microsegundos desde que arranco la sesion en el HOST, igual que
+  // VideoChunk.capture_timestamp_us. Restarlos entre si da el desfase real.
+  int64  capture_timestamp_us = 2;
+
+  bytes  data = 3;
+}
+
+// El tecnico enciende o apaga el sonido.
+//
+// APAGADO de fabrica: quien entra a arreglar una PC de planta no espera que la
+// suya empiece a sonar, y en una oficina compartida eso es peor que un
+// inconveniente. Se enciende a proposito.
+message SelectAudio {
+  bool enabled = 1;
 }
 
 // Lo que el host tiene que contar y hoy solo acaba en el log del agente.

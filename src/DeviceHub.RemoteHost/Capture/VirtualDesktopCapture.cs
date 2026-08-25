@@ -37,7 +37,6 @@ public sealed class VirtualDesktopCapture : IScreenCapture
     private const int SinCambiosMs = 8;
 
     private readonly int _adapterIndex;
-    private readonly long _inicioTicks = Stopwatch.GetTimestamp();
 
     private ID3D11Device _device = null!;
     private IDXGIAdapter1 _adapter = null!;
@@ -204,7 +203,7 @@ public sealed class VirtualDesktopCapture : IScreenCapture
         // El lienzo es NUESTRO y se reutiliza, asi que soltarlo no libera nada en
         // DXGI: los duplicadores ya se soltaron arriba.
         return new VideoFrame(
-            _lienzo, Width, Height, ++_frameId, TranscurridoUs(), desktopChanged: true,
+            _lienzo, Width, Height, ++_frameId, Reloj.Ahora(), desktopChanged: true,
             release: () => _frameVivo = false);
     }
 
@@ -308,9 +307,6 @@ public sealed class VirtualDesktopCapture : IScreenCapture
         Cerrar();
         Abrir();
     }
-
-    private long TranscurridoUs()
-        => (Stopwatch.GetTimestamp() - _inicioTicks) * 1_000_000L / Stopwatch.Frequency;
 
     private void Cerrar()
     {

@@ -38,7 +38,6 @@ public sealed class DxgiDesktopCapture : IScreenCapture
 
     private readonly int _adapterIndex;
     private readonly int _outputIndex;
-    private readonly long _startedAtTicks = Stopwatch.GetTimestamp();
 
     private ID3D11Device _device = null!;
     private IDXGIAdapter1 _adapter = null!;
@@ -203,7 +202,7 @@ public sealed class DxgiDesktopCapture : IScreenCapture
 
             if (desktopChanged)
             {
-                LastFrameAgeUs = AgeUs(info.LastPresentTime);
+                LastFrameAgeUs = Reloj.DesdeQpc(info.LastPresentTime);
 
                 // AccumulatedFrames > 1 = DXGI junto varias presentaciones
                 // porque no ibamos a su ritmo. Las que no vimos, se perdieron.
@@ -214,7 +213,7 @@ public sealed class DxgiDesktopCapture : IScreenCapture
             _frameOutstanding = true;
 
             return new VideoFrame(
-                texture, Width, Height, ++_frameId, ElapsedUs(), desktopChanged,
+                texture, Width, Height, ++_frameId, Reloj.Ahora(), desktopChanged,
                 release: () =>
                 {
                     _frameOutstanding = false;
@@ -355,21 +354,7 @@ public sealed class DxgiDesktopCapture : IScreenCapture
         return inner ?? new InvalidOperationException($"{what}: {result.Description} (0x{result.Code:X8})");
     }
 
-    private long ElapsedUs()
-        => (Stopwatch.GetTimestamp() - _startedAtTicks) * 1_000_000L / Stopwatch.Frequency;
 
-    /// <summary>
-    /// LastPresentTime viene en unidades de QueryPerformanceCounter, el mismo
-    /// reloj que Stopwatch.GetTimestamp, asi que se restan directamente.
-    /// </summary>
-    private static long AgeUs(long presentTicks)
-    {
-        var age = (Stopwatch.GetTimestamp() - presentTicks) * 1_000_000L / Stopwatch.Frequency;
-
-        // Un valor negativo o absurdo significa que el reloj no es el que
-        // creemos. Mejor 0 que un percentil envenenado.
-        return age is < 0 or > 1_000_000 ? 0 : age;
-    }
 
     public void Dispose()
     {

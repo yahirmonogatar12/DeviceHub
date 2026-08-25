@@ -35,7 +35,6 @@ namespace DeviceHub.RemoteHost.Capture;
 /// </summary>
 public sealed class GdiDesktopCapture : IScreenCapture
 {
-    private readonly long _inicioTicks = Stopwatch.GetTimestamp();
 
     private ID3D11Device _device = null!;
     /// <summary>Nulo cuando se cayo a WARP, que no tiene adaptador.</summary>
@@ -172,7 +171,7 @@ public sealed class GdiDesktopCapture : IScreenCapture
         // Siempre "cambio": GDI no sabe si la pantalla se movio. El codificador
         // se come el coste, y en una pantalla quieta eso son frames casi vacios.
         return new VideoFrame(
-            _lienzo, Width, Height, ++_frameId, TranscurridoUs(), desktopChanged: true,
+            _lienzo, Width, Height, ++_frameId, Reloj.Ahora(), desktopChanged: true,
             release: () => _frameVivo = false);
     }
 
@@ -370,9 +369,6 @@ public sealed class GdiDesktopCapture : IScreenCapture
 
         SeguirAlEscritorioDeEntrada();
     }
-
-    private long TranscurridoUs()
-        => (Stopwatch.GetTimestamp() - _inicioTicks) * 1_000_000L / Stopwatch.Frequency;
 
     private static string NombreDe(IntPtr escritorio)
     {

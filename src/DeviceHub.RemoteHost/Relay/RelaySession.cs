@@ -2691,8 +2691,13 @@ public static class RelaySession
         _medir?.Invoke(texto);
     }
 
-    private static long Ahora()
-        => Stopwatch.GetTimestamp() * 1_000_000L / Stopwatch.Frequency;
+    /// <summary>
+    /// El reloj de la sesion. Era un TERCER origen distinto -- contaba desde el
+    /// arranque del sistema, no de la sesion -- y lo usan los Ping para medir el
+    /// RTT. Que coincida con el de las capturas no cambia esa medida, pero
+    /// significa que ya no hay dos ideas de "ahora" en el mismo proceso.
+    /// </summary>
+    private static long Ahora() => Reloj.Ahora();
 
     /// <summary>
     /// Lo que el codificador dice sobre los B-frames. Tiene que ser 0:
