@@ -519,6 +519,11 @@ public static class RelaySession
     /// </summary>
     private const int RepeticionesMax = 10;
 
+    /// <summary>Repeticiones antes de la PRIMERA salida del codificador. Mas
+    /// altas que el cupo normal porque ahi no sobran: son lo unico que entra a un
+    /// codificador frio con la pantalla quieta.</summary>
+    private const int RepeticionesArranque = 60;
+
     private static int _bitrateDeseado;
 
     /// <summary>Frames por segundo a los que capturar. Lo decide el hilo de red
@@ -1766,8 +1771,27 @@ public static class RelaySession
                 // de margen para que el MFT haga lo que se le pidio por las
                 // buenas. Rehacerlo cuesta una vez; gastarlo en cada peticion
                 // seria peor que el problema.
+                // MEDIO SEGUNDO PARA UNO CALIENTE; DOS PARA UNO QUE NI HA
+                // ARRANCADO.
+                //
+                // Los 500 ms son para el caso que motivo esto: un codificador
+                // que YA entrega y se salta el ForceKeyFrame. Uno recien creado
+                // es otra cosa -- un MFT por hardware necesita varias entradas
+                // antes de soltar la primera salida, y en una pantalla quieta
+                // esas entradas solo llegan por repeticion.
+                //
+                // Con el mismo plazo para los dos casos pasaba esto, medido en
+                // INVENTARIO-IMD-SMD: se agotaban las 10 repeticiones en 470 ms
+                // -- la vuelta cuesta unos 47 -- el plazo saltaba a los 500, se
+                // rehacia el codificador, y vuelta a empezar. Seis veces antes
+                // de que una soltara imagen. El tecnico lo ve como "tarda en
+                // abrir", y cada rehecho es trabajo tirado.
+                var plazo = flujo.ConfigEnviada
+                    ? Stopwatch.Frequency / 2
+                    : Stopwatch.Frequency * 2;
+
                 if (keyframePedidoEn != 0
-                    && Stopwatch.GetTimestamp() - keyframePedidoEn > Stopwatch.Frequency / 2)
+                    && Stopwatch.GetTimestamp() - keyframePedidoEn > plazo)
                 {
                     keyframePedidoEn = 0;
 
@@ -1832,7 +1856,19 @@ public static class RelaySession
                     // cupo se calla, y no se gasta un Xeon sin GPU codificando
                     // la misma imagen toda la noche. El cupo se reabre cuando
                     // la pantalla cambia o cuando alguien pide un keyframe.
-                    if (repetidos >= RepeticionesMax)
+                    // EL CUPO ES PARA UNA PANTALLA QUIETA Y SANA, NO PARA
+                    // ARRANCAR.
+                    //
+                    // Mientras el codificador no haya soltado su primera salida,
+                    // estas repeticiones NO son un lujo: son lo unico que le
+                    // entra, y sin ellas no hay primer keyframe ni configuracion.
+                    // Cortarlas a las diez dejaba al codificador a medio arrancar
+                    // justo cuando vencia el plazo del keyframe.
+                    //
+                    // Sigue acotado, y mas alto: si con sesenta no ha entregado,
+                    // ese codificador no va a entregar y lo que toca es rehacerlo
+                    // -- de eso se encarga el plazo de arriba.
+                    if (repetidos >= (flujo.ConfigEnviada ? RepeticionesMax : RepeticionesArranque))
                         continue;
 
                     // Y NO SE REPITE SI HACE NADA QUE SE CODIFICO DE VERDAD.
