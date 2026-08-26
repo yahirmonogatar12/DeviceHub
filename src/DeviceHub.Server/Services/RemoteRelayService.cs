@@ -636,6 +636,12 @@ public sealed class RemoteRelayGrpcService(
             // que lo mandara estaria pidiendo teclas en la PC del tecnico.
             RemotePacket.PayloadOneofCase.PasteAt or
 
+            // Anadir o quitar el monitor virtual: instala y activa un driver en
+            // la PC de planta. Solo del visor, y por la misma razon que todo lo
+            // demas de este bloque -- al reves seria el host tocando el hardware
+            // del tecnico.
+            RemotePacket.PayloadOneofCase.VirtualDisplay or
+
             // El acuse de frame. Va del visor al host y es lo que impide que el
             // host se adelante: sin reenviarlo, el freno no existe.
             RemotePacket.PayloadOneofCase.VideoAck => papel == RemoteRole.Viewer,

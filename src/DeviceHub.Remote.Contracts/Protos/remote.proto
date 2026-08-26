@@ -89,6 +89,9 @@ message RemotePacket {
 
     // Arrastrar y soltar sobre el escritorio remoto.
     PasteAt             paste_at          = 38;
+
+    // Fase 27. Un monitor de mas donde trabajar sin tapar el del operador.
+    VirtualDisplay      virtual_display   = 39;
   }
 }
 
@@ -176,6 +179,27 @@ message HostStatus {
 // mandarlos por la red de planta sin que nadie lo pida seria una sorpresa cara:
 // se ANUNCIA, y el tecnico decide con un clic. RustDesk tampoco lo esconde --
 // ensena su ventana de progreso.
+// Anade o quita un MONITOR VIRTUAL en la PC controlada.
+//
+// No es un escritorio virtual de Windows: eso es la misma pantalla con otras
+// ventanas, y cambiar de uno a otro cambia lo que ve el operador. Esto es un
+// monitor de verdad para Windows, servido por un driver de pantalla indirecta,
+// que existe sin estar conectado a nada. El operador conserva el suyo con el
+// dashboard y el tecnico trabaja en el de al lado.
+//
+// SIGUE SIENDO LA MISMA SESION, y eso no lo arregla ningun driver: un cursor,
+// un foco y un portapapeles para los dos. Mover el raton al monitor virtual se
+// lo quita de la pantalla al operador, y hacer clic ahi le quita el foco a lo
+// que tuviera delante. Es mucho mejor que quitarle la pantalla; no es
+// aislamiento. El aislamiento pide una segunda sesion, y Windows 11 Pro no da
+// mas de una.
+//
+// Al aparecer, el monitor entra solo en la lista de Displays -- Pantallas.Listar
+// releee las salidas DXGI cada vez -- y el host cambia la captura a el.
+message VirtualDisplay {
+  bool enable = 1;
+}
+
 // Pega en la carpeta que haya abierta BAJO ESE PUNTO de la pantalla remota.
 //
 // Es la ultima mitad de arrastrar y soltar. El visor no puede saber que ruta

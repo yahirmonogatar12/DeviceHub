@@ -99,3 +99,43 @@ public class PasteAtTests
         Assert.NotNull(RemoteRelayGrpcService.Revisar(Pegar(), RemoteRole.Host, "s1"));
     }
 }
+
+/// <summary>
+/// La orden de anadir o quitar el monitor virtual. Instala un driver en la PC
+/// de planta, asi que la direccion es lo primero que hay que sujetar.
+/// </summary>
+public class VirtualDisplayTests
+{
+    private static RemotePacket Orden(bool encender) => new()
+    {
+        ProtocolVersion = RemoteSessionProtocol.Version,
+        SessionId = "s1",
+        VirtualDisplay = new VirtualDisplay { Enable = encender }
+    };
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void El_visor_puede_pedirla(bool encender)
+        => Assert.Null(RemoteRelayGrpcService.Revisar(Orden(encender), RemoteRole.Viewer, "s1"));
+
+    [Fact]
+    public void El_host_NO_puede()
+    {
+        // Un host mandandolo estaria pidiendo instalar un driver en la PC del
+        // tecnico.
+        Assert.NotNull(RemoteRelayGrpcService.Revisar(Orden(true), RemoteRole.Host, "s1"));
+    }
+
+    [Fact]
+    public void El_driver_vive_fuera_de_la_carpeta_del_agente()
+    {
+        // Si viviera dentro, la primera actualizacion se lo llevaria: el
+        // actualizador mueve la carpeta de instalacion entera y solo rescata
+        // appsettings.json.
+        Assert.StartsWith(
+            @"C:\ProgramData\", DeviceHub.RemoteHost.Capture.PantallaVirtual.DondeVa);
+
+        Assert.DoesNotContain("Program Files", DeviceHub.RemoteHost.Capture.PantallaVirtual.DondeVa);
+    }
+}

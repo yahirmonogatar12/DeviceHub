@@ -2085,7 +2085,25 @@ public partial class SesionRemota : UserControl
                 MenuPantallas.Items.Add(entrada);
             }
 
-            MenuPantallas.IsEnabled = opciones.Count > 1;
+            // AÑADIR UN MONITOR QUE NO EXISTE. Fase 27.
+            //
+            // Va en este menu y no en el de Vista porque es lo mismo que elegir
+            // pantalla: cambia QUE se ve de la PC remota, no COMO se ve aqui.
+            MenuPantallas.Items.Add(new Separator());
+
+            MenuPantallas.Items.Add(Orden(
+                "Anadir pantalla virtual",
+                "Un monitor de mas donde trabajar sin taparle la suya al operador.",
+                encender: true));
+
+            MenuPantallas.Items.Add(Orden(
+                "Quitar la pantalla virtual",
+                "Se quita sola al cerrar la sesion; esto es por si quieres antes.",
+                encender: false));
+
+            // Siempre habilitado: aunque haya una sola pantalla, el menu es el
+            // sitio desde el que se añade la segunda.
+            MenuPantallas.IsEnabled = true;
 
             MenuPantallas.ToolTip = opciones
                 .FirstOrDefault(o => o.Corto.Id == actual).Largo is { Length: > 0 } vigente
@@ -2094,12 +2112,28 @@ public partial class SesionRemota : UserControl
         });
     }
 
+    private MenuItem Orden(string texto, string ayuda, bool encender)
+    {
+        var entrada = new MenuItem { Header = texto, ToolTip = ayuda };
+
+        entrada.Click += (_, _) => Encolar(new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = _sesion,
+            VirtualDisplay = new VirtualDisplay { Enable = encender }
+        });
+
+        return entrada;
+    }
+
     private void ElegirPantalla(object sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem elegido || elegido.Tag is not Monitor monitor)
             return;
 
-        foreach (var otro in MenuPantallas.Items.OfType<MenuItem>())
+        // Solo las que SON una pantalla: las dos ordenes de abajo no se marcan,
+        // son acciones y no una eleccion.
+        foreach (var otro in MenuPantallas.Items.OfType<MenuItem>().Where(m => m.Tag is Monitor))
             otro.IsChecked = ReferenceEquals(otro, elegido);
 
         MenuPantallas.ToolTip = $"Pantalla: {elegido.Header}";

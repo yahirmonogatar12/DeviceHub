@@ -194,6 +194,13 @@ public static class RelaySession
         }
         finally
         {
+            // LA PANTALLA VIRTUAL NO SE QUEDA. Un monitor fantasma en una PC de
+            // planta no es cosmetico: Windows deja mover ventanas ahi y el
+            // operador no las vuelve a ver nunca, porque ese monitor no existe
+            // fisicamente. Se quita aunque nadie la haya encendido -- si el host
+            // anterior murio de golpe, esta es la unica limpieza que va a haber.
+            PantallaVirtual.Apagar(out _);
+
             if (relojFino)
                 TimeEndPeriod(1);
 
@@ -3227,6 +3234,39 @@ public static class RelaySession
                         // Como la entrada: lo atiende el hilo que puede teclear.
                         Pegados.Enqueue(paquete.PasteAt);
                         HayEntrada.Set();
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.VirtualDisplay:
+                        // EN EL HILO DE RED, como las acciones de la Fase 21.
+                        // Instalar un driver tarda segundos y no depende del
+                        // escritorio activo; pasarlo por la cola de captura lo
+                        // retrasaria hasta el siguiente frame, que con la
+                        // pantalla quieta puede no llegar nunca.
+                        if (paquete.VirtualDisplay.Enable)
+                        {
+                            var nueva = PantallaVirtual.Encender(out var dijo);
+
+                            opciones.Escribir(dijo);
+
+                            // Cambiar _pantalla es lo unico que hace falta: el
+                            // bucle de captura ya rehace duplicador, codificador
+                            // y lista de pantallas cuando ve que no coincide.
+                            if (nueva >= 0)
+                                _pantalla = nueva;
+                        }
+                        else
+                        {
+                            // A la principal ANTES de quitarla: si se quita
+                            // mientras se esta capturando, el duplicador se
+                            // queda sobre una salida que ya no existe y la
+                            // sesion se cae en vez de volver.
+                            _pantalla = 0;
+                            Thread.Sleep(300);
+
+                            PantallaVirtual.Apagar(out var dijo);
+                            opciones.Escribir(dijo);
+                        }
+
                         break;
 
                     case RemotePacket.PayloadOneofCase.Clipboard:
