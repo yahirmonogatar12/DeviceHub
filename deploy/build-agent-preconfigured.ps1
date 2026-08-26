@@ -22,7 +22,10 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Server,
+    # El servidor de ILSAN. Antes se adivinaba por la puerta de enlace y en una
+    # maquina con varias tarjetas -- la de WSL, sin ir mas lejos -- eso elige la
+    # equivocada y el instalador sale apuntando a una IP que no atiende.
+    [string]$Server = '192.168.1.10',
     [string]$Pin,
     [string]$Code,
     [int]$Port = 5443,
@@ -54,20 +57,6 @@ No se encontro $archivoPin
 Ejecuta este script EN EL SERVIDOR, o pasa -Pin con el valor de ese archivo.
 Sin pin los agentes confiarian en el primer certificado que vean.
 "@
-    }
-}
-
-# --- Servidor: esta PC, si es la que tiene el servicio ---
-if (-not $Server) {
-    if (Get-Service DeviceHubServer -ErrorAction SilentlyContinue) {
-        $Server = (Get-NetIPConfiguration |
-            Where-Object { $_.IPv4DefaultGateway -ne $null }).IPv4Address.IPAddress |
-            Select-Object -First 1
-
-        Write-Host "Servidor detectado: $Server" -ForegroundColor DarkGray
-    }
-    else {
-        throw 'No hay servicio DeviceHubServer aqui. Pasa -Server con la IP o nombre del servidor.'
     }
 }
 

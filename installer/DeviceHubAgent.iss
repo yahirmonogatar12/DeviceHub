@@ -23,8 +23,15 @@
 ; Con ellos, instalar en una PC de planta no pide teclear nada: ni la IP del
 ; servidor, ni el pin, ni el codigo. Es lo que evita el error de escribir el
 ; nombre del equipo o la IP del MySQL donde va el servidor de DeviceHub.
+; El servidor de ILSAN. Puesto aqui y no vacio para que hasta un instalador
+; compilado a pelo llegue con la casilla rellena: la unica forma de equivocarse
+; que quedaba era teclear la IP del MySQL, que es otra maquina.
+;
+; Que este NO basta para saltarse la pagina -- para eso hace falta ademas el
+; codigo, y ese no puede vivir en el repositorio porque es un secreto. Lo hornea
+; deployuild-agent-preconfigured.ps1.
 #ifndef DefaultServer
-  #define DefaultServer ""
+  #define DefaultServer "192.168.1.10"
 #endif
 #ifndef DefaultPort
   #define DefaultPort "5443"
