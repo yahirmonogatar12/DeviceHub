@@ -66,13 +66,37 @@ if (-not $Code) {
         throw "No se encontro $exeServidor. Pasa -Code con un codigo generado desde el dashboard."
     }
 
-    # LA CADENA DE CONEXION NO SE HEREDA SOLA.
+    # LA CADENA DE CONEXION NO SE HEREDA SOLA, y no esta donde parecia.
     #
-    # install-server.ps1 la deja como variable de MAQUINA, y una consola que ya
-    # estaba abierta cuando se puso no la tiene: el proceso hijo hereda el
-    # entorno de ESTA consola, no el registro. El sintoma es
-    # "Falta la cadena de conexion" lanzado por un servidor que, como servicio,
-    # lleva meses funcionando -- que es justo lo que despista.
+    # El sintoma es "Falta la cadena de conexion" lanzado por un servidor que,
+    # como servicio, lleva meses funcionando -- que es justo lo que despista.
+    #
+    # Y no basta con mirar el entorno de maquina: comprobado en ILSANSERVER, ahi
+    # NO esta. Vive en el bloque Environment del propio servicio, en el registro,
+    # que es un entorno privado que solo ve ese servicio al arrancar. Ni una
+    # consola nueva ni una tarea programada lo heredan.
+    if (-not $env:DEVICEHUB_DB_CONNECTION) {
+        try {
+            $clave = Get-ItemProperty `
+                -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\DeviceHubServer' `
+                -Name Environment -ErrorAction Stop
+
+            foreach ($linea in $clave.Environment) {
+                if ($linea -like 'DEVICEHUB_DB_CONNECTION=*') {
+                    $env:DEVICEHUB_DB_CONNECTION =
+                        $linea.Substring('DEVICEHUB_DB_CONNECTION='.Length)
+
+                    Write-Host "Cadena de conexion leida del servicio" -ForegroundColor DarkGray
+                    break
+                }
+            }
+        }
+        catch {
+            # Sin servicio aqui, o sin permiso para leer su clave. Quedan las
+            # otras dos fuentes.
+        }
+    }
+
     if (-not $env:DEVICEHUB_DB_CONNECTION) {
         $env:DEVICEHUB_DB_CONNECTION =
             [Environment]::GetEnvironmentVariable('DEVICEHUB_DB_CONNECTION', 'Machine')
