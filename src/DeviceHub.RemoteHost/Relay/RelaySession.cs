@@ -1621,6 +1621,10 @@ public static class RelaySession
             // Repeticiones seguidas del ultimo frame, y la marca de tiempo que
             // se les pone. Ver el bloque de "no hay imagen nueva", mas abajo.
             var repetidos = 0;
+
+            // Veces seguidas que se rehizo el codificador sin sacarle una sola
+            // salida. Dos bastan para saber que no es cosa de insistir.
+            var rehechosEnVano = 0;
             var ultimoTimestampUs = 0L;
 
             // Cuando se pidio el ultimo keyframe, o 0 si ya llego. Ver
@@ -1848,6 +1852,32 @@ public static class RelaySession
                 if (vencido)
                 {
                     keyframePedidoEn = 0;
+
+                    // REHACERLO DOS VECES SIN SACAR NADA NO ES MALA SUERTE: ESE
+                    // CODIFICADOR NO VA A ENTREGAR.
+                    //
+                    // Los MFT mienten -- aceptan toda la configuracion y devuelven
+                    // exito -- y la escalera solo comprueba que se CONSTRUYAN.
+                    // Visto en MATERIAL-P1, una UHD 730: el H.265 por hardware se
+                    // monta, se le dan sus sesenta frames, y codificados 0. Siete
+                    // veces seguidas, con la sesion en negro.
+                    //
+                    // Rehacerlo otra vez es repetir lo mismo esperando otra cosa.
+                    // Se cambia de codec y el bucle de fuera rehace la cadena
+                    // entera: es la misma escalera de la apertura, aplicada
+                    // cuando el fallo aparece en marcha.
+                    //
+                    // Solo en frio. Con salida ya emitida, un keyframe que no
+                    // llega es otro problema y el codec no tiene la culpa.
+                    if (!flujo.ConfigEnviada && ++rehechosEnVano >= 2 && _codec == VideoCodec.H265)
+                    {
+                        Avisar(opciones,
+                            $"El H.265 de esta PC acepta la configuracion y no entrega imagen " +
+                            $"({rehechosEnVano} intentos); se pasa a H.264.");
+
+                        _codec = VideoCodec.H264;
+                        return;
+                    }
 
                     Avisar(opciones, flujo.ConfigEnviada
                         ? $"El codificador no solto el keyframe pedido en medio segundo; " +
