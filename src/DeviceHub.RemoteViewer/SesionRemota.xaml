@@ -366,46 +366,10 @@
                        Text="Conectando..." />
         </Border>
 
-        <!-- Al lado del video, nunca encima, por el mismo airspace de siempre. -->
-        <Border x:Name="PanelArchivos" DockPanel.Dock="Right" Width="360"
-                Background="{StaticResource Panel}" BorderBrush="{StaticResource Linea}"
-                BorderThickness="1,0,0,0" Padding="10" Visibility="Collapsed">
-            <DockPanel>
-                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
-                    <Button DockPanel.Dock="Left" Content="&#x2191;" Width="30" Margin="0,0,6,0"
-                            Click="SubirCarpeta" ToolTip="Carpeta superior" />
-                    <TextBox x:Name="RutaRemota" FontFamily="Consolas" FontSize="12"
-                             Background="{StaticResource Hueco}" Foreground="{StaticResource Letra}"
-                             CaretBrush="{StaticResource Letra}" BorderThickness="0"
-                             Padding="6,4" KeyDown="RutaEscrita" />
-                </DockPanel>
-
-                <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
-                    <ProgressBar x:Name="Progreso" Height="6" Margin="0,0,0,6"
-                                 Background="{StaticResource Hueco}" Foreground="{StaticResource Acento}"
-                                 BorderThickness="0" />
-                    <TextBlock x:Name="EstadoArchivos" FontFamily="Consolas" FontSize="11"
-                               Foreground="{StaticResource LetraTenue}" TextWrapping="Wrap" Text="" />
-                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                        <Button Content="Descargar" Click="Descargar" />
-                        <Button Content="Subir..." Click="Subir" />
-                    </StackPanel>
-
-                    <!-- Portapapeles de archivos. Traer se habilita solo cuando
-                         la PC remota anuncia que copiaron algo. -->
-                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                        <Button x:Name="BotonTraer" Content="Traer copiado" Click="Traer"
-                                IsEnabled="False" />
-                        <Button Content="Llevar copiado" Click="Llevar" />
-                    </StackPanel>
-                </StackPanel>
-
-                <ListBox x:Name="Archivos" Background="{StaticResource Hueco}"
-                         Foreground="{StaticResource Letra}"
-                         BorderThickness="0" FontFamily="Consolas" FontSize="12"
-                         DisplayMemberPath="Etiqueta" MouseDoubleClick="AbrirEntrada" />
-            </DockPanel>
-        </Border>
+        <!-- El panel de archivos vivia AQUI, de 360 px, y se fue a su propia
+             ventana: dos listas con columnas no caben, ensancharlo comeria el
+             video, y encima del video no se puede pintar nada. Ver
+             GestorArchivos. -->
 
         <!-- ScrollChanged ADEMAS de SizeChanged, y no por gusto: las barras de
              desplazamiento entran y salen solas, y al hacerlo cambian el hueco

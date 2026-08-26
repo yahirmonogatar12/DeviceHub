@@ -163,6 +163,9 @@ public partial class SesionRemota : UserControl
     /// </summary>
     public void Cerrar()
     {
+        Terminando = true;
+        _gestor?.Close();
+
         Desactivar();
 
         // El dispositivo de sonido se suelta AQUI. Un IAudioClient vivo sigue
@@ -1441,20 +1444,32 @@ public partial class SesionRemota : UserControl
     /// Siendo private no lanza nada -- pinta las filas VACIAS, que es como se
     /// descubrio.
     /// </summary>
-    public sealed record Entrada(string Nombre, bool Carpeta, ulong Tamano)
-    {
-        public string Etiqueta => Carpeta ? $"[{Nombre}]" : $"{Nombre}   {Legible(Tamano)}";
+    private string _rutaRemota = string.Empty;
 
-        private static string Legible(ulong bytes) => bytes switch
-        {
-            < 1024 => $"{bytes} B",
-            < 1024 * 1024 => $"{bytes / 1024.0:0.0} KB",
-            < 1024UL * 1024 * 1024 => $"{bytes / 1024.0 / 1024:0.0} MB",
-            _ => $"{bytes / 1024.0 / 1024 / 1024:0.00} GB"
-        };
+    /// <summary>La carpeta abierta en la PC remota. La lee el gestor y la usan
+    /// el arrastre y el pegado.</summary>
+    public string RutaRemotaActual => _rutaRemota;
+
+    /// <summary>El gestor de dos paneles, o null si nadie lo abrio todavia. La
+    /// sesion funciona entera sin el: la transferencia es de aqui.</summary>
+    private GestorArchivos? _gestor;
+
+    /// <summary>Cierto mientras la sesion se esta cerrando. Lo mira el gestor
+    /// para dejarse cerrar de verdad en vez de esconderse.</summary>
+    public bool Terminando { get; private set; }
+
+    /// <summary>Lo ultimo que se dijo. Existe porque un par de mensajes se
+    /// construyen anadiendo a lo anterior -- "(3 en cola)" detras del nombre del
+    /// archivo -- y el texto ya no vive en un control de esta clase.</summary>
+    private string _ultimoEstado = string.Empty;
+
+    private void Decir(string texto)
+    {
+        _ultimoEstado = texto;
+        _gestor?.Decir(texto);
     }
 
-    private string _rutaRemota = string.Empty;
+    private void Avanzar(double porcentaje) => _gestor?.Avanzar(porcentaje);
 
     /// <summary>
     /// Descarga en curso. El archivo se escribe con extension .parcial y solo se
@@ -1470,47 +1485,39 @@ public partial class SesionRemota : UserControl
     private string _destinoRemoto = string.Empty;
     private ulong _tamanoSubida;
 
-    private void AlternarArchivos(object sender, RoutedEventArgs e)
-    {
-        var visible = PanelArchivos.Visibility != Visibility.Visible;
-        PanelArchivos.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+    private void AlternarArchivos(object sender, RoutedEventArgs e) => AbrirGestor();
 
-        if (visible && Archivos.Items.Count == 0)
-            PedirLista(string.Empty);
+    /// <summary>
+    /// Abre el gestor de dos paneles, o lo trae al frente si ya estaba.
+    ///
+    /// No se destruye al cerrarlo -- se esconde -- porque cerrarlo perderia las
+    /// dos rutas, y en medio de una tanda de copias eso molesta.
+    /// </summary>
+    private void AbrirGestor()
+    {
+        if (_gestor is null)
+        {
+            _gestor = new GestorArchivos(this, Titulo) { Owner = Window.GetWindow(this) };
+            _gestor.Show();
+            return;
+        }
+
+        if (!_gestor.IsVisible)
+        {
+            _gestor.Show();
+            PedirLista(_rutaRemota);
+        }
+
+        _gestor.Activate();
     }
 
-    private void PedirLista(string ruta)
+    public void PedirLista(string ruta)
         => Encolar(new RemotePacket
         {
             ProtocolVersion = RemoteSessionProtocol.Version,
             SessionId = _sesion,
             FileListRequest = new FileListRequest { Path = ruta }
         });
-
-    private void RutaEscrita(object sender, KeyEventArgs e)
-    {
-        if (e.Key != Key.Enter)
-            return;
-
-        e.Handled = true;
-        PedirLista(RutaRemota.Text.Trim());
-    }
-
-    private void SubirCarpeta(object sender, RoutedEventArgs e)
-    {
-        // Sin carpeta superior se vuelve a las unidades, no a un error.
-        var padre = string.IsNullOrEmpty(_rutaRemota)
-            ? string.Empty
-            : Path.GetDirectoryName(_rutaRemota.TrimEnd(Path.DirectorySeparatorChar)) ?? string.Empty;
-
-        PedirLista(padre);
-    }
-
-    private void AbrirEntrada(object sender, MouseButtonEventArgs e)
-    {
-        if (Archivos.SelectedItem is Entrada { Carpeta: true } carpeta)
-            PedirLista(Combinar(carpeta.Nombre));
-    }
 
     /// <summary>Las unidades llegan como "C:\", que ya es una ruta completa.</summary>
     private string Combinar(string nombre)
@@ -1521,34 +1528,51 @@ public partial class SesionRemota : UserControl
         {
             if (lista.Error.Length > 0)
             {
-                EstadoArchivos.Text = lista.Error;
+                Decir(lista.Error);
                 return;
             }
 
             _rutaRemota = lista.Path;
-            RutaRemota.Text = lista.Path;
-
-            Archivos.ItemsSource = lista.Entries
-                .Select(x => new Entrada(x.Name, x.Directory, x.Size))
-                .ToList();
-
-            EstadoArchivos.Text = $"{lista.Entries.Count} elementos";
+            _gestor?.MostrarRemoto(lista);
         });
 
     // ------------------------------------------------------------- descarga
 
-    private void Descargar(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Baja varios, en serie. Lo llama el gestor con las rutas ya resueltas: la
+    /// seleccion es suya y las rutas son lo unico que esta clase necesita.
+    /// </summary>
+    public void BajarVarios(IReadOnlyList<(string Remoto, string Local)> cuales)
     {
-        if (Archivos.SelectedItem is not Entrada { Carpeta: false } archivo)
-        {
-            EstadoArchivos.Text = "Elige un archivo.";
+        if (cuales.Count == 0)
             return;
-        }
 
-        var carpeta = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "DeviceHub");
+        _cola.Clear();
+        _transferidos.Clear();
+        _portapapelesAlFinal = false;
+        _pegarEn = null;
 
-        IniciarBajada(Combinar(archivo.Nombre), Path.Combine(carpeta, archivo.Nombre));
+        foreach (var (remoto, local) in cuales)
+            _cola.Enqueue((remoto, local, true));
+
+        SiguienteDeLaCola();
+    }
+
+    /// <summary>Sube varios, en serie.</summary>
+    public void SubirVarios(IReadOnlyList<(string Local, string Remoto)> cuales)
+    {
+        if (cuales.Count == 0)
+            return;
+
+        _cola.Clear();
+        _transferidos.Clear();
+        _portapapelesAlFinal = false;
+        _pegarEn = null;
+
+        foreach (var (local, remoto) in cuales)
+            _cola.Enqueue((remoto, local, false));
+
+        SiguienteDeLaCola();
     }
 
     private void IniciarBajada(string remoto, string local)
@@ -1568,10 +1592,10 @@ public partial class SesionRemota : UserControl
 
         var nombre = Path.GetFileName(local);
 
-        Progreso.Value = 0;
-        EstadoArchivos.Text = desde > 0
+        Avanzar(0);
+        Decir(desde > 0
             ? $"Reanudando {nombre} desde {desde / 1024} KB..."
-            : $"Descargando {nombre}...";
+            : $"Descargando {nombre}...");
 
         Encolar(new RemotePacket
         {
@@ -1593,7 +1617,7 @@ public partial class SesionRemota : UserControl
                 // volver a bajar lo que ya llego.
                 _bajando.Dispose();
                 _bajando = null;
-                EstadoArchivos.Text = $"Fallo: {trozo.Error}";
+                Decir($"Fallo: {trozo.Error}");
                 return;
             }
 
@@ -1604,7 +1628,7 @@ public partial class SesionRemota : UserControl
             }
 
             if (trozo.Total > 0)
-                Progreso.Value = (trozo.Offset + (ulong)trozo.Data.Length) * 100.0 / trozo.Total;
+                Avanzar((trozo.Offset + (ulong)trozo.Data.Length) * 100.0 / trozo.Total);
 
             if (!trozo.Last)
                 return;
@@ -1616,8 +1640,12 @@ public partial class SesionRemota : UserControl
 
             File.Move(parcial, _destinoFinal, overwrite: true);
 
-            Progreso.Value = 100;
-            EstadoArchivos.Text = $"Guardado en {_destinoFinal}";
+            Avanzar(100);
+            Decir($"Guardado en {_destinoFinal}");
+
+            // El panel local acaba de cambiar. Dejarlo con la lista vieja es
+            // enseñar que no llego nada.
+            _gestor?.RefrescarLocal();
 
             SiguienteDeLaCola();
         });
@@ -1693,14 +1721,11 @@ public partial class SesionRemota : UserControl
         // El panel se abre pase lo que pase: o enseña el progreso, o enseña por
         // que no hay progreso. Un archivo soltado que no hace nada y no dice
         // nada es peor que no poder soltarlo.
-        PanelArchivos.Visibility = Visibility.Visible;
-
-        if (Archivos.Items.Count == 0 && string.IsNullOrEmpty(_rutaRemota))
-            PedirLista(string.Empty);
+        AbrirGestor();
 
         if (plan.Queja is { } queja)
         {
-            EstadoArchivos.Text = queja;
+            Decir(queja);
             return;
         }
 
@@ -1724,7 +1749,7 @@ public partial class SesionRemota : UserControl
 
     private void PegarSoltados(IReadOnlyList<string> archivos, (double X, double Y) donde)
     {
-        PanelArchivos.Visibility = Visibility.Visible;
+        AbrirGestor();
 
         _cola.Clear();
         _transferidos.Clear();
@@ -1741,7 +1766,7 @@ public partial class SesionRemota : UserControl
             _cola.Enqueue((remoto, local, false));
         }
 
-        EstadoArchivos.Text = $"Llevando {archivos.Count} archivo(s) a donde soltaste...";
+        Decir($"Llevando {archivos.Count} archivo(s) a donde soltaste...");
         SiguienteDeLaCola();
     }
 
@@ -1749,7 +1774,7 @@ public partial class SesionRemota : UserControl
     {
         if (string.IsNullOrEmpty(_rutaRemota))
         {
-            EstadoArchivos.Text = "Entra primero en una carpeta de la PC remota.";
+            Decir("Entra primero en una carpeta de la PC remota.");
             return;
         }
 
@@ -1768,8 +1793,8 @@ public partial class SesionRemota : UserControl
         _tamanoSubida = (ulong)_subiendo.Length;
         _destinoRemoto = remoto;
 
-        Progreso.Value = 0;
-        EstadoArchivos.Text = $"Subiendo {Path.GetFileName(local)}...";
+        Avanzar(0);
+        Decir($"Subiendo {Path.GetFileName(local)}...");
 
         // EL SONDEO. Un trozo vacio no escribe nada: solo pregunta cuanto hay ya
         // en el destino. El host contesta con un FileAck y de ahi sale el offset
@@ -1792,7 +1817,7 @@ public partial class SesionRemota : UserControl
             {
                 _subiendo.Dispose();
                 _subiendo = null;
-                EstadoArchivos.Text = $"Fallo: {acuse.Error}";
+                Decir($"Fallo: {acuse.Error}");
                 return;
             }
 
@@ -1800,8 +1825,8 @@ public partial class SesionRemota : UserControl
             {
                 _subiendo.Dispose();
                 _subiendo = null;
-                Progreso.Value = 100;
-                EstadoArchivos.Text = $"Subido a {_destinoRemoto}";
+                Avanzar(100);
+                Decir($"Subido a {_destinoRemoto}");
 
                 SiguienteDeLaCola();
                 return;
@@ -1816,7 +1841,7 @@ public partial class SesionRemota : UserControl
             _subiendo.Seek((long)acuse.Received, SeekOrigin.Begin);
             var leidos = _subiendo.Read(bufer, 0, bufer.Length);
 
-            Progreso.Value = acuse.Received * 100.0 / Math.Max(_tamanoSubida, 1);
+            Avanzar(acuse.Received * 100.0 / Math.Max(_tamanoSubida, 1));
 
             Encolar(new RemotePacket
             {
@@ -1864,9 +1889,9 @@ public partial class SesionRemota : UserControl
         {
             _copiadoAlla = [.. aviso.Paths];
 
-            PanelArchivos.Visibility = Visibility.Visible;
-            BotonTraer.IsEnabled = _copiadoAlla.Count > 0;
-            EstadoArchivos.Text = $"{_copiadoAlla.Count} archivos copiados en la PC remota. Pulsa Traer.";
+            AbrirGestor();
+            _gestor?.HayCopiadoAlla(_copiadoAlla.Count > 0);
+            Decir($"{_copiadoAlla.Count} archivos copiados en la PC remota. Pulsa Traer.");
         });
 
     /// <summary>
@@ -1877,7 +1902,7 @@ public partial class SesionRemota : UserControl
     /// sorpresa cara. RustDesk tampoco lo esconde -- ensena su ventana de
     /// progreso.
     /// </summary>
-    private void Traer(object sender, RoutedEventArgs e)
+    public void TraerCopiado()
     {
         if (_copiadoAlla.Count == 0)
             return;
@@ -1905,7 +1930,7 @@ public partial class SesionRemota : UserControl
 
     /// <summary>Sube lo que hay copiado aqui y lo deja en el portapapeles de
     /// alla.</summary>
-    private void Llevar(object sender, RoutedEventArgs e)
+    public void LlevarCopiado()
     {
         List<string> locales;
 
@@ -1915,13 +1940,13 @@ public partial class SesionRemota : UserControl
         }
         catch (System.Runtime.InteropServices.COMException)
         {
-            EstadoArchivos.Text = "El portapapeles esta ocupado. Reintenta.";
+            Decir("El portapapeles esta ocupado. Reintenta.");
             return;
         }
 
         if (locales.Count == 0)
         {
-            EstadoArchivos.Text = "No hay archivos copiados en esta PC.";
+            Decir("No hay archivos copiados en esta PC.");
             return;
         }
 
@@ -1967,7 +1992,7 @@ public partial class SesionRemota : UserControl
             else
                 IniciarSubida(local, remoto);
 
-            EstadoArchivos.Text += $"   ({_cola.Count} en cola)";
+            Decir(_ultimoEstado + $"   ({_cola.Count} en cola)");
             return;
         }
 
@@ -1987,11 +2012,11 @@ public partial class SesionRemota : UserControl
                 lista.AddRange([.. rutas]);
 
                 Clipboard.SetFileDropList(lista);
-                EstadoArchivos.Text = $"{rutas.Count} archivos listos para pegar aqui.";
+                Decir($"{rutas.Count} archivos listos para pegar aqui.");
             }
             catch (System.Runtime.InteropServices.COMException)
             {
-                EstadoArchivos.Text = "Los archivos llegaron, pero el portapapeles estaba ocupado.";
+                Decir("Los archivos llegaron, pero el portapapeles estaba ocupado.");
             }
 
             return;
@@ -2018,11 +2043,11 @@ public partial class SesionRemota : UserControl
                 PasteAt = new PasteAt { X = donde.X, Y = donde.Y }
             });
 
-            EstadoArchivos.Text = $"{rutas.Count} archivo(s) pegados donde los soltaste.";
+            Decir($"{rutas.Count} archivo(s) pegados donde los soltaste.");
             return;
         }
 
-        EstadoArchivos.Text = $"{rutas.Count} archivos listos para pegar en la PC remota.";
+        Decir($"{rutas.Count} archivos listos para pegar en la PC remota.");
     }
 
     // --------------------------------------------------------------- pantallas
@@ -2452,10 +2477,9 @@ public partial class SesionRemota : UserControl
             BarraSuperior.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
             BarraEstado.Visibility = value ? _datosAntes : Visibility.Collapsed;
 
-            // El panel de archivos no se restaura solo: se abre a mano y se
-            // cierra a mano, y volver del mosaico no es ninguna de las dos.
-            if (!value)
-                PanelArchivos.Visibility = Visibility.Collapsed;
+            // El gestor de archivos NO se toca al entrar en mosaico. Ahora es
+            // una ventana suya, no una parte de este control: esconderla porque
+            // la sesion pase a miniatura seria cortar una copia a medias.
         }
     } = true;
 
