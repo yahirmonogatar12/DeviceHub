@@ -65,15 +65,28 @@ public sealed class InteractiveSessionLauncher(
         configuracion.GetValue("DeviceHub:SecureDesktop", true);
 
     /// <summary>
-    /// Codec de video. "h265" para probarlo en ESTA maquina.
+    /// Codec de video. H.265 DE FABRICA; "h264" para saltarselo en ESTA maquina.
     ///
-    /// Apagado por defecto y por el mismo motivo que el escritorio seguro: si
-    /// la iGPU de planta codifica H.265 mas rapido, y si la PC del tecnico lo
-    /// descodifica, son preguntas que solo se responden en ese hardware.
-    /// Probarlo tiene que ser cambiar una linea y reiniciar el servicio.
+    /// Nacio al reves -- h264 por defecto, h265 para probar -- y esa prueba se
+    /// hizo: en las PCs de planta H.265 va bien y gasta menos ancho de banda.
+    /// Lo que lo obligo a cambiar fue peor que una mejora: apareció una maquina
+    /// donde H.264 NO PINTA NADA, ni por hardware ni por software. Los dos
+    /// construyen sin quejarse y no sale imagen; H.265 funciona a la primera, y
+    /// RustDesk la ve perfectamente tambien en H.265.
+    ///
+    /// Con el valor viejo esa PC no lo intentaba JAMAS: el instalador no
+    /// escribe esta clave, asi que toda maquina recien dada de alta se quedaba
+    /// en H.264 para siempre. Habia que cambiar el codec a mano en cada sesion.
+    ///
+    /// Poner "h264" aqui sigue valiendo, y ahora sirve para lo contrario: es la
+    /// escotilla para una PC cuyo MFT de H.265 diga que si y luego no entregue
+    /// -- que es exactamente lo que en esa maquina hace el de H.264.
+    ///
+    /// Empezar por H.265 no cuesta nada donde no existe: la escalera del host
+    /// se cae sola a H.264 por hardware y despues por software.
     /// </summary>
     private readonly bool _h265 =
-        string.Equals(configuracion.GetValue("DeviceHub:Codec", "h264"), "h265", StringComparison.OrdinalIgnoreCase);
+        !string.Equals(configuracion.GetValue("DeviceHub:Codec", "h265"), "h264", StringComparison.OrdinalIgnoreCase);
 
     private readonly Lock _puerta = new();
     private Sesion? _actual;
