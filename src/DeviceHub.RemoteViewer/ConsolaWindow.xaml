@@ -63,7 +63,17 @@
                             ToolTip="Pantalla completa" />
                 </StackPanel>
 
-                <ScrollViewer HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled">
+                <!-- Auto y no Hidden: con veintinueve pestanas la barra se corta
+                     y hay que poder ver DONDE estas. Con pocas no aparece, asi
+                     que la franja sigue midiendo lo mismo.
+
+                     Y la rueda, que es lo que la hace usable: la del raton es
+                     vertical y aqui el scroll vertical esta desactivado, asi que
+                     sin el manejador de abajo esto se podia cortar pero no
+                     mover. -->
+                <ScrollViewer x:Name="TiraPestanas"
+                              HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
+                              PreviewMouseWheel="RuedaSobrePestanas">
                     <StackPanel x:Name="Pestanas" Orientation="Horizontal" />
                 </ScrollViewer>
             </DockPanel>

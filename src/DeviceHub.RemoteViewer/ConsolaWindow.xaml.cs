@@ -161,6 +161,24 @@ public partial class ConsolaWindow : Window
         Activate();
     }
 
+    /// <summary>
+    /// La rueda mueve la tira de pestanas de lado.
+    ///
+    /// Sin esto la barra se podia cortar y no se podia mover: la rueda del raton
+    /// es vertical, y en esta tira el scroll vertical esta desactivado a
+    /// proposito -- las pestanas van en una sola fila.
+    /// </summary>
+    private void RuedaSobrePestanas(object sender, MouseWheelEventArgs e)
+    {
+        if (sender is not ScrollViewer tira)
+            return;
+
+        // Tres pestanas por golpe de rueda, mas o menos: un Delta de 120 son
+        // 120 px, que a ojo es lo que mide una.
+        tira.ScrollToHorizontalOffset(tira.HorizontalOffset - e.Delta);
+        e.Handled = true;
+    }
+
     private void Seleccionar(Pestana pestana)
     {
         if (_delante is { } anterior && !ReferenceEquals(anterior, pestana))
@@ -173,6 +191,10 @@ public partial class ConsolaWindow : Window
 
         _delante = pestana;
         Title = $"DeviceHub - {pestana.Sesion.Titulo}";
+
+        // Que la elegida SE VEA. Con la tira desplazada, elegir una pestana por
+        // teclado o al abrirse una nueva la dejaba marcada fuera de pantalla.
+        pestana.Ficha.BringIntoView();
 
         Repintar();
     }
