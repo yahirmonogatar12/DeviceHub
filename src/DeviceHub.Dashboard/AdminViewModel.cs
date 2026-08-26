@@ -169,10 +169,10 @@ public sealed partial class MainViewModel
     /// Vacio = el que el servidor tenga configurado.
     /// </summary>
     [RelayCommand]
-    private async Task RemoteControlAsync(string? motor)
+    private async Task<bool> RemoteControlAsync(string? motor)
     {
         if (SelectedMachine is null)
-            return;
+            return false;
 
         RemoteSessionReply? session = null;
 
@@ -205,7 +205,7 @@ public sealed partial class MainViewModel
                 _remoteSessionId = session.SessionId;
                 CommandFeedback = $"Sesion remota abierta sobre {SelectedMachine.MachineCode}";
 
-                return;
+                return true;
             }
 
             var proceso = System.Diagnostics.Process.Start(
@@ -239,6 +239,8 @@ public sealed partial class MainViewModel
                 ? $"Sesion remota abierta sobre {SelectedMachine.MachineCode}"
                 : $"Sesion abierta sobre {SelectedMachine.MachineCode}, pero su agente no esta " +
                   "conectado: nadie va a atender del otro lado.";
+
+            return true;
         }
         catch (Exception ex)
         {
@@ -252,9 +254,23 @@ public sealed partial class MainViewModel
             }
 
             CommandFeedback = Describe(ex);
-            MessageBox.Show(Describe(ex), "Control remoto", MessageBoxButton.OK, MessageBoxImage.Warning);
+
+            // EN UNA TANDA NO SE ABRE UN DIALOGO POR CADA FALLO.
+            //
+            // Cada uno PARA todo hasta que alguien lo acepte, y con 29 equipos
+            // eso son 29 interrupciones en fila. Quien lanza una tanda quiere
+            // volver y encontrarla hecha, con la lista de lo que no pudo -- no
+            // ir aceptando cuadros de uno en uno.
+            if (!_sinDialogos)
+                MessageBox.Show(Describe(ex), "Control remoto", MessageBoxButton.OK, MessageBoxImage.Warning);
+
+            return false;
         }
     }
+
+    /// <summary>Callado mientras dura una tanda: los fallos se juntan y se
+    /// cuentan al final en vez de interrumpir uno por uno.</summary>
+    private bool _sinDialogos;
 
     /// <summary>
     /// Localiza el cliente de control remoto EN ESTA PC.

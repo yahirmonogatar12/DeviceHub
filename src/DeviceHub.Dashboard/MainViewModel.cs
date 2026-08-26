@@ -561,23 +561,54 @@ public sealed partial class MainViewModel : ObservableObject
 
         var anterior = SelectedMachine;
         var abiertas = 0;
+        var fallidas = new List<string>();
 
-        foreach (var maquina in cuales)
+        // EN SILENCIO MIENTRAS DURA LA TANDA.
+        //
+        // Cada fallo abria su propio cuadro de dialogo y PARABA todo hasta que
+        // alguien lo aceptara. Con 29 equipos eso son 29 interrupciones en fila
+        // -- se vio abriendo 28: un modal de RustDesk a mitad, y la tanda
+        // esperando a que lo cerraran.
+        _sinDialogos = true;
+
+        try
         {
-            StatusMessage = $"Abriendo {maquina.MachineCode}... ({abiertas + 1} de {cuales.Count})";
+            foreach (var maquina in cuales)
+            {
+                StatusMessage = $"Abriendo {maquina.MachineCode}... ({abiertas + fallidas.Count + 1} de {cuales.Count})";
 
-            // RemoteControlAsync trabaja sobre SelectedMachine, que es como lo
-            // usa el boton de siempre. Se le presta la maquina de turno en vez
-            // de duplicar aqui todo el lanzamiento -- ticket, stdin y reuso del
-            // visor abierto -- que es justo donde estan las decisiones dificiles.
-            SelectedMachine = maquina;
+                // RemoteControlAsync trabaja sobre SelectedMachine, que es como
+                // lo usa el boton de siempre. Se le presta la maquina de turno en
+                // vez de duplicar aqui todo el lanzamiento -- ticket, stdin y
+                // reuso del visor abierto -- que es donde estan las decisiones
+                // dificiles.
+                SelectedMachine = maquina;
 
-            await RemoteControlAsync(null);
-            abiertas++;
+                // "devicehub" EXPLICITO, no el motor por defecto.
+                //
+                // El de por defecto lo decide DeviceHub:RemoteProvider en el
+                // servidor, y hoy es "rustdesk" -- la Fase 18 todavia no lo ha
+                // cambiado. Asi que este boton abria por RustDesk, y en las PCs
+                // que no lo tienen instalado saltaba "esta maquina no tiene motor
+                // de control remoto". El motor propio no necesita nada alla:
+                // direcciona por machine_id, que siempre existe.
+                if (await RemoteControlAsync("devicehub"))
+                    abiertas++;
+                else
+                    fallidas.Add(maquina.MachineCode);
+            }
+        }
+        finally
+        {
+            _sinDialogos = false;
         }
 
         SelectedMachine = anterior;
-        StatusMessage = $"{abiertas} sesion(es) abiertas en la ventana del visor.";
+
+        StatusMessage = fallidas.Count == 0
+            ? $"{abiertas} sesion(es) abiertas en la ventana del visor."
+            : $"{abiertas} abiertas; {fallidas.Count} no se pudieron: {string.Join(", ", fallidas.Take(6))}" +
+              (fallidas.Count > 6 ? "..." : string.Empty);
     }
 
     /// <summary>
