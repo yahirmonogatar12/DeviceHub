@@ -28,6 +28,15 @@
                     Style="{StaticResource BtnGhost}"
                     Command="{Binding CreateEnrollmentCodeCommand}"
                     Visibility="{Binding IsAdministrator, Converter={StaticResource BoolToVis}}" />
+
+            <!-- A TODOS DE UNA. El agente mira el recurso cada seis horas por su
+                 cuenta; esto es para cuando se acaba de publicar algo. Pulsarlo
+                 equipo por equipo con veinte PCs es una tarde. -->
+            <Button DockPanel.Dock="Right" Content="Actualizar todos"
+                    Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
+                    ToolTip="Pide a todos los equipos EN LINEA que busquen actualizacion ahora"
+                    Command="{Binding UpdateAllCommand}"
+                    Visibility="{Binding IsAdministrator, Converter={StaticResource BoolToVis}}" />
         </DockPanel>
 
         <!-- Filtros. Las fichas de estado SON el filtro: pulsar una deja solo

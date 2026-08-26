@@ -533,6 +533,81 @@ public sealed partial class MainViewModel : ObservableObject
         return Math.Clamp(valor, minimo, maximo);
     }
 
+    /// <summary>
+    /// Le dice a TODAS las PCs conectadas que miren el recurso AHORA.
+    ///
+    /// El agente lo comprueba solo cada seis horas. Publicar algo urgente y
+    /// esperar seis horas es casi lo mismo que no haberlo publicado, y la
+    /// alternativa era pulsar "Actualizar ahora" equipo por equipo -- con
+    /// veinte, eso es una tarde.
+    ///
+    /// SOLO A LAS QUE ESTAN EN LINEA. A una apagada el comando se le queda
+    /// encolado y caduca; enviarselo solo sirve para llenar la auditoria de
+    /// ordenes que nadie ejecuto. Cuando encienda, mirara sola.
+    ///
+    /// Y NO SE ESPERA RESPUESTA, a proposito. Si hay version nueva el servicio
+    /// se REINICIA para aplicarla, asi que la respuesta no llega casi nunca:
+    /// esperarla daria una fila de "sin respuesta" que parecen fallos y son
+    /// exactamente lo contrario -- la prueba de que funciono.
+    /// </summary>
+    [RelayCommand]
+    private async Task UpdateAllAsync()
+    {
+        var enLinea = Machines
+            .Where(m => !m.Retired && m.Status == MachineStatus.Online)
+            .ToList();
+
+        if (enLinea.Count == 0)
+        {
+            MessageBox.Show("No hay ningun equipo en linea ahora mismo.",
+                "Actualizar todos", MessageBoxButton.OK, MessageBoxImage.Information);
+
+            return;
+        }
+
+        var salto = Environment.NewLine;
+
+        var pregunta = MessageBox.Show(
+            $"Se le va a pedir a {enLinea.Count} equipo(s) que busquen actualizacion ahora." +
+            salto + salto +
+            "Los que tengan version nueva REINICIARAN su servicio para aplicarla." + salto +
+            "La sesion remota que este abierta contra ellos se cortara." +
+            salto + salto +
+            "Continuar?",
+            "Actualizar todos", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+
+        if (pregunta != MessageBoxResult.Yes)
+            return;
+
+        var pedidos = 0;
+        var fallidos = 0;
+
+        foreach (var maquina in enLinea)
+        {
+            try
+            {
+                await _client.SendCommandAsync(
+                    new SendCommandRequest { MachineId = maquina.MachineId, Type = CommandType.CheckUpdate },
+                    CancellationToken.None);
+
+                pedidos++;
+            }
+            catch (Exception)
+            {
+                // Una que falle no puede parar a las demas: es lo que convierte
+                // "actualizar todos" en "actualizar hasta la primera que dio
+                // problemas", que es peor que no tener el boton.
+                fallidos++;
+            }
+
+            StatusMessage = $"Pidiendo actualizacion... {pedidos + fallidos} de {enLinea.Count}";
+        }
+
+        StatusMessage = fallidos == 0
+            ? $"Pedida la actualizacion a {pedidos} equipo(s). Los que tengan version nueva se reinician solos."
+            : $"Pedida a {pedidos} equipo(s); {fallidos} no aceptaron la orden.";
+    }
+
     [RelayCommand]
     private async Task CreateEnrollmentCodeAsync()
     {
