@@ -66,6 +66,46 @@ if (-not $Code) {
         throw "No se encontro $exeServidor. Pasa -Code con un codigo generado desde el dashboard."
     }
 
+    # LA CADENA DE CONEXION NO SE HEREDA SOLA.
+    #
+    # install-server.ps1 la deja como variable de MAQUINA, y una consola que ya
+    # estaba abierta cuando se puso no la tiene: el proceso hijo hereda el
+    # entorno de ESTA consola, no el registro. El sintoma es
+    # "Falta la cadena de conexion" lanzado por un servidor que, como servicio,
+    # lleva meses funcionando -- que es justo lo que despista.
+    if (-not $env:DEVICEHUB_DB_CONNECTION) {
+        $env:DEVICEHUB_DB_CONNECTION =
+            [Environment]::GetEnvironmentVariable('DEVICEHUB_DB_CONNECTION', 'Machine')
+
+        if ($env:DEVICEHUB_DB_CONNECTION) {
+            Write-Host "Cadena de conexion leida del entorno de la maquina" -ForegroundColor DarkGray
+        }
+    }
+
+    # Y si tampoco esta ahi, la del appsettings.json del propio servidor.
+    if (-not $env:DEVICEHUB_DB_CONNECTION) {
+        $configServidor = Join-Path (Split-Path $exeServidor) 'appsettings.json'
+
+        if (Test-Path $configServidor) {
+            $cadena = (Get-Content $configServidor -Raw | ConvertFrom-Json).DeviceHub.ConnectionString
+
+            if ($cadena) {
+                $env:DEVICEHUB_DB_CONNECTION = $cadena
+                Write-Host "Cadena de conexion leida de appsettings.json" -ForegroundColor DarkGray
+            }
+        }
+    }
+
+    if (-not $env:DEVICEHUB_DB_CONNECTION) {
+        throw @'
+No hay cadena de conexion a MySQL en este entorno.
+
+El servicio la tiene, pero esta consola no. Abre una PowerShell NUEVA como
+Administrador y vuelve a intentarlo, o genera el codigo desde el dashboard
+(Maquinas -> Codigo de enrolamiento) y pasalo con -Code.
+'@
+    }
+
     Write-Host "Generando codigo para $Machines maquina(s)..." -ForegroundColor DarkGray
 
     $Code = (& $exeServidor --enrollment-code --uses $Machines --minutes $ValidMinutes 2>$null |

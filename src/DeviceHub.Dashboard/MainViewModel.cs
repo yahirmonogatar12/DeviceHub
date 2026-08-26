@@ -505,13 +505,64 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Pide un numero con un dialogo simple. Devuelve null si se cancela.
+    ///
+    /// Con InputBox de VisualBasic y no con una ventana propia: son dos
+    /// preguntas de un solo campo, y montarles un XAML con su ViewModel seria
+    /// mas codigo que el que las usa. El ensamblado ya viene con el runtime.
+    /// </summary>
+    private static int? PedirNumero(string pregunta, string titulo, int porDefecto, int minimo, int maximo)
+    {
+        var texto = Microsoft.VisualBasic.Interaction.InputBox(
+            $"{pregunta}  ({minimo}-{maximo})", titulo, porDefecto.ToString());
+
+        // Cancelar devuelve cadena vacia, igual que dejarlo en blanco. Las dos
+        // significan lo mismo aqui: no emitir el codigo.
+        if (string.IsNullOrWhiteSpace(texto))
+            return null;
+
+        if (!int.TryParse(texto.Trim(), out var valor))
+        {
+            MessageBox.Show($"'{texto}' no es un numero.", titulo,
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+
+            return null;
+        }
+
+        return Math.Clamp(valor, minimo, maximo);
+    }
+
     [RelayCommand]
     private async Task CreateEnrollmentCodeAsync()
     {
         try
         {
+            // CUANTAS PCs Y CUANTO DURA, en vez de 1 uso y 30 minutos fijos.
+            //
+            // Un codigo de un solo uso obliga a volver al dashboard entre PC y
+            // PC, y media hora no alcanza para una ronda por la planta: quien
+            // iba a instalar cinco equipos acababa generando cinco codigos desde
+            // el telefono, o dejando uno de mas emitido por si acaso.
+            //
+            // Sigue habiendo tope en los dos: un codigo es la llave para dar de
+            // alta una maquina, y uno sin limites que se queda en una USB es una
+            // puerta abierta que nadie recuerda cerrar.
+            var cuantas = PedirNumero(
+                "Para cuantas PCs va a valer este codigo?", "PCs", 5, 1, 50);
+
+            if (cuantas is not { } usos)
+                return;
+
+            var minutos = PedirNumero(
+                "Cuantos minutos quieres que dure?", "Minutos", 240, 5, 1440);
+
+            if (minutos is not { } vigencia)
+                return;
+
             var reply = await _client.CreateEnrollmentCodeAsync(
-                new CreateEnrollmentCodeRequest { MaxUses = 1, ValidMinutes = 30 }, CancellationToken.None);
+                new CreateEnrollmentCodeRequest { MaxUses = usos, ValidMinutes = vigencia },
+                CancellationToken.None);
 
             // PRIMERO SE COPIA, PERO SI FALLA SE ENSENA IGUAL.
             //
