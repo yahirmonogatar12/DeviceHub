@@ -747,7 +747,39 @@ public sealed class H264Encoder : IVideoEncoder
         throw new VideoEncoderUnavailableException(
             $"Ningun codificador {Nombre} acepto la configuracion.\n" +
             string.Join("\n", fallos.Select(f => "  " + f)) +
-            "\n\nEn Windows Server, Media Foundation es una caracteristica opcional que no viene instalada.");
+            "\n\n" + Pista());
+    }
+
+    /// <summary>
+    /// Que mirar cuando no queda codificador, segun el Windows que sea.
+    ///
+    /// LA PISTA DE SERVER SE DABA SIEMPRE. En una PC de planta con Windows 11 y
+    /// una UHD 770 manda a instalar una caracteristica que ahi no existe,
+    /// mientras la causa real se queda sin nombrar. Una pista equivocada cuesta
+    /// mas que ninguna: la primera media hora se va buscando donde no es.
+    /// </summary>
+    private static string Pista()
+    {
+        var tipo = Microsoft.Win32.Registry.GetValue(
+            @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+            "InstallationType", null) as string;
+
+        if (string.Equals(tipo, "Server", StringComparison.OrdinalIgnoreCase))
+        {
+            return "En Windows Server, Media Foundation es una caracteristica opcional que no " +
+                   "viene instalada:\n" +
+                   "  Install-WindowsFeature Server-Media-Foundation";
+        }
+
+        return
+            "En un Windows cliente esto no suele ser el codificador, sino desde donde se mira:\n" +
+            "  - Alguien conectado por Escritorio remoto a esta PC. Esa sesion no tiene GPU, y sin\n" +
+            "    ella Quick Sync contesta E_FAIL. Desconecta esa sesion y vuelve a probar.\n" +
+            "  - Edicion N de Windows, o Media Feature Pack quitado: faltan los codecs de Media\n" +
+            "    Foundation, y hasta el codificador por software contesta E_NOTIMPL.\n" +
+            "  - Otro programa ocupando el codificador de Intel, que admite pocas instancias.\n" +
+            "\nPara ver que hay de verdad en esta maquina:\n" +
+            "  DeviceHub.RemoteHost.exe --encode-test";
     }
 
     /// <summary>
