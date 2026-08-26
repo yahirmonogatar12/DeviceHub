@@ -18,6 +18,38 @@
         <FontFamily x:Key="Mono">Consolas</FontFamily>
         <sys:Double xmlns:sys="clr-namespace:System;assembly=System.Runtime" x:Key="Tam">13</sys:Double>
 
+        <!-- LA CONSOLA NO HEREDA EL ESTILO DE LAS CAJAS DEL DASHBOARD.
+             
+             Theme.xaml define un Style implicito para TextBox con Height=34 y
+             VerticalContentAlignment=Center, mas una plantilla con borde
+             redondeado. Es lo correcto para un cuadro de busqueda y es ruinoso
+             aqui: la SALIDA quedaba de 34 px, centrada en mitad de la ventana,
+             con marco de caja de texto, que es exactamente lo que se veia.
+             
+             Un Style implicito declarado en esta ventana sustituye al de la
+             aplicacion para todo lo que hay dentro. Sin Height, para que la
+             salida ocupe lo que le den. -->
+        <Style TargetType="TextBox">
+            <Setter Property="Background" Value="#0C0C0C" />
+            <Setter Property="Foreground" Value="#CCCCCC" />
+            <Setter Property="CaretBrush" Value="#CCCCCC" />
+            <Setter Property="SelectionBrush" Value="#264F78" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FontFamily" Value="{StaticResource Mono}" />
+            <Setter Property="FontSize" Value="{StaticResource Tam}" />
+            <Setter Property="VerticalContentAlignment" Value="Top" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <ScrollViewer x:Name="PART_ContentHost" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="Pestana" TargetType="Button">
             <Setter Property="Focusable" Value="False" />
             <Setter Property="FontFamily" Value="{StaticResource Mono}" />

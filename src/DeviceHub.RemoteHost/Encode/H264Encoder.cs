@@ -152,6 +152,34 @@ public sealed class H264Encoder : IVideoEncoder
         var (transform, nombre, hardware) = Select(adapterLuid, vendorId);
         _transform = transform;
 
+        // SI ACABAMOS EN UNO POR SOFTWARE, SE TRABAJA POR CPU.
+        //
+        // La tuberia por GPU se monta antes de elegir, porque hasta que no se
+        // recorre la escalera no se sabe con cual se acaba. Si el elegido es por
+        // software, ese gestor y ese convertidor ya no valen: el MFT quiere
+        // muestras en memoria, no texturas, y seguir entregandole texturas seria
+        // el mismo desencuentro por el otro lado.
+        //
+        // Hasta ahora esto solo pasaba cuando ResetDevice lanzaba -- una maquina
+        // sin tuberia de video. PCPROD1 enseño el otro camino: un dispositivo
+        // D3D perfectamente valido, sobre un adaptador que no tiene codificador,
+        // y la escalera cayendo hasta el de software con la tuberia de GPU
+        // todavia montada.
+        if (!hardware && _deviceManager is not null)
+        {
+            _deviceManager.Dispose();
+            _deviceManager = null;
+
+            _converter?.Dispose();
+            _converter = null;
+
+            _cpu = new Nv12Cpu(
+                device,
+                anchoEntrada is 0 ? width : anchoEntrada,
+                altoEntrada is 0 ? height : altoEntrada,
+                width, height);
+        }
+
         var asincrono = Flag(_transform, TransformAsync);
 
         Capabilities = new VideoEncoderCapabilities(
@@ -817,7 +845,15 @@ public sealed class H264Encoder : IVideoEncoder
             // Por CPU no se manda NADA. Decirle a un MFT que trabaje sobre un
             // dispositivo D3D y despues darle muestras de memoria es pedirle dos
             // cosas incompatibles, y las rechaza -- que es como se descubrio.
-            if (_deviceManager is not null)
+            //
+            // Y SOLO A LOS DE HARDWARE. Antes la condicion miraba si NOSOTROS
+            // teniamos gestor, no si el candidato lo admite. Un MFT por software
+            // que recibe un gestor D3D contesta E_NOTIMPL, y eso tiraba el
+            // ultimo peldano de la escalera justo cuando era el unico que
+            // quedaba: en PCPROD1 el codificador por software existia, aceptaba
+            // NV12 en la sonda, y aqui se caia por una orden que no habia que
+            // darle.
+            if (_deviceManager is not null && candidato.Hardware)
             {
                 transform.ProcessMessage(
                     TMessageType.MessageSetD3DManager,
