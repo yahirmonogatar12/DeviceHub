@@ -223,7 +223,7 @@ public sealed class AdminGrpcService(
         var maxUses = request.MaxUses > 0 ? request.MaxUses : 1;
         // Hasta un turno completo: desplegar 80 PCs no cabe en dos horas, y forzar a
         // regenerar el codigo a media instalacion es como se acaba usando uno eterno.
-        var minutes = Math.Clamp(request.ValidMinutes > 0 ? request.ValidMinutes : 30, 5, 480);
+        var minutes = Math.Clamp(request.ValidMinutes > 0 ? request.ValidMinutes : 30, 5, EnrollmentLimits.MaxMinutes);
         var expiresAt = DateTime.UtcNow.AddMinutes(minutes);
 
         var code = Secrets.NewEnrollmentCode();

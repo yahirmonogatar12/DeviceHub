@@ -53,7 +53,14 @@ if (args.Contains("--enrollment-code"))
     }
 
     var uses = int.TryParse(ArgValue(args, "--uses"), out var parsedUses) ? Math.Max(1, parsedUses) : 1;
-    var minutes = int.TryParse(ArgValue(args, "--minutes"), out var parsedMinutes) ? Math.Clamp(parsedMinutes, 5, 480) : 30;
+    // Hasta UN DIA. Eran 8 h, y una ronda de instalaciones por la planta no
+    // siempre cabe en un turno: quien la empezaba por la tarde se encontraba el
+    // instalador caducado a la mañana siguiente y volvia a generarlo todo.
+    //
+    // Sigue habiendo tope, y sigue siendo corto a proposito: el codigo viaja
+    // DENTRO del instalador, asi que su caducidad es lo unico que limita para
+    // que sirve ese .exe si se queda olvidado en una USB.
+    var minutes = int.TryParse(ArgValue(args, "--minutes"), out var parsedMinutes) ? Math.Clamp(parsedMinutes, 5, EnrollmentLimits.MaxMinutes) : 30;
     var code = Secrets.NewEnrollmentCode();
 
     await new EnrollmentRepository(db).CreateAsync(
