@@ -529,12 +529,21 @@ public sealed partial class MainViewModel : ObservableObject
     [RelayCommand]
     private async Task ControlarSeleccionadosAsync()
     {
-        var cuales = Seleccionados.Where(m => !m.Retired).ToList();
+        // Las que ya tienen pestana NO se vuelven a abrir.
+        //
+        // El agente solo sostiene un RemoteHost por PC: la segunda sesion mata a
+        // la primera y deja la pestana anterior congelada. Lo mas util es dejar
+        // en paz las que ya estan.
+        var todas = Seleccionados.Where(m => !m.Retired).ToList();
+        var cuales = todas.Where(m => !YaAbierta(m.MachineId)).ToList();
+        var repetidas = todas.Count - cuales.Count;
 
         if (cuales.Count == 0)
         {
             MessageBox.Show(
-                "Marca uno o varios equipos en la lista. Con Ctrl se anaden sueltos y con Mayus un rango.",
+                repetidas > 0
+                    ? $"Los {repetidas} equipos marcados ya tienen su pestana abierta en el visor."
+                    : "Marca uno o varios equipos en la lista. Con Ctrl se anaden sueltos y con Mayus un rango.",
                 "Controlar", MessageBoxButton.OK, MessageBoxImage.Information);
 
             return;
@@ -596,6 +605,21 @@ public sealed partial class MainViewModel : ObservableObject
                     abiertas++;
                 else
                     fallidas.Add(maquina.MachineCode);
+
+                // UN RESPIRO ENTRE UNA Y LA SIGUIENTE.
+                //
+                // "En serie" solo serializaba la PETICION: cuando ya hay visor
+                // abierto, abrir una sesion es escribirle un ticket por la
+                // tuberia y volver -- no se espera a que la sesion se establezca.
+                // Por eso las 29 salieron en el MISMO segundo, y con ellas 29
+                // hosts arrancando y 29 codificadores calentando a la vez contra
+                // el mismo relay.
+                //
+                // Medio segundo no arregla el ancho de banda, pero reparte el
+                // arranque, que es el pico: cada codificador necesita sus
+                // primeros frames sin competir con otros veintiocho.
+                if (maquina != cuales[^1])
+                    await Task.Delay(500);
             }
         }
         finally
@@ -605,10 +629,12 @@ public sealed partial class MainViewModel : ObservableObject
 
         SelectedMachine = anterior;
 
+        var yaEstaban = repetidas > 0 ? $"; {repetidas} ya estaban abiertas" : string.Empty;
+
         StatusMessage = fallidas.Count == 0
-            ? $"{abiertas} sesion(es) abiertas en la ventana del visor."
-            : $"{abiertas} abiertas; {fallidas.Count} no se pudieron: {string.Join(", ", fallidas.Take(6))}" +
-              (fallidas.Count > 6 ? "..." : string.Empty);
+            ? $"{abiertas} sesion(es) abiertas en la ventana del visor{yaEstaban}."
+            : $"{abiertas} abiertas{yaEstaban}; {fallidas.Count} no se pudieron: " +
+              string.Join(", ", fallidas.Take(6)) + (fallidas.Count > 6 ? "..." : string.Empty);
     }
 
     /// <summary>

@@ -203,6 +203,7 @@ public sealed partial class MainViewModel
             if (conSecreto && await AlVisorAbiertoAsync(session))
             {
                 _remoteSessionId = session.SessionId;
+                _abiertas.Add(SelectedMachine.MachineId);
                 CommandFeedback = $"Sesion remota abierta sobre {SelectedMachine.MachineCode}";
 
                 return true;
@@ -230,6 +231,7 @@ public sealed partial class MainViewModel
             }
 
             _remoteSessionId = session.SessionId;
+            _abiertas.Add(SelectedMachine.MachineId);
 
             // host_notified viene en falso cuando el motor necesitaba arrancar el
             // otro extremo y el agente no estaba conectado. La sesion es valida,
@@ -271,6 +273,21 @@ public sealed partial class MainViewModel
     /// <summary>Callado mientras dura una tanda: los fallos se juntan y se
     /// cuentan al final en vez de interrumpir uno por uno.</summary>
     private bool _sinDialogos;
+
+    /// <summary>
+    /// Maquinas con sesion ya abierta DESDE ESTE dashboard.
+    ///
+    /// ABRIR DOS VECES LA MISMA PC MATA LA PRIMERA. El agente solo sostiene un
+    /// RemoteHost -- StartAsync empieza con Stop("llega una sesion nueva") -- asi
+    /// que la segunda sesion se lleva por delante a la primera, y al tecnico le
+    /// queda una pestana viva con la pantalla congelada y un
+    /// "la pantalla dejo de emitir" que no explica por que.
+    ///
+    /// Se vio abriendo la tanda dos veces seguidas sobre los mismos 29 equipos.
+    /// </summary>
+    private readonly HashSet<string> _abiertas = [];
+
+    private bool YaAbierta(string machineId) => _abiertas.Contains(machineId);
 
     /// <summary>
     /// Localiza el cliente de control remoto EN ESTA PC.
