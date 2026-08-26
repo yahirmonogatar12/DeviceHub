@@ -291,10 +291,30 @@ public sealed class DxgiDesktopCapture : IScreenCapture
         AdapterLuid = adapter.Description1.Luid;
 
         if (adapter.EnumOutputs((uint)_outputIndex, out var output).Failure || output is null)
+        {
+            // LA CAUSA MAS FRECUENTE ES LA MAS TONTA: el monitor apagado.
+            //
+            // Windows conserva el modo de video -- Win32_VideoController sigue
+            // diciendo 1920x1080 -- pero la salida deja de estar activa, y
+            // Desktop Duplication se queda sin nada que duplicar. Visto en
+            // PCPROD1: GPU con Status OK, monitor "Generic PnP Monitor" con
+            // Availability 8 (Off Line), y DXGI sin una sola salida.
+            //
+            // El mensaje anterior decia "puede que el monitor este desconectado"
+            // y dejaba ahi al tecnico. Lo que hace falta es que diga QUE HACER,
+            // porque la salida existe y esta a un clic.
             throw new ScreenCaptureUnavailableException(
-                $"El adaptador '{Adapter}' no tiene la salida {_outputIndex}. " +
-                "Puede que el monitor este desconectado, o que la pantalla la gobierne otra GPU " +
-                "(en un equipo hibrido, prueba otro adaptador).");
+                $"El adaptador '{Adapter}' no tiene ninguna pantalla activa (salida {_outputIndex}).\n" +
+                "Lo mas probable es que el monitor de esa PC este APAGADO, o que un KVM lo tenga\n" +
+                "conmutado a otro equipo: Windows conserva la resolucion, pero la salida no esta viva.\n" +
+                "\n" +
+                "  1. Enciende el monitor y vuelve a abrir la sesion.\n" +
+                "  2. O anade una pantalla virtual desde el menu del monitor, en la barra del visor.\n" +
+                "     Le da a esta GPU una salida propia y no depende de lo que haya enchufado.\n" +
+                "\n" +
+                "En un equipo hibrido puede ser tambien que la pantalla la gobierne otra GPU; " +
+                "prueba otro adaptador.");
+        }
 
         using (output)
         {
