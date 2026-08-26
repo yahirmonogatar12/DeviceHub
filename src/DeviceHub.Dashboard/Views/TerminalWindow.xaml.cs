@@ -146,27 +146,27 @@ public partial class TerminalWindow : Window
         if (e.DataObject.GetData(DataFormats.UnicodeText) is not string texto)
             return;
 
-        var lineas = texto
-            .Split(['\r', '\n'])
-            .Select(l => l.Trim())
-            .Where(l => l.Length > 0)
-            .ToList();
-
-        if (lineas.Count <= 1)
+        if (!texto.Contains('\n') && !texto.Contains('\r'))
             return;
 
         // Se cancela el pegado normal: si no, la primera linea quedaria ademas
         // escrita en la caja y se ejecutaria dos veces.
         e.CancelCommand();
 
-        foreach (var linea in lineas)
-        {
-            Entrada.Text = linea;
-            await EjecutarAsync();
-
-            if (_sesion is null)
-                return;
-        }
+        // EL BLOQUE ENTERO COMO UN SOLO COMANDO, no linea por linea.
+        //
+        // Aqui cada comando es un proceso nuevo -- es el modelo de esta terminal
+        // desde la Fase 15 -- asi que las variables no sobreviven de uno al
+        // siguiente. Ejecutar las lineas sueltas rompia cualquier bloque que
+        // empezara definiendo algo, y lo rompia de la peor manera: la primera
+        // linea parecia funcionar y las demas fallaban por separado.
+        //
+        //     $e = "C:\...\DeviceHub.RemoteHost.exe"
+        //     & $e --displays          <- ahi $e ya no existe
+        //
+        // Pegado entero, las lineas comparten proceso y el bloque hace lo que
+        // dice, que es ademas lo que espera quien pega un script.
+        await EjecutarAsync(texto);
     }
 
     private async void TeclaEnLaEntrada(object sender, KeyEventArgs e)
@@ -203,9 +203,9 @@ public partial class TerminalWindow : Window
         Entrada.CaretIndex = Entrada.Text.Length;
     }
 
-    private async Task EjecutarAsync()
+    private async Task EjecutarAsync(string? pegado = null)
     {
-        var comando = Entrada.Text.Trim();
+        var comando = (pegado ?? Entrada.Text).Trim();
 
         if (_sesion is null || comando.Length == 0)
             return;
@@ -213,7 +213,15 @@ public partial class TerminalWindow : Window
         _historial.Add(comando);
         _posicion = _historial.Count;
 
-        Escribir($"{Prompt.Text} {comando}");
+        // Un bloque pegado se escribe con el prompt en la primera linea y las
+        // demas alineadas debajo: asi se ve que fue UNA ejecucion y no varias
+        // sueltas, que es justo la diferencia que importa aqui.
+        var lineas = comando.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+
+        Escribir($"{Prompt.Text} {lineas[0]}");
+
+        foreach (var extra in lineas.Skip(1))
+            Escribir(new string(' ', Prompt.Text.Length + 1) + extra);
 
         Entrada.Text = string.Empty;
         Entrada.IsEnabled = false;
