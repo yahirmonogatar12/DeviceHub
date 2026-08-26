@@ -2,6 +2,7 @@ using Xunit;
 using DeviceHub.RemoteViewer.Transferencia;
 using DeviceHub.Remote.Contracts;
 using DeviceHub.Server.Services;
+using DeviceHub.RemoteHost.Capture;
 using Grpc.Core;
 
 namespace DeviceHub.Tests;
@@ -128,14 +129,27 @@ public class VirtualDisplayTests
     }
 
     [Fact]
-    public void El_driver_vive_fuera_de_la_carpeta_del_agente()
+    public void El_refugio_del_driver_sobrevive_a_una_actualizacion()
     {
-        // Si viviera dentro, la primera actualizacion se lo llevaria: el
-        // actualizador mueve la carpeta de instalacion entera y solo rescata
-        // appsettings.json.
-        Assert.StartsWith(
-            @"C:\ProgramData\", DeviceHub.RemoteHost.Capture.PantallaVirtual.DondeVa);
+        // El driver viaja en el paquete, pero el sitio para copiarlo a mano en
+        // una PC suelta tiene que estar FUERA de la carpeta de instalacion: el
+        // actualizador la mueve entera y solo rescata appsettings.json.
+        Assert.StartsWith(@"C:\ProgramData\", PantallaVirtual.Refugio);
+        Assert.DoesNotContain("Program Files", PantallaVirtual.Refugio);
+    }
 
-        Assert.DoesNotContain("Program Files", DeviceHub.RemoteHost.Capture.PantallaVirtual.DondeVa);
+    [Fact]
+    public void Sin_driver_no_revienta_ni_deja_la_sesion_a_medias()
+    {
+        // En CI no hay driver, y esa es justamente la comprobacion: pedirla
+        // tiene que contestar que no se puede, no lanzar.
+        var id = PantallaVirtual.Encender(out var queja);
+
+        Assert.Equal(-1, id);
+        Assert.NotEmpty(queja);
+
+        // Y apagarla sin que haya nada tiene que ser inofensivo: se llama al
+        // cerrar CADA sesion, la haya encendido alguien o no.
+        Assert.True(PantallaVirtual.Apagar(out _));
     }
 }

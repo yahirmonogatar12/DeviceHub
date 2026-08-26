@@ -1,0 +1,36 @@
+DRIVER DE PANTALLA VIRTUAL  (Fase 27)
+=====================================
+
+Aqui va el contenido de usbmmidd_v2, de Amyuni. Gratuito, firmado por WHQL y
+redistribuible. Descarga oficial: https://www.amyuni.com/forum/viewtopic.php?f=17&t=3030
+
+Se espera, como minimo:
+
+    deviceinstaller64.exe
+    deviceinstaller.exe
+    usbmmidd.inf
+    usbmmidd.cat
+    usbmmIdd.dll
+
+Con esos archivos aqui, deploy\publish-update.ps1 los mete en el zip del agente
+y llegan solos a toda la flota en la siguiente actualizacion. Sin ellos el
+paquete sale igual: "Anadir pantalla virtual" contesta que no hay driver y la
+sesion sigue como si nada.
+
+POR QUE NO ESTA YA PUESTO
+-------------------------
+Es software de un tercero. Se descarga una vez, se revisa, y se deja aqui a
+proposito: meter binarios ajenos en un repositorio sin que nadie los haya mirado
+es como una actualizacion se convierte en un incidente.
+
+CUANDO SE INSTALA DE VERDAD
+---------------------------
+Que el driver ESTE no significa que haya un monitor de mas. La primera vez que
+alguien pulsa "Anadir pantalla virtual", el host registra el driver; el monitor
+solo existe mientras esta encendido, y se apaga al cerrar la sesion.
+
+DONDE MAS LO BUSCA
+------------------
+Si por lo que sea no viaja en el paquete, el host tambien mira en
+C:\ProgramData\ILSANSYSTEM\DeviceHub\usbmmidd_v2 -- que es donde se copia a mano
+en una PC suelta, y sobrevive a las actualizaciones.

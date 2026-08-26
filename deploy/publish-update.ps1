@@ -70,6 +70,26 @@ foreach ($exe in @('DeviceHub.Agent.exe', 'DeviceHub.RemoteHost.exe')) {
 # desarrollo sobrescribiria el servidor y el codigo de enrolamiento de cada PC.
 Remove-Item (Join-Path $staging 'appsettings.json') -ErrorAction SilentlyContinue
 
+# EL DRIVER DE PANTALLA VIRTUAL VIAJA CON EL PAQUETE.
+#
+# Es de un tercero (Amyuni usbmmidd_v2, gratuito y firmado por WHQL), asi que no
+# lo compila nadie: se deja en vendor y se copia tal cual. Yendo dentro del zip,
+# que la actualizacion reemplace la carpeta de instalacion deja de importar --
+# la version nueva lo trae otra vez.
+$driver = Join-Path $root 'vendor\usbmmidd_v2'
+
+if (Test-Path (Join-Path $driver 'deviceinstaller64.exe')) {
+    Copy-Item $driver (Join-Path $staging 'usbmmidd_v2') -Recurse -Force
+    Write-Host "Driver de pantalla virtual incluido." -ForegroundColor DarkGray
+}
+else {
+    Write-Host ""
+    Write-Host "AVISO: falta el driver de pantalla virtual en vendor\usbmmidd_v2." -ForegroundColor Yellow
+    Write-Host "       El paquete sale igual, pero 'Anadir pantalla virtual' contestara"
+    Write-Host "       que no hay driver hasta que se copie ahi y se vuelva a publicar."
+    Write-Host ""
+}
+
 $package = "DeviceHub.Agent-$Version.zip"
 $zip = Join-Path $env:TEMP $package
 Remove-Item $zip -Force -ErrorAction SilentlyContinue

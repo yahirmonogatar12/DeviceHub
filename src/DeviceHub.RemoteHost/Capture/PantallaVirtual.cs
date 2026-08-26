@@ -12,14 +12,23 @@ namespace DeviceHub.RemoteHost.Capture;
 /// un monitor de VERDAD para Windows -- lo sirve un driver de pantalla indirecta
 /// -- que existe sin haber nada enchufado.
 ///
-/// EL DRIVER NO VIENE DENTRO. Es de Amyuni (usbmmidd_v2), gratuito, firmado por
-/// WHQL y redistribuible; se copia a mano una vez por PC. Sin el, esto contesta
-/// que no esta y la sesion sigue como si nada: una funcion que falta no puede
-/// convertirse en una sesion que no abre.
+/// EL DRIVER ES DE UN TERCERO: Amyuni usbmmidd_v2, gratuito, firmado por WHQL y
+/// redistribuible. Viaja DENTRO del paquete del agente, asi que llega a la flota
+/// con una actualizacion normal y no hay que tocar ninguna PC. Sin el, esto
+/// contesta que no esta y la sesion sigue como si nada: una funcion que falta no
+/// puede convertirse en una sesion que no abre.
 ///
-/// Y VIVE EN ProgramData, NO JUNTO AL AGENTE. La actualizacion mueve la carpeta
-/// de instalacion entera y solo rescata appsettings.json, asi que un driver
-/// puesto ahi durara exactamente hasta la siguiente version.
+/// SE BUSCA EN DOS SITIOS, y el orden importa. Primero junto al agente, que es
+/// donde lo deja la actualizacion. Despues en ProgramData, que es donde se copia
+/// a mano en una PC suelta -- ese sitio sobrevive a las actualizaciones porque el
+/// actualizador mueve la carpeta de instalacion entera y solo rescata
+/// appsettings.json.
+///
+/// QUE ESTE NO SIGNIFICA QUE HAYA UN MONITOR DE MAS. El driver se registra la
+/// primera vez que alguien lo pide, y el monitor solo existe mientras esta
+/// encendido. Registrarlo y desregistrarlo en cada sesion seria despertar al
+/// Administrador de dispositivos varias veces al dia en una PC de produccion,
+/// para nada.
 ///
 /// LO QUE ESTO NO ARREGLA: sigue siendo la misma sesion de Windows. Un cursor,
 /// un foco y un portapapeles para los dos. Mover el raton al monitor virtual se
@@ -28,14 +37,33 @@ namespace DeviceHub.RemoteHost.Capture;
 /// </summary>
 public static class PantallaVirtual
 {
-    private const string Carpeta = @"C:\ProgramData\ILSANSYSTEM\DeviceHub\usbmmidd_v2";
+    /// <summary>Donde se copia a mano en una PC suelta. Fuera de la carpeta de
+    /// instalacion a proposito: ahi sobrevive a las actualizaciones.</summary>
+    public const string Refugio = @"C:\ProgramData\ILSANSYSTEM\DeviceHub\usbmmidd_v2";
 
-    private static string Instalador => Path.Combine(Carpeta, "deviceinstaller64.exe");
+    /// <summary>Junto al agente, que es donde lo deja la actualizacion.</summary>
+    private static string ConElAgente =>
+        Path.Combine(AppContext.BaseDirectory, "usbmmidd_v2");
 
-    /// <summary>Si el driver esta copiado en esta PC.</summary>
-    public static bool Disponible => File.Exists(Instalador);
+    /// <summary>La carpeta que de verdad tiene el driver, o null.</summary>
+    private static string? Donde
+    {
+        get
+        {
+            foreach (var sitio in (string[])[ConElAgente, Refugio])
+            {
+                if (File.Exists(Path.Combine(sitio, "deviceinstaller64.exe")))
+                    return sitio;
+            }
 
-    public static string DondeVa => Carpeta;
+            return null;
+        }
+    }
+
+    /// <summary>Si el driver esta en esta PC.</summary>
+    public static bool Disponible => Donde is not null;
+
+    public static string DondeVa => Refugio;
 
     /// <summary>Cuantos monitores hay ahora mismo. Se usa para esperar al que
     /// aparece: enableidd vuelve antes de que Windows lo haya enganchado.</summary>
@@ -50,9 +78,11 @@ public static class PantallaVirtual
     /// </summary>
     public static int Encender(out string queja)
     {
-        if (!Disponible)
+        if (Donde is null)
         {
-            queja = $"No hay driver de pantalla virtual en esta PC. Copia usbmmidd_v2 en {Carpeta}.";
+            queja = "Esta version del agente no trae el driver de pantalla virtual. " +
+                    $"Actualiza el agente, o copia usbmmidd_v2 en {Refugio}.";
+
             return -1;
         }
 
@@ -109,13 +139,22 @@ public static class PantallaVirtual
 
     private static bool Correr(string argumentos, out string queja)
     {
+        if (Donde is not { } carpeta)
+        {
+            queja = "No hay driver de pantalla virtual en esta PC.";
+            return false;
+        }
+
         try
         {
             using var proceso = Process.Start(new ProcessStartInfo
             {
-                FileName = Instalador,
+                FileName = Path.Combine(carpeta, "deviceinstaller64.exe"),
                 Arguments = argumentos,
-                WorkingDirectory = Carpeta,
+
+                // El .inf se nombra relativo, asi que el directorio de trabajo
+                // TIENE que ser el del driver o la instalacion no encuentra nada.
+                WorkingDirectory = carpeta,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
