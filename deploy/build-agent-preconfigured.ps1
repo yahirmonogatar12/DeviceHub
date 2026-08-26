@@ -61,6 +61,8 @@ Sin pin los agentes confiarian en el primer certificado que vean.
 }
 
 # --- Codigo: se genera llamando al servidor ---
+$generadoAqui = -not $Code
+
 if (-not $Code) {
     if (-not (Test-Path $exeServidor)) {
         throw "No se encontro $exeServidor. Pasa -Code con un codigo generado desde el dashboard."
@@ -200,12 +202,18 @@ Remove-Item $destino -Force -ErrorAction SilentlyContinue
 
 if ($LASTEXITCODE -ne 0) { throw 'Fallo la compilacion del instalador' }
 
-$vence = (Get-Date).AddMinutes($ValidMinutes)
+# SOLO SE SABE LA CADUCIDAD SI EL CODIGO SE ACABA DE GENERAR AQUI.
+#
+# Con -Code puesto, el codigo lo emitio otro y pudo ser hace horas: sumar
+# ValidMinutes a la hora actual da una fecha inventada. Y en la direccion mala,
+# porque suena a mas margen del que hay.
+$vence = if ($generadoAqui) { (Get-Date).AddMinutes($ValidMinutes) } else { $null }
 
 Write-Host ""
 Write-Host "Instalador listo: $destino" -ForegroundColor Green
 Write-Host ("  servidor  {0}:{1}" -f $Server, $Port)
-Write-Host ("  codigo    {0}   ({1} PCs, vence {2:dd/MM HH:mm})" -f $Code, $Machines, $vence)
+Write-Host ("  codigo    {0}{1}" -f $Code,
+    $(if ($vence) { "   ($Machines PCs, vence {0:dd/MM HH:mm})" -f $vence } else { "   (emitido antes; su caducidad la sabe el servidor)" }))
 Write-Host ("  pin       {0}" -f $Pin)
 Write-Host ""
 Write-Host "En cada PC de planta: copiar y doble clic. No pregunta nada." -ForegroundColor Cyan
@@ -214,5 +222,10 @@ Write-Host ""
 # CON EL DIA DELANTE. Con 1440 minutos, "caduca a las 09:16" se lee como
 # "caduca en un minuto" -- es manana a esa hora, y la diferencia entre las dos
 # lecturas es una ronda entera por la planta.
-Write-Host ("El codigo vale para $Machines instalaciones y caduca el {0:dddd d 'a las' HH:mm}." -f $vence) -ForegroundColor Yellow
+if ($vence) {
+    Write-Host ("El codigo vale para $Machines instalaciones y caduca el {0:dddd d 'a las' HH:mm}." -f $vence) -ForegroundColor Yellow
+}
+else {
+    Write-Host "El codigo venia dado: sus usos y su caducidad los fijo quien lo emitio." -ForegroundColor Yellow
+}
 Write-Host "Pasado eso, vuelve a ejecutar este script: el instalador viejo ya no sirve." -ForegroundColor Yellow
