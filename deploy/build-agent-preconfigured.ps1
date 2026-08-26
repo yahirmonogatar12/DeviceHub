@@ -124,14 +124,39 @@ $iscc = @(
 
 if (-not $iscc) { throw 'Falta Inno Setup 6: winget install JRSoftware.InnoSetup' }
 
-if (-not (Test-Path (Join-Path $root 'artifacts\agent\DeviceHub.Agent.exe'))) {
-    Write-Host "Publicando el agente $Version..." -ForegroundColor Cyan
+# SE PUBLICA SI LA VERSION NO COINCIDE, no solo si falta el archivo.
+#
+# Antes bastaba con que el .exe existiera. Como artifacts\ es una carpeta de
+# salida que nadie limpia, el instalador salia con lo ultimo que alguien hubiera
+# compilado ahi -- se encontro con 1.71.0 cuando la flota iba por 1.112.0 -- y
+# el numero del instalador decia otra cosa.
+$exeAgente = Join-Path $root 'artifacts\agent\DeviceHub.Agent.exe'
+$hay = if (Test-Path $exeAgente) { (Get-Item $exeAgente).VersionInfo.FileVersion } else { '' }
 
-    dotnet publish (Join-Path $root 'src\DeviceHub.Agent') `
-        --configuration Release --runtime win-x64 --self-contained true `
-        -p:Version=$Version --output (Join-Path $root 'artifacts\agent') --nologo -v q
+if ($hay -notlike "$Version*") {
+    if ($hay) { Write-Host "artifacts\agent tiene $hay; se rehace a $Version" -ForegroundColor DarkGray }
 
-    if ($LASTEXITCODE -ne 0) { throw 'Fallo la publicacion del agente' }
+    # LOS DOS, igual que publish-update.ps1. RemoteHost es quien captura la
+    # pantalla: publicando solo el agente, un instalador nuevo salia con el
+    # motor remoto que hubiera quedado ahi de otra compilacion.
+    foreach ($proyecto in @('DeviceHub.Agent', 'DeviceHub.RemoteHost')) {
+        Write-Host "Publicando $proyecto $Version..." -ForegroundColor Cyan
+
+        dotnet publish (Join-Path $root "src\$proyecto") `
+            --configuration Release --runtime win-x64 --self-contained true `
+            -p:Version=$Version --output (Join-Path $root 'artifacts\agent') --nologo -v q
+
+        if ($LASTEXITCODE -ne 0) { throw "Fallo la publicacion de $proyecto" }
+    }
+}
+
+# El driver de pantalla virtual, para que una PC recien instalada lo tenga sin
+# esperar a la primera actualizacion.
+$driver = Join-Path $root 'vendor\usbmmidd_v2'
+
+if (Test-Path (Join-Path $driver 'deviceinstaller64.exe')) {
+    Copy-Item $driver (Join-Path $root 'artifacts\agent\usbmmidd_v2') -Recurse -Force
+    Write-Host "Driver de pantalla virtual incluido." -ForegroundColor DarkGray
 }
 
 New-Item -ItemType Directory -Force -Path $Output | Out-Null
