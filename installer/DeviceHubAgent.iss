@@ -29,7 +29,7 @@
 ;
 ; Que este NO basta para saltarse la pagina -- para eso hace falta ademas el
 ; codigo, y ese no puede vivir en el repositorio porque es un secreto. Lo hornea
-; deployuild-agent-preconfigured.ps1.
+; deploy\build-agent-preconfigured.ps1.
 #ifndef DefaultServer
   #define DefaultServer "192.168.1.10"
 #endif
@@ -172,7 +172,7 @@ procedure EscribirConfiguracion;
 var
   Json, Pin, PinLinea: String;
 begin
-  Pin := Trim(ObtenerValor(3, 'PIN', ''));
+  Pin := Trim(ObtenerValor(3, 'PIN', '{#DefaultPin}'));
 
   if Pin <> '' then
     PinLinea := '"' + EscaparJson(Pin) + '"'
@@ -183,11 +183,11 @@ begin
     '{' + #13#10 +
     '  "Logging": { "LogLevel": { "Default": "Information" } },' + #13#10 +
     '  "DeviceHub": {' + #13#10 +
-    '    "ServerHost": "' + EscaparJson(Trim(ObtenerValor(0, 'SERVER', 'localhost'))) + '",' + #13#10 +
-    '    "ServerPort": ' + ObtenerValor(1, 'PORT', '5443') + ',' + #13#10 +
+    '    "ServerHost": "' + EscaparJson(Trim(ObtenerValor(0, 'SERVER', '{#DefaultServer}'))) + '",' + #13#10 +
+    '    "ServerPort": ' + ObtenerValor(1, 'PORT', '{#DefaultPort}') + ',' + #13#10 +
     '    "HeartbeatSeconds": 30,' + #13#10 +
     '    "DataDirectory": "C:\\ProgramData\\ILSANSYSTEM\\DeviceHub",' + #13#10 +
-    '    "EnrollmentCode": "' + EscaparJson(Trim(ObtenerValor(2, 'CODE', ''))) + '",' + #13#10 +
+    '    "EnrollmentCode": "' + EscaparJson(Trim(ObtenerValor(2, 'CODE', '{#DefaultCode}'))) + '",' + #13#10 +
     '    "PinnedKeys": [' + PinLinea + '],' + #13#10 +
     '    "UpdateShare": "' + EscaparJson(ExpandConstant('{param:UPDATESHARE|\\192.168.1.10\updates\Shared\DeviceHub\production}')) + '",' + #13#10 +
     '    "UpdatePublisherThumbprint": "' + EscaparJson(ExpandConstant('{param:THUMBPRINT|}')) + '",' + #13#10 +
