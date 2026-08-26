@@ -118,8 +118,19 @@ public static class PantallaVirtual
     }
 
     /// <summary>
-    /// Quita el monitor virtual. Silencioso si no habia ninguno o no hay driver:
-    /// se llama tambien al cerrar la sesion, donde no hay nadie a quien avisar.
+    /// Quita TODOS los monitores virtuales. Silencioso si no habia ninguno o no
+    /// hay driver: se llama tambien al cerrar la sesion, donde no hay nadie a
+    /// quien avisar.
+    ///
+    /// EN BUCLE, Y NO POR PRUDENCIA. Lo dicen las instrucciones del driver:
+    /// "enableidd 1" se puede repetir para anadir hasta CUATRO monitores, y
+    /// "enableidd 0" quita uno por llamada. Con una sola llamada, un tecnico que
+    /// pulsara "Anadir" dos veces dejaria un monitor fantasma en esa PC de
+    /// planta -- y en un monitor que no existe fisicamente se pueden perder
+    /// ventanas para siempre.
+    ///
+    /// Se para cuando la cuenta de pantallas deja de bajar, que es la senal de
+    /// que ya no queda ninguna virtual. El tope de cuatro es el del driver.
     /// </summary>
     public static bool Apagar(out string queja)
     {
@@ -129,13 +140,33 @@ public static class PantallaVirtual
             return true;
         }
 
-        var bien = Correr("enableidd 0", out queja);
+        var quitadas = 0;
 
-        if (bien)
-            queja = "Pantalla virtual quitada.";
+        for (var intento = 0; intento < MaximoDelDriver; intento++)
+        {
+            var antes = Pantallas.Listar().Count;
 
-        return bien;
+            if (!Correr("enableidd 0", out queja))
+                break;
+
+            // El driver contesta bien aunque no hubiera ninguna que quitar, asi
+            // que quien dice si paso algo es la lista de pantallas.
+            if (Pantallas.Listar().Count >= antes)
+                break;
+
+            quitadas++;
+        }
+
+        queja = quitadas == 0
+            ? string.Empty
+            : $"Pantalla virtual quitada{(quitadas > 1 ? $" (x{quitadas})" : string.Empty)}.";
+
+        return true;
     }
+
+    /// <summary>Cuantos monitores admite el driver a la vez. Sale de sus propias
+    /// instrucciones, no de una suposicion.</summary>
+    private const int MaximoDelDriver = 4;
 
     private static bool Correr(string argumentos, out string queja)
     {

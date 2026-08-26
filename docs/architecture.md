@@ -64,3 +64,33 @@ tambien lo recalcula: una PC que se apaga no emite un mensaje de despedida.
 
 **Sin proyectos Core/Windows separados en el agente.** Un `classlib` sin un
 segundo consumidor es andamiaje. Se dividira si aparece un agente Linux.
+
+## Software de terceros que se redistribuye
+
+Solo hay uno, y esta seccion existe porque su licencia la exige.
+
+### Amyuni usbmmidd_v2 — el driver de pantalla virtual
+
+Copyright 2014-2021 **Amyuni Technologies Inc.** — https://www.amyuni.com
+
+Driver de pantalla indirecta que crea un monitor virtual en la PC controlada,
+para que el tecnico pueda trabajar sin taparle la pantalla al operador
+(Fase 27). Se redistribuye tal cual dentro del paquete del agente, con su
+`License.txt` intacto, y vive en `vendor\usbmmidd_v2\`.
+
+Su licencia pide tres cosas y las tres se cumplen: no atribuirnos el software,
+no distribuirlo alterado, y no quitar el aviso de licencia de la distribucion.
+
+**Se eligio por la firma, no por gusto.** Un driver de pantalla indirecta tiene
+que estar firmado para instalarse en un Windows 11 con arranque seguro. Las
+alternativas eran comprar un certificado EV y pasar por la atestacion de
+Microsoft -- semanas y dinero por año -- o activar `testsigning` en las cinco
+PCs de planta, que baja la comprobacion de integridad de arranque de toda la
+maquina. Este ya viene firmado por WHQL y es redistribuible.
+
+**Lo que su licencia advierte, y conviene tener presente:** la version gratuita
+puede mostrar una pagina de publicidad, y Amyuni dice expresamente que no
+siempre esta bajo su control. En una PC de planta eso importa. Solo puede pasar
+al INSTALAR el driver -- la primera vez que alguien pulsa "Anadir pantalla
+virtual" en esa maquina, no en cada sesion ni al actualizar el agente. Si
+apareciera, la version comercial de Amyuni la quita.

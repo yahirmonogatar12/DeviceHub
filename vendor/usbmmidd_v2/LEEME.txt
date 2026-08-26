@@ -1,7 +1,7 @@
 DRIVER DE PANTALLA VIRTUAL  (Fase 27)
 =====================================
 
-Aqui va el contenido de usbmmidd_v2, de Amyuni. Gratuito, firmado por WHQL y
+Aqui va el contenido de usbmmidd_v2, de Amyuni. YA ESTA PUESTO. Gratuito, firmado
 redistribuible. Descarga oficial: https://www.amyuni.com/forum/viewtopic.php?f=17&t=3030
 
 Se espera, como minimo:
