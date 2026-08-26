@@ -1823,18 +1823,37 @@ public static class RelaySession
                 // rehacia el codificador, y vuelta a empezar. Seis veces antes
                 // de que una soltara imagen. El tecnico lo ve como "tarda en
                 // abrir", y cada rehecho es trabajo tirado.
-                var plazo = flujo.ConfigEnviada
-                    ? Stopwatch.Frequency / 2
-                    : Stopwatch.Frequency * 2;
+                // Y EN FRIO NO MANDA EL RELOJ, MANDA CUANTAS VECES SE LE DIO
+                // DE COMER.
+                //
+                // Poner dos segundos en vez de medio no quito la carrera, solo
+                // la aflojo: sesenta repeticiones a unos 47 ms por vuelta son
+                // 2.8 s, o sea que el plazo sigue venciendo ANTES de que se
+                // agote el cupo. En IMD_D se veia igual -- pantalla negra, el
+                // aviso, y al rato entra.
+                //
+                // El reloj es ademas la medida equivocada: castiga a la PC lenta
+                // justo por serlo. Dos maquinas con el mismo codificador
+                // deberian darle el mismo numero de oportunidades, tarden lo que
+                // tarden en darselas.
+                //
+                // Asi que mientras no haya salido nada, se rehace cuando se
+                // acaban las repeticiones y no antes. Deja de haber carrera: el
+                // codificador recibe SIEMPRE sus sesenta frames enteros.
+                var vencido = flujo.ConfigEnviada
+                    ? keyframePedidoEn != 0
+                      && Stopwatch.GetTimestamp() - keyframePedidoEn > Stopwatch.Frequency / 2
+                    : repetidos >= RepeticionesArranque;
 
-                if (keyframePedidoEn != 0
-                    && Stopwatch.GetTimestamp() - keyframePedidoEn > plazo)
+                if (vencido)
                 {
                     keyframePedidoEn = 0;
 
-                    Avisar(opciones,
-                        $"El codificador no solto el keyframe pedido en medio segundo; " +
-                        $"se rehace la pantalla {flujo.DisplayId}.");
+                    Avisar(opciones, flujo.ConfigEnviada
+                        ? $"El codificador no solto el keyframe pedido en medio segundo; " +
+                          $"se rehace la pantalla {flujo.DisplayId}."
+                        : $"El codificador no solto nada en {RepeticionesArranque} frames; " +
+                          $"se rehace la pantalla {flujo.DisplayId}.");
 
                     RehacerCodificador(flujo, opciones, cuenta);
                     repetidos = 0;
