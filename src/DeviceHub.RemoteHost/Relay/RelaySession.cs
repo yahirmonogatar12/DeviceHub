@@ -1138,6 +1138,43 @@ public static class RelaySession
     {
         var pantallas = Pantallas.Listar();
 
+        // SIN NINGUNA PANTALLA, SE PONE UNA.
+        //
+        // La causa mas frecuente es la mas tonta: el monitor de esa PC esta
+        // apagado, o un KVM lo tiene conmutado a otro equipo. Windows conserva
+        // el modo de video -- Win32_VideoController sigue diciendo 1920x1080 con
+        // Status OK -- pero la salida deja de estar viva, DXGI no enumera nada y
+        // Desktop Duplication se queda sin nada que duplicar. Encontrado en
+        // PCPROD1, con el monitor en Availability 8 (Off Line).
+        //
+        // Antes eso era el final del camino: la sesion no abria y el mensaje
+        // mandaba a adivinar. Y va a repetirse -- cualquier PC de planta con el
+        // monitor apagado por la noche, o compartiendo KVM, da este mismo cuadro.
+        //
+        // SOLO CUANDO NO HAY NINGUNA. Si hay pantallas y el tecnico eligio una
+        // que falla, eso es otra cosa y tiene su propio camino de vuelta. Aqui
+        // no hay nada que elegir.
+        //
+        // Y se quita al cerrar la sesion, como cualquier otra: de eso ya se
+        // encarga el Apagar() del finally de RunAsync. Dejar un monitor fantasma
+        // en una PC de planta seria peor que no abrir, porque ahi se pierden
+        // ventanas que nadie vuelve a ver.
+        if (pantallas.Count == 0 && PantallaVirtual.Disponible)
+        {
+            Avisar(opciones,
+                "Esta PC no tiene ninguna pantalla activa -- lo normal es que el monitor este " +
+                "apagado. Se anade una virtual para poder trabajar.");
+
+            var puesta = PantallaVirtual.Encender(out var dijo);
+            Avisar(opciones, dijo);
+
+            if (puesta >= 0)
+            {
+                _pantalla = puesta;
+                pantallas = Pantallas.Listar();
+            }
+        }
+
         // Lo que DXGI enumero, tal cual, en el log del agente. Si el visor
         // ensena el desplegable vacio, esta linea dice si el problema es que
         // aqui no se ven o que el mensaje no llego.
