@@ -515,6 +515,16 @@ public sealed partial class MainViewModel : ObservableObject
         => Seleccionados = [.. cuales];
 
     /// <summary>
+    /// Cuantas se abren antes de parar a que arranquen.
+    ///
+    /// Seis porque es lo que cabe mirando: mas pestanas de las que caben en la
+    /// barra del visor ya no se revisan de un vistazo. Y porque el problema no
+    /// era el ancho de banda sostenido sino el ARRANQUE -- treinta codificadores
+    /// frios a la vez no terminan ninguno.
+    /// </summary>
+    private const int PorTanda = 6;
+
+    /// <summary>
     /// Abre sesion remota contra TODO lo que este marcado.
     ///
     /// Van a la MISMA ventana del visor, cada una en su pestana: la tuberia por
@@ -559,8 +569,9 @@ public sealed partial class MainViewModel : ObservableObject
             var pregunta = MessageBox.Show(
                 $"Se van a abrir {cuales.Count} sesiones remotas, cada una con su video." +
                 salto + salto +
-                "Todas van a la misma ventana, en pestanas." + salto +
-                "Con muchas a la vez, la red de planta y el servidor lo notan." +
+                $"Van de {PorTanda} en {PorTanda}, esperando a que cada grupo arranque:" + salto +
+                $"unos {Math.Ceiling(cuales.Count / (double)PorTanda) * 7:0} segundos en total." + salto +
+                "Todas caen en la misma ventana, en pestanas." +
                 salto + salto + "Continuar?",
                 "Controlar seleccionados", MessageBoxButton.YesNo, MessageBoxImage.Warning);
 
@@ -584,7 +595,28 @@ public sealed partial class MainViewModel : ObservableObject
         {
             foreach (var maquina in cuales)
             {
-                StatusMessage = $"Abriendo {maquina.MachineCode}... ({abiertas + fallidas.Count + 1} de {cuales.Count})";
+                var hechas = abiertas + fallidas.Count;
+
+                // DE SEIS EN SEIS, aunque se marquen cincuenta.
+                //
+                // Repartir con medio segundo entre una y otra ayudaba, pero no
+                // basta: a los pocos segundos hay treinta sesiones a medio
+                // arrancar y ninguna termina de hacerlo. Un grupo pequeno que
+                // ACABA de arrancar antes de meter el siguiente llega antes al
+                // final que treinta compitiendo.
+                //
+                // Cuatro segundos entre grupos es lo que tarda un codificador
+                // frio en soltar su primera imagen -- 60 frames a unos 47 ms son
+                // 2.8 s -- con algo de margen.
+                if (hechas > 0 && hechas % PorTanda == 0)
+                {
+                    StatusMessage =
+                        $"{hechas} de {cuales.Count} abiertas; esperando a que arranquen antes de seguir...";
+
+                    await Task.Delay(4000);
+                }
+
+                StatusMessage = $"Abriendo {maquina.MachineCode}... ({hechas + 1} de {cuales.Count})";
 
                 // RemoteControlAsync trabaja sobre SelectedMachine, que es como
                 // lo usa el boton de siempre. Se le presta la maquina de turno en
