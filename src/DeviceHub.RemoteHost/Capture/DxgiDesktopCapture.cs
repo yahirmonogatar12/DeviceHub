@@ -124,6 +124,9 @@ public sealed class DxgiDesktopCapture : IScreenCapture
 
     public long Timeouts { get; private set; }
     public long AccessLostRecoveries { get; private set; }
+
+    /// <summary>DXGI_ERROR_INVALID_CALL. Vortice no lo expone con nombre.</summary>
+    private static readonly SharpGen.Runtime.Result InvalidCall = unchecked((int)0x887A0001);
     public long ResolutionChanges { get; private set; }
     public long Dropped { get; private set; }
 
@@ -159,10 +162,23 @@ public sealed class DxgiDesktopCapture : IScreenCapture
             return null;
         }
 
-        if (result == Vortice.DXGI.ResultCode.AccessLost)
+        if (result == Vortice.DXGI.ResultCode.AccessLost || result == InvalidCall)
         {
-            // Pasa al cambiar de resolucion, al aparecer UAC y al cambiar de
-            // usuario. Se recrea el duplicador y se sigue.
+            // ACCESS_LOST pasa al cambiar de resolucion, al aparecer UAC y al
+            // cambiar de usuario. Se recrea el duplicador y se sigue.
+            //
+            // INVALID_CALL SE TRATA IGUAL, y esto es nuevo: significa que este
+            // duplicador ya no sirve -- la salida que duplicaba dejo de existir
+            // mientras lo usabamos. Visto en MATERIAL-P1, donde la pantalla que
+            // se estaba capturando era la VIRTUAL: al cerrarse otra sesion sobre
+            // la misma PC se quito el monitor, y esta se quedo duplicando algo
+            // que ya no estaba.
+            //
+            // Antes eso terminaba la sesion con "la pantalla dejo de emitir" y un
+            // HRESULT que no dice nada. Es exactamente el mismo caso que
+            // ACCESS_LOST -- el duplicador caduco -- y se arregla igual:
+            // recrearlo. Si la salida de verdad ya no existe, Reopen falla con su
+            // propio mensaje, que ese si explica que pasa.
             AccessLostRecoveries++;
             Reopen();
             return null;

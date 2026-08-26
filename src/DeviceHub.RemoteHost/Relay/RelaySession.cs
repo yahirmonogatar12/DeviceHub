@@ -311,6 +311,16 @@ public static class RelaySession
     private static int _pantalla;
 
     /// <summary>
+    /// El hardware de esta PC acepta y no entrega: se va por software.
+    ///
+    /// Lo levanta el bucle de captura cuando ha agotado H.265 y H.264 por
+    /// hardware sin sacar una sola imagen. Visto en MATERIAL-P1, una UHD 730:
+    /// los dos MFT se montan sin quejarse, se les dan sus frames, y codificados
+    /// 0 -- veintiocho veces seguidas.
+    /// </summary>
+    private static bool _soloSoftware;
+
+    /// <summary>
     /// Codec que el tecnico pidio desde el visor. Arranca en lo que diga el
     /// appsettings del agente y se puede cambiar en caliente.
     ///
@@ -1869,13 +1879,33 @@ public static class RelaySession
                     //
                     // Solo en frio. Con salida ya emitida, un keyframe que no
                     // llega es otro problema y el codec no tiene la culpa.
-                    if (!flujo.ConfigEnviada && ++rehechosEnVano >= 2 && _codec == VideoCodec.H265)
+                    if (!flujo.ConfigEnviada && ++rehechosEnVano >= 2 && !_soloSoftware)
                     {
-                        Avisar(opciones,
-                            $"El H.265 de esta PC acepta la configuracion y no entrega imagen " +
-                            $"({rehechosEnVano} intentos); se pasa a H.264.");
+                        // PRIMERO EL OTRO CODEC, DESPUES EL SOFTWARE.
+                        //
+                        // En MATERIAL-P1 el cambio a H.264 no basto: los dos por
+                        // hardware se montan y ninguno entrega -- config 28 y
+                        // codificados 0. Queda el peldano que la escalera de
+                        // apertura nunca alcanza, porque solo baja cuando algo
+                        // FALLA al construirse.
+                        if (_codec == VideoCodec.H265)
+                        {
+                            Avisar(opciones,
+                                "El H.265 de esta PC acepta la configuracion y no entrega imagen; " +
+                                "se pasa a H.264.");
 
-                        _codec = VideoCodec.H264;
+                            _codec = VideoCodec.H264;
+                        }
+                        else
+                        {
+                            Avisar(opciones,
+                                "Tampoco el H.264 por hardware entrega imagen en esta PC; " +
+                                "se pasa al codificador por SOFTWARE.");
+
+                            _soloSoftware = true;
+                        }
+
+                        rehechosEnVano = 0;
                         return;
                     }
 
@@ -2662,9 +2692,16 @@ public static class RelaySession
         // NO se cae a VP9, y no es por descarte. En esa maquina el MFT tarda
         // 3.5 ms de los 28 que cuesta el host: el trabajo esta en bajar la
         // imagen y convertirla -- 18.4 + 6.4 -- y eso no lo toca ningun codec.
-        var intentos = _codec == VideoCodec.H265
-            ? new[] { (VideoCodec.H265, true), (VideoCodec.H264, true), (VideoCodec.H264, false) }
-            : new[] { (VideoCodec.H264, true), (VideoCodec.H264, false) };
+        // POR SOFTWARE Y SIN MAS INTENTOS, si el hardware ya demostro que no
+        // entrega. Lo pone el bucle de captura cuando ha agotado los dos codecs
+        // por hardware sin sacar una sola imagen; sin esto la escalera volveria
+        // a elegir el mismo MFT que acaba de fallar, porque CONSTRUIRSE se
+        // construye.
+        var intentos = _soloSoftware
+            ? new[] { (VideoCodec.H264, false) }
+            : _codec == VideoCodec.H265
+                ? new[] { (VideoCodec.H265, true), (VideoCodec.H264, true), (VideoCodec.H264, false) }
+                : new[] { (VideoCodec.H264, true), (VideoCodec.H264, false) };
 
         H264Encoder? codificador = null;
 
