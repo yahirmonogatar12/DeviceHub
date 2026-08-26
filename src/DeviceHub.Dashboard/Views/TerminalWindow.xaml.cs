@@ -70,6 +70,12 @@ public partial class TerminalWindow : Window
                 "La identidad se conoce al ejecutar el primer comando. Prueba con: whoami";
 
             Pintar();
+
+            // Y tambien cuando la ventana vuelve al frente. El foco se pierde al
+            // cambiar de ventana, y volver a una consola donde no se puede
+            // escribir se parece demasiado a una consola rota.
+            Activated += (_, _) => Entrada.Focus();
+
             Entrada.Focus();
         }
         catch (Exception ex)

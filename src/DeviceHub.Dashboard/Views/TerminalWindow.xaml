@@ -43,7 +43,13 @@
                     <ControlTemplate TargetType="TextBox">
                         <Border Background="{TemplateBinding Background}"
                                 Padding="{TemplateBinding Padding}">
-                            <ScrollViewer x:Name="PART_ContentHost" />
+                            <!-- Focusable=False NO ES OPCIONAL. Sin el, el foco
+                                 se queda en el ScrollViewer y el TextBox no
+                                 recibe una sola tecla: la consola se veia bien y
+                                 no se podia escribir en ella. La plantilla de
+                                 serie de WPF lo trae; una escrita a mano tiene
+                                 que traerlo tambien. -->
+                            <ScrollViewer x:Name="PART_ContentHost" Focusable="False" />
                         </Border>
                     </ControlTemplate>
                 </Setter.Value>
