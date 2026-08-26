@@ -1466,7 +1466,14 @@ public partial class SesionRemota : UserControl
     private void Decir(string texto)
     {
         _ultimoEstado = texto;
-        _gestor?.Decir(texto);
+
+        // Si el gestor esta cerrado, a la barra de la sesion. Una transferencia
+        // que avanza sin que se vea en ningun sitio es lo mismo que una que no
+        // avanza, y ahora se puede arrastrar un archivo sin abrir el gestor.
+        if (_gestor is { IsVisible: true })
+            _gestor.Decir(texto);
+        else
+            Nota(texto);
     }
 
     private void Avanzar(double porcentaje) => _gestor?.Avanzar(porcentaje);
@@ -1718,14 +1725,15 @@ public partial class SesionRemota : UserControl
         var plan = Transferencia.Soltado.Preparar(
             archivos, rutas.Any(Directory.Exists), _rutaRemota);
 
-        // El panel se abre pase lo que pase: o enseña el progreso, o enseña por
-        // que no hay progreso. Un archivo soltado que no hace nada y no dice
-        // nada es peor que no poder soltarlo.
-        AbrirGestor();
-
         if (plan.Queja is { } queja)
         {
+            // Aqui SI se abre, y es el unico sitio: hay que elegir la carpeta de
+            // destino y no hay otro sitio donde hacerlo. En los demas casos el
+            // gestor se abre a mano, con el boton de la carpeta.
+            AbrirGestor();
             Decir(queja);
+            Nota(queja);
+
             return;
         }
 
@@ -1749,8 +1757,9 @@ public partial class SesionRemota : UserControl
 
     private void PegarSoltados(IReadOnlyList<string> archivos, (double X, double Y) donde)
     {
-        AbrirGestor();
-
+        // Sin abrir el gestor: taparle el escritorio remoto con una ventana
+        // justo donde acaba de soltar es lo contrario de lo que pidio, y le
+        // quitaria el foco a la sesion.
         _cola.Clear();
         _transferidos.Clear();
 
@@ -1889,9 +1898,16 @@ public partial class SesionRemota : UserControl
         {
             _copiadoAlla = [.. aviso.Paths];
 
-            AbrirGestor();
+            // NO SE ABRE EL GESTOR. Esto es un ANUNCIO: llega solo, cada vez que
+            // alguien copia archivos al otro lado. Cuando el gestor era un panel
+            // dentro de la sesion, enseñarlo no le quitaba el foco a nadie;
+            // ahora es una ventana, y abrirla sola le roba el teclado a la
+            // sesion -- el tecnico se queda tecleando en el explorador de
+            // archivos sin saberlo, y Ctrl+C y Ctrl+V dejan de llegar a la PC
+            // remota sin ningun aviso.
             _gestor?.HayCopiadoAlla(_copiadoAlla.Count > 0);
-            Decir($"{_copiadoAlla.Count} archivos copiados en la PC remota. Pulsa Traer.");
+
+            Nota($"{_copiadoAlla.Count} archivos copiados alla. Abre archivos y pulsa Traer.");
         });
 
     /// <summary>
