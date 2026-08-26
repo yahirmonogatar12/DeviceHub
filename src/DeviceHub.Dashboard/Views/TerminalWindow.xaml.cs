@@ -76,6 +76,18 @@ public partial class TerminalWindow : Window
             // escribir se parece demasiado a una consola rota.
             Activated += (_, _) => Entrada.Focus();
 
+            // PEGAR VARIAS LINEAS EJECUTA VARIAS LINEAS.
+            //
+            // La entrada es de una sola linea, asi que al pegar un bloque WPF se
+            // queda con la primera y tira el resto EN SILENCIO. Quien pega cuatro
+            // comandos ve ejecutarse uno y no entiende que paso con los otros
+            // tres -- y en una terminal remota eso da miedo, porque no sabes si
+            // corrieron a medias.
+            //
+            // Se hace lo que hace cualquier terminal: se ejecutan en orden, una
+            // detras de otra, esperando a que cada una termine.
+            DataObject.AddPastingHandler(Entrada, Pegando);
+
             Entrada.Focus();
         }
         catch (Exception ex)
@@ -127,6 +139,34 @@ public partial class TerminalWindow : Window
 
         BotonPowerShell.Background = esCmd ? Brushes.Transparent : new SolidColorBrush(Color.FromRgb(0x01, 0x24, 0x56));
         BotonPowerShell.Foreground = esCmd ? new SolidColorBrush(Color.FromRgb(0x8C, 0x8C, 0x8C)) : Brushes.White;
+    }
+
+    private async void Pegando(object sender, DataObjectPastingEventArgs e)
+    {
+        if (e.DataObject.GetData(DataFormats.UnicodeText) is not string texto)
+            return;
+
+        var lineas = texto
+            .Split(['\r', '\n'])
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0)
+            .ToList();
+
+        if (lineas.Count <= 1)
+            return;
+
+        // Se cancela el pegado normal: si no, la primera linea quedaria ademas
+        // escrita en la caja y se ejecutaria dos veces.
+        e.CancelCommand();
+
+        foreach (var linea in lineas)
+        {
+            Entrada.Text = linea;
+            await EjecutarAsync();
+
+            if (_sesion is null)
+                return;
+        }
     }
 
     private async void TeclaEnLaEntrada(object sender, KeyEventArgs e)

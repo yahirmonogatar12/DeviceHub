@@ -28,6 +28,24 @@ public static class ShellRunner
     public const int MaxOutputBytes = 64 * 1024;
 
     /// <summary>
+    /// Se le PIDE AL HIJO QUE HABLE UTF-8, en vez de adivinar como habla.
+    ///
+    /// ipconfig, qwinsta y los demas programas nativos no escriben en UTF-8:
+    /// usan la pagina de codigos OEM de la consola -- 850 en un Windows en
+    /// espanol -- y nosotros leiamos su salida como UTF-8. Resultado:
+    /// "Direcci?n", "M?scara", "?rea". Con acentos en casi todas las lineas.
+    ///
+    /// Decodificar como OEM en vez de UTF-8 tampoco vale: son varias paginas
+    /// segun el idioma de la PC, y .NET no las trae de serie -- haria falta un
+    /// paquete mas solo para leer una salida.
+    ///
+    /// chcp funciona aunque no se vea ninguna ventana: CREATE_NO_WINDOW da
+    /// consola al hijo, solo que oculta. Con la pagina puesta a 65001 los
+    /// programas nativos escriben UTF-8 y nuestra lectura ya era UTF-8.
+    /// </summary>
+    private const int Utf8 = 65001;
+
+    /// <summary>
     /// Bajo QUE identidad se ejecuta todo esto. Fase 23.
     ///
     /// El agente es un servicio LocalSystem, asi que powershell.exe hereda su
@@ -122,7 +140,7 @@ public static class ShellRunner
             // /c: un comando y se acaba, que es el modelo de esta terminal.
             startInfo.ArgumentList.Add("/d");
             startInfo.ArgumentList.Add("/c");
-            startInfo.ArgumentList.Add(command);
+            startInfo.ArgumentList.Add($"chcp {Utf8} > nul & {command}");
         }
         else
         {
@@ -133,7 +151,7 @@ public static class ShellRunner
             startInfo.ArgumentList.Add("-NoProfile");
             startInfo.ArgumentList.Add("-NonInteractive");
             startInfo.ArgumentList.Add("-Command");
-            startInfo.ArgumentList.Add(command);
+            startInfo.ArgumentList.Add($"chcp {Utf8} > $null; {command}");
         }
 
         using var process = Process.Start(startInfo)
