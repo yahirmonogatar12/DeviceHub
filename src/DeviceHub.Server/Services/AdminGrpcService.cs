@@ -740,7 +740,12 @@ public sealed class AdminGrpcService(
         var parameters = new Dictionary<string, string>
         {
             ["command"] = request.Command,
-            ["cwd"] = workingDir
+            ["cwd"] = workingDir,
+
+            // Se pasa TAL CUAL y quien decide que vale es el agente. Validarlo
+            // aqui contra una lista seria repetir la decision en dos sitios, y
+            // el que de verdad lanza el proceso es el.
+            ["shell"] = request.Shell
         };
 
         var definition = CommandPolicy.Get(CommandType.RunShell);

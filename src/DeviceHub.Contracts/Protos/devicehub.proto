@@ -391,6 +391,16 @@ message TerminalSessionReply {
 message TerminalCommandRequest {
   string session_id = 1;
   string command = 2;
+
+  // "cmd" o "powershell". Vacio = powershell, que es lo que hacia esto desde la
+  // Fase 15 y lo unico que sabia hacer.
+  //
+  // No es un detalle de presentacion: cambia lo que significa lo que se escribe.
+  // `dir /s`, `%PATH%` y `for /f` son de cmd; `Get-ChildItem`, `$env:PATH` y los
+  // objetos del pipeline son de PowerShell. Una terminal que dice C:\> y ejecuta
+  // PowerShell hace que el tecnico escriba un comando de cmd y no entienda el
+  // error que le vuelve.
+  string shell = 3;
 }
 
 message TerminalCommandReply {

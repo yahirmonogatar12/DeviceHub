@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 
 namespace DeviceHub.Dashboard.Views;
 
@@ -29,6 +30,18 @@ public partial class TerminalWindow : Window
 
     private string? _sesion;
 
+    /// <summary>
+    /// "cmd" o "powershell".
+    ///
+    /// Arranca en PowerShell porque es lo que esta terminal ha hecho SIEMPRE, y
+    /// cambiarlo por defecto haria que un comando que alguien tenia apuntado
+    /// dejara de funcionar sin avisar. Lo que si cambia es que ahora el prompt
+    /// dice cual de los dos es: antes ponia C:\> y ejecutaba PowerShell.
+    /// </summary>
+    private string _shell = "powershell";
+
+    private string _directorio = @"C:\";
+
     public TerminalWindow(DeviceHubClient cliente, string machineId, string titulo)
     {
         InitializeComponent();
@@ -50,17 +63,64 @@ public partial class TerminalWindow : Window
             var sesion = await _cliente.StartTerminalSessionAsync(_machineId, _cancelacion.Token);
 
             _sesion = sesion.SessionId;
+            _directorio = sesion.WorkingDir;
+
             Cabecera.Text = $"{_titulo}   sesion {sesion.SessionId}";
-            Prompt.Text = $"{sesion.WorkingDir}>";
             Identidad.Text =
                 "La identidad se conoce al ejecutar el primer comando. Prueba con: whoami";
 
+            Pintar();
             Entrada.Focus();
         }
         catch (Exception ex)
         {
             Cabecera.Text = $"No se pudo abrir la sesion: {ex.Message}";
         }
+    }
+
+    private void ElegirCmd(object sender, RoutedEventArgs e) => Cambiar("cmd");
+
+    private void ElegirPowerShell(object sender, RoutedEventArgs e) => Cambiar("powershell");
+
+    /// <summary>
+    /// Cambia de shell SIN cerrar la sesion ni perder el directorio.
+    ///
+    /// La sesion es del servidor y no sabe de shells: cada comando dice con cual
+    /// se ejecuta. Asi que cambiar aqui no cuesta nada, y se puede ir y volver a
+    /// mitad de una tanda -- que es justo lo que hace falta cuando un comando
+    /// sale mejor en uno y el siguiente en el otro.
+    /// </summary>
+    private void Cambiar(string shell)
+    {
+        if (_shell == shell)
+            return;
+
+        _shell = shell;
+
+        Escribir(shell == "cmd"
+            ? "-- cmd: dir, %PATH%, for /f --"
+            : "-- PowerShell: Get-ChildItem, $env:PATH, objetos --");
+
+        Pintar();
+        Entrada.Focus();
+    }
+
+    /// <summary>El prompt y la pestaña marcada, que son lo mismo dicho dos
+    /// veces: cual de los dos shells va a ejecutar lo que se escriba.</summary>
+    private void Pintar()
+    {
+        var esCmd = _shell == "cmd";
+
+        // El prompt REAL de cada uno. Ponerle C:\> a PowerShell fue el origen de
+        // toda la confusion: se escribia un comando de cmd y el error que volvia
+        // no se parecia a nada.
+        Prompt.Text = esCmd ? $"{_directorio}>" : $"PS {_directorio}>";
+
+        BotonCmd.Background = esCmd ? new SolidColorBrush(Color.FromRgb(0x0C, 0x0C, 0x0C)) : Brushes.Transparent;
+        BotonCmd.Foreground = esCmd ? Brushes.White : new SolidColorBrush(Color.FromRgb(0x8C, 0x8C, 0x8C));
+
+        BotonPowerShell.Background = esCmd ? Brushes.Transparent : new SolidColorBrush(Color.FromRgb(0x01, 0x24, 0x56));
+        BotonPowerShell.Foreground = esCmd ? new SolidColorBrush(Color.FromRgb(0x8C, 0x8C, 0x8C)) : Brushes.White;
     }
 
     private async void TeclaEnLaEntrada(object sender, KeyEventArgs e)
@@ -114,7 +174,8 @@ public partial class TerminalWindow : Window
 
         try
         {
-            var respuesta = await _cliente.RunTerminalCommandAsync(_sesion, comando, _cancelacion.Token);
+            var respuesta = await _cliente.RunTerminalCommandAsync(
+                _sesion, comando, _shell, _cancelacion.Token);
 
             if (respuesta.Output.Length > 0)
                 Escribir(respuesta.Output.TrimEnd());
@@ -127,7 +188,8 @@ public partial class TerminalWindow : Window
             if (respuesta.Truncated)
                 Escribir($"[salida truncada; el tope son {64} KiB]");
 
-            Prompt.Text = $"{respuesta.WorkingDir}>";
+            _directorio = respuesta.WorkingDir;
+            Pintar();
 
             if (respuesta.Identity.Length > 0)
                 Identidad.Text = $"Los comandos se ejecutan como {respuesta.Identity}";

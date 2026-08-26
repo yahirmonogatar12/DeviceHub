@@ -65,9 +65,26 @@ public static class ShellRunner
         }
     }
 
-    public static string Execute(string command, string workingDir, TimeSpan timeout)
+    /// <summary>
+    /// Los dos shells, y solo estos dos.
+    ///
+    /// Lista cerrada a proposito. El nombre viene del dashboard, o sea de la
+    /// red: dejarlo pasar a ProcessStartInfo convertiria el selector de shell en
+    /// "ejecuta el .exe que yo diga", que es exactamente lo que la Fase 15
+    /// evitaba al no aceptar RUN_SHELL suelto.
+    /// </summary>
+    private static string Elegir(string? pedido) => pedido?.Trim().ToLowerInvariant() switch
     {
-        var result = Run(command, workingDir, timeout);
+        "cmd" => "cmd",
+
+        // Vacio incluido: es lo que hacia esto desde la Fase 15, y una peticion
+        // vieja no puede cambiar de shell por haber actualizado.
+        _ => "powershell"
+    };
+
+    public static string Execute(string command, string workingDir, TimeSpan timeout, string? shell = null)
+    {
+        var result = Run(command, workingDir, timeout, shell);
 
         return JsonSerializer.Serialize(new
         {
@@ -79,16 +96,14 @@ public static class ShellRunner
         });
     }
 
-    public static ShellResult Run(string command, string workingDir, TimeSpan timeout)
+    public static ShellResult Run(
+        string command, string workingDir, TimeSpan timeout, string? shell = null)
     {
         var directory = Directory.Exists(workingDir) ? workingDir : Environment.SystemDirectory;
+        var elegido = Elegir(shell);
 
-        var startInfo = new ProcessStartInfo("powershell.exe")
+        var startInfo = new ProcessStartInfo(elegido == "cmd" ? "cmd.exe" : "powershell.exe")
         {
-            // -NoProfile: el perfil del usuario podria redefinir cmdlets y cambiar
-            //             lo que hace un comando aparentemente inocente.
-            // -NonInteractive: sin esto, cualquier comando que pida confirmacion
-            //             se queda esperando para siempre a alguien que no existe.
             WorkingDirectory = directory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -98,13 +113,31 @@ public static class ShellRunner
             StandardErrorEncoding = Encoding.UTF8
         };
 
-        startInfo.ArgumentList.Add("-NoProfile");
-        startInfo.ArgumentList.Add("-NonInteractive");
-        startInfo.ArgumentList.Add("-Command");
-        startInfo.ArgumentList.Add(command);
+        if (elegido == "cmd")
+        {
+            // /d: NO ejecutar lo que haya en AutoRun del registro. Ahi puede
+            //     haber cualquier cosa puesta por otro programa, y saldria
+            //     mezclada con la salida del tecnico -- o peor, correria como
+            //     SYSTEM sin que nadie lo pidiera.
+            // /c: un comando y se acaba, que es el modelo de esta terminal.
+            startInfo.ArgumentList.Add("/d");
+            startInfo.ArgumentList.Add("/c");
+            startInfo.ArgumentList.Add(command);
+        }
+        else
+        {
+            // -NoProfile: el perfil del usuario podria redefinir cmdlets y cambiar
+            //             lo que hace un comando aparentemente inocente.
+            // -NonInteractive: sin esto, cualquier comando que pida confirmacion
+            //             se queda esperando para siempre a alguien que no existe.
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-NonInteractive");
+            startInfo.ArgumentList.Add("-Command");
+            startInfo.ArgumentList.Add(command);
+        }
 
         using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("No se pudo lanzar powershell.exe");
+            ?? throw new InvalidOperationException($"No se pudo lanzar {startInfo.FileName}");
 
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();

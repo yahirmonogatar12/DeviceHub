@@ -2,41 +2,108 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="DeviceHub - Terminal" Height="620" Width="960"
-        Background="#1B1B1B" WindowStartupLocation="CenterOwner">
+        Background="#0C0C0C" WindowStartupLocation="CenterOwner">
 
-    <DockPanel Margin="14">
+    <!-- EL NEGRO ES #0C0C0C, que es el de la consola de Windows, y no hay ni un
+         margen ni una esquina redondeada en toda la ventana.
 
-        <Border DockPanel.Dock="Top" Background="#262626" Padding="12,8" CornerRadius="4"
-                Margin="0,0,0,10">
-            <StackPanel>
-                <TextBlock x:Name="Cabecera" FontFamily="Consolas" FontSize="13"
-                           Foreground="#E8E8E8" Text="Abriendo sesion..." />
+         La version anterior era tres cajas con relleno flotando sobre el fondo
+         del dashboard, y por eso "no se veia bien": parecia un formulario con
+         una caja de texto, no una terminal. Una consola es una superficie
+         continua donde la salida y lo que escribes son lo mismo. -->
 
-                <!-- La identidad NO es decorativa: el agente es un servicio
-                     LocalSystem, asi que todo corre como SYSTEM. Quien no lo sepa
-                     interpreta mal cualquier comando que toque el perfil del
-                     usuario, las unidades de red o HKCU. -->
-                <TextBlock x:Name="Identidad" FontFamily="Consolas" FontSize="12"
-                           Foreground="#E8A13A" TextWrapping="Wrap" Margin="0,4,0,0" />
-            </StackPanel>
-        </Border>
+    <Window.Resources>
+        <!-- Un solo sitio donde se decide la letra: si la entrada y la salida no
+             coinciden EXACTAMENTE, el prompt baila al escribir y se nota. -->
+        <FontFamily x:Key="Mono">Consolas</FontFamily>
+        <sys:Double xmlns:sys="clr-namespace:System;assembly=System.Runtime" x:Key="Tam">13</sys:Double>
 
-        <Border DockPanel.Dock="Bottom" Background="#262626" Padding="10,6" CornerRadius="4"
-                Margin="0,10,0,0">
+        <Style x:Key="Pestana" TargetType="Button">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="FontFamily" Value="{StaticResource Mono}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Padding" Value="12,3" />
+            <Setter Property="Margin" Value="0,0,4,0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Fondo" Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Fondo" Property="Opacity" Value="0.85" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <DockPanel>
+
+        <!-- Una franja fina arriba, como la barra de pestañas de Windows
+             Terminal. Lleva el shell, la maquina y la identidad. -->
+        <Border DockPanel.Dock="Top" Background="#1F1F1F" Padding="8,5">
             <DockPanel>
-                <TextBlock x:Name="Prompt" DockPanel.Dock="Left" FontFamily="Consolas" FontSize="13"
-                           Foreground="#3FBF7F" VerticalAlignment="Center" Margin="0,0,8,0"
-                           Text="&gt;" />
+                <TextBlock x:Name="Cabecera" DockPanel.Dock="Right" VerticalAlignment="Center"
+                           FontFamily="{StaticResource Mono}" FontSize="11"
+                           Foreground="#8C8C8C" Margin="12,0,4,0" Text="Abriendo sesion..." />
 
-                <TextBox x:Name="Entrada" FontFamily="Consolas" FontSize="13"
-                         Background="Transparent" Foreground="#E8E8E8" BorderThickness="0"
-                         CaretBrush="#E8E8E8" KeyDown="TeclaEnLaEntrada" />
+                <StackPanel Orientation="Horizontal">
+                    <Button x:Name="BotonCmd" Style="{StaticResource Pestana}"
+                            Content="cmd" Click="ElegirCmd"
+                            ToolTip="Simbolo del sistema: dir, %PATH%, for /f" />
+
+                    <Button x:Name="BotonPowerShell" Style="{StaticResource Pestana}"
+                            Content="PowerShell" Click="ElegirPowerShell"
+                            ToolTip="Get-ChildItem, $env:PATH, objetos en el pipeline" />
+                </StackPanel>
             </DockPanel>
         </Border>
 
-        <TextBox x:Name="Salida" FontFamily="Consolas" FontSize="12"
-                 Background="#141414" Foreground="#C8C8C8" BorderThickness="0" Padding="10"
-                 IsReadOnly="True" TextWrapping="NoWrap"
+        <!-- La identidad NO es decorativa: el agente es un servicio LocalSystem,
+             asi que todo corre como SYSTEM. Quien no lo sepa interpreta mal
+             cualquier comando que toque el perfil del usuario, las unidades de
+             red o HKCU. -->
+        <Border x:Name="AvisoIdentidad" DockPanel.Dock="Top" Background="#2A2110" Padding="10,4">
+            <TextBlock x:Name="Identidad" FontFamily="{StaticResource Mono}" FontSize="11"
+                       Foreground="#E8A13A" TextWrapping="Wrap" Text="" />
+        </Border>
+
+        <!-- El prompt y lo que se escribe, con EL MISMO fondo y la misma letra
+             que la salida y sin borde entre medias: es la ultima linea de la
+             consola, no un cuadro de texto debajo de ella. -->
+        <Grid DockPanel.Dock="Bottom" Background="#0C0C0C">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <TextBlock x:Name="Prompt" Grid.Column="0"
+                       FontFamily="{StaticResource Mono}" FontSize="{StaticResource Tam}"
+                       Foreground="#CCCCCC" VerticalAlignment="Center"
+                       Margin="10,4,0,8" Text="&gt;" />
+
+            <TextBox x:Name="Entrada" Grid.Column="1"
+                     FontFamily="{StaticResource Mono}" FontSize="{StaticResource Tam}"
+                     Background="Transparent" Foreground="#CCCCCC" BorderThickness="0"
+                     CaretBrush="#CCCCCC" SelectionBrush="#264F78"
+                     Margin="4,4,10,8" Padding="0"
+                     KeyDown="TeclaEnLaEntrada" />
+        </Grid>
+
+        <!-- Sin Padding lateral distinto al del prompt: las columnas de la
+             salida y las de lo que se escribe tienen que caer alineadas. -->
+        <TextBox x:Name="Salida"
+                 FontFamily="{StaticResource Mono}" FontSize="{StaticResource Tam}"
+                 Background="#0C0C0C" Foreground="#CCCCCC" BorderThickness="0"
+                 Padding="10,8,10,0"
+                 IsReadOnly="True" IsReadOnlyCaretVisible="False"
+                 TextWrapping="NoWrap" SelectionBrush="#264F78"
                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
 
     </DockPanel>

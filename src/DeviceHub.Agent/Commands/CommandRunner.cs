@@ -109,7 +109,8 @@ public sealed class CommandRunner(ILogger<CommandRunner> logger)
         CommandType.RunShell => Task.FromResult(Audited(ShellRunner.Execute(
             Parameter(request, "command"),
             request.Parameters.TryGetValue("cwd", out var cwd) ? cwd : Environment.SystemDirectory,
-            CommandPolicy.Get(CommandType.RunShell).Timeout - TimeSpan.FromSeconds(5)))),
+            CommandPolicy.Get(CommandType.RunShell).Timeout - TimeSpan.FromSeconds(5),
+            request.Parameters.TryGetValue("shell", out var shell) ? shell : null))),
         CommandType.WriteFile => Task.FromResult(Audited(
             FileOperations.WriteFile(Parameter(request, "path"), Parameter(request, "content")))),
 

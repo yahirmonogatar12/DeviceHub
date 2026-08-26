@@ -258,9 +258,9 @@ public sealed class DeviceHubClient : IDisposable
             new MachineRef { MachineId = machineId }, _auth, cancellationToken: ct).ResponseAsync;
 
     public Task<TerminalCommandReply> RunTerminalCommandAsync(
-        string sessionId, string command, CancellationToken ct)
+        string sessionId, string command, string shell, CancellationToken ct)
         => _client.RunTerminalCommandAsync(
-            new TerminalCommandRequest { SessionId = sessionId, Command = command },
+            new TerminalCommandRequest { SessionId = sessionId, Command = command, Shell = shell },
             _auth, cancellationToken: ct).ResponseAsync;
 
     public Task<TerminalSessionReply> EndTerminalSessionAsync(string sessionId, CancellationToken ct)
