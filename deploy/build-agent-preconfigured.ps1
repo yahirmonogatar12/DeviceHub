@@ -205,11 +205,14 @@ $vence = (Get-Date).AddMinutes($ValidMinutes)
 Write-Host ""
 Write-Host "Instalador listo: $destino" -ForegroundColor Green
 Write-Host ("  servidor  {0}:{1}" -f $Server, $Port)
-Write-Host ("  codigo    {0}   ({1} PCs, vence {2:HH:mm})" -f $Code, $Machines, $vence)
+Write-Host ("  codigo    {0}   ({1} PCs, vence {2:dd/MM HH:mm})" -f $Code, $Machines, $vence)
 Write-Host ("  pin       {0}" -f $Pin)
 Write-Host ""
 Write-Host "En cada PC de planta: copiar y doble clic. No pregunta nada." -ForegroundColor Cyan
 Write-Host "  o en silencio:  .\DeviceHubAgent-setup-$Version.exe /VERYSILENT"
 Write-Host ""
-Write-Host "El codigo vale para $Machines instalaciones y caduca a las $($vence.ToString('HH:mm'))." -ForegroundColor Yellow
+# CON EL DIA DELANTE. Con 1440 minutos, "caduca a las 09:16" se lee como
+# "caduca en un minuto" -- es manana a esa hora, y la diferencia entre las dos
+# lecturas es una ronda entera por la planta.
+Write-Host ("El codigo vale para $Machines instalaciones y caduca el {0:dddd d 'a las' HH:mm}." -f $vence) -ForegroundColor Yellow
 Write-Host "Pasado eso, vuelve a ejecutar este script: el instalador viejo ya no sirve." -ForegroundColor Yellow
