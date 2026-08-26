@@ -32,6 +32,14 @@
             <!-- A TODOS DE UNA. El agente mira el recurso cada seis horas por su
                  cuenta; esto es para cuando se acaba de publicar algo. Pulsarlo
                  equipo por equipo con veinte PCs es una tarde. -->
+            <!-- VARIAS DE UNA. Con 29 equipos, abrirlas de una en una son 29
+                 idas y vueltas a la lista. Todas caen en la misma ventana del
+                 visor, en pestanas. -->
+            <Button DockPanel.Dock="Right" Content="Controlar seleccionados"
+                    Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
+                    ToolTip="Abre sesion remota contra todo lo que este marcado (Ctrl o Mayus para marcar varios)"
+                    Command="{Binding ControlarSeleccionadosCommand}" />
+
             <Button DockPanel.Dock="Right" Content="Actualizar todos"
                     Style="{StaticResource BtnGhost}" Margin="0,0,8,0"
                     ToolTip="Pide a todos los equipos EN LINEA que busquen actualizacion ahora"
@@ -132,8 +140,14 @@
                            Visibility="{Binding TotalCount, Converter={StaticResource BoolToVis}, ConverterParameter=invert}"
                            Text="Ningun equipo registrado todavia.&#x0a;Genera un codigo de enrolamiento e instala el agente en una PC." />
 
+                <!-- SELECCION MULTIPLE: Ctrl para sueltas, Mayus para un rango.
+                     SelectedItem sigue mandando en el panel de la derecha, que
+                     es de UNA maquina; la seleccion entera solo la usa el boton
+                     de controlar varias. -->
                 <DataGrid ItemsSource="{Binding MachinesView}"
-                          SelectedItem="{Binding SelectedMachine}">
+                          SelectedItem="{Binding SelectedMachine}"
+                          SelectionMode="Extended"
+                          SelectionChanged="EquiposSeleccionados">
                     <DataGrid.Columns>
                         <DataGridTemplateColumn Header="Estado" Width="128">
                             <DataGridTemplateColumn.CellTemplate>

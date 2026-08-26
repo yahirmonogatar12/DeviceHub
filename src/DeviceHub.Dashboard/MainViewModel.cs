@@ -506,6 +506,81 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Lo que hay marcado en la lista. Lo mantiene la propia rejilla: con
+    /// seleccion multiple, SelectedItem solo conoce una y hace falta el resto.
+    /// </summary>
+    public IReadOnlyList<MachineViewModel> Seleccionados { get; private set; } = [];
+
+    public void FijarSeleccion(IEnumerable<MachineViewModel> cuales)
+        => Seleccionados = [.. cuales];
+
+    /// <summary>
+    /// Abre sesion remota contra TODO lo que este marcado.
+    ///
+    /// Van a la MISMA ventana del visor, cada una en su pestana: la tuberia por
+    /// la que llego el primer ticket se queda abierta justo para esto. Es el
+    /// mismo camino que abrir una detras de otra, sin los clics.
+    ///
+    /// EN SERIE Y NO A LA VEZ. Cada apertura pide un ticket, arranca el host en
+    /// la PC de planta y espera su primer keyframe; lanzarlas en paralelo pone a
+    /// competir por la red a veinte codificadores que todavia no han dicho su
+    /// primera palabra, y lo que se gana en clics se pierde en espera.
+    /// </summary>
+    [RelayCommand]
+    private async Task ControlarSeleccionadosAsync()
+    {
+        var cuales = Seleccionados.Where(m => !m.Retired).ToList();
+
+        if (cuales.Count == 0)
+        {
+            MessageBox.Show(
+                "Marca uno o varios equipos en la lista. Con Ctrl se anaden sueltos y con Mayus un rango.",
+                "Controlar", MessageBoxButton.OK, MessageBoxImage.Information);
+
+            return;
+        }
+
+        // CADA SESION ES UN VIDEO. Con cuatro o cinco no se nota; con veinte se
+        // nota en la red de planta y en el servidor, que las reenvia todas. El
+        // numero va en la pregunta para que la decision se tome viendolo.
+        if (cuales.Count > 3)
+        {
+            var salto = Environment.NewLine;
+
+            var pregunta = MessageBox.Show(
+                $"Se van a abrir {cuales.Count} sesiones remotas, cada una con su video." +
+                salto + salto +
+                "Todas van a la misma ventana, en pestanas." + salto +
+                "Con muchas a la vez, la red de planta y el servidor lo notan." +
+                salto + salto + "Continuar?",
+                "Controlar seleccionados", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+
+            if (pregunta != MessageBoxResult.Yes)
+                return;
+        }
+
+        var anterior = SelectedMachine;
+        var abiertas = 0;
+
+        foreach (var maquina in cuales)
+        {
+            StatusMessage = $"Abriendo {maquina.MachineCode}... ({abiertas + 1} de {cuales.Count})";
+
+            // RemoteControlAsync trabaja sobre SelectedMachine, que es como lo
+            // usa el boton de siempre. Se le presta la maquina de turno en vez
+            // de duplicar aqui todo el lanzamiento -- ticket, stdin y reuso del
+            // visor abierto -- que es justo donde estan las decisiones dificiles.
+            SelectedMachine = maquina;
+
+            await RemoteControlAsync(null);
+            abiertas++;
+        }
+
+        SelectedMachine = anterior;
+        StatusMessage = $"{abiertas} sesion(es) abiertas en la ventana del visor.";
+    }
+
+    /// <summary>
     /// Pide un numero con un dialogo simple. Devuelve null si se cancela.
     ///
     /// Con InputBox de VisualBasic y no con una ventana propia: son dos
