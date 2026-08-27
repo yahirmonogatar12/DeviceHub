@@ -1458,6 +1458,11 @@ public static class RelaySession
         foreach (var bomba in bombas)
             bomba.Start();
 
+        // El latido de cada bomba tal como se vio la ultima vez, y cuando fue.
+        // Si no se mueve en cinco segundos, la bomba esta viva y colgada.
+        var latidos = flujos.Select(f => Interlocked.Read(ref f.Vueltas)).ToArray();
+        var latidosDesde = Stopwatch.GetTimestamp();
+
         var avisadoDeCeguera = 0;
         // El bitrate vigente. Arranca en el configurado y de ahi lo mueve el
         // controlador segun lo que aguante la red.
@@ -1562,10 +1567,58 @@ public static class RelaySession
                     // duplicador y codificador, asi que no puede girar en vano;
                     // si una PC entrara en bucle, se veria en el log como un
                     // aviso por vuelta. Se pone tope el dia que se vea.
+                    string? averia = null;
+
                     if (bombasDePantalla.FirstOrDefault(h => !h.IsAlive) is { } muerta)
                     {
+                        averia = $"El hilo {muerta.Name} termino solo";
+                    }
+                    else
+                    {
+                        // VIVA Y ATASCADA es el otro medio caso, y hasta ahora no
+                        // lo veia nadie.
+                        //
+                        // AcquireNextFrame, ProcessInput y la escritura al canal
+                        // pueden colgarse con el hilo perfectamente vivo. No sirve
+                        // mirar si produce frames -- un escritorio quieto deja de
+                        // codificar a los diez repetidos y esta sano -- pero si
+                        // sirve mirar si DA VUELTAS: eso lo hace hasta la pantalla
+                        // mas muerta.
+                        var ahora = flujos.Select(f => Interlocked.Read(ref f.Vueltas)).ToArray();
+
+                        if (!ahora.SequenceEqual(latidos))
+                        {
+                            latidos = ahora;
+                            latidosDesde = Stopwatch.GetTimestamp();
+                        }
+                        else if (Stopwatch.GetTimestamp() - latidosDesde > Stopwatch.Frequency * 5)
+                        {
+                            averia = "El bombeo de video lleva cinco segundos sin dar una vuelta";
+                        }
+                    }
+
+                    if (averia is not null)
+                    {
+                        // Y SE ESPERA ANTES DE VOLVER A MONTARLA.
+                        //
+                        // Sin espera, un fallo permanente -- crear el MFT y que
+                        // devuelva E_INVALIDARG siempre -- se convierte en un
+                        // bucle que quema CPU y llena el registro de eventos. La
+                        // espera dobla con techo de un segundo y se olvida a los
+                        // treinta sanos, para que dos tropiezos sin relacion en
+                        // una sesion larga no dejen la sesion lenta para siempre.
+                        var cuando = DateTimeOffset.UtcNow;
+                        _rehechosSeguidos = RepetirVideo.Seguidos(_rehechosSeguidos, _ultimoRehecho, cuando);
+                        _ultimoRehecho = cuando;
+
+                        var espera = RepetirVideo.Espera(_rehechosSeguidos);
+
                         Avisar(opciones,
-                            $"El hilo {muerta.Name} termino solo; se rehace la captura.");
+                            $"{averia}; se rehace la captura" +
+                            (_rehechosSeguidos > 1 ? $" (intento {_rehechosSeguidos}, en {espera.TotalMilliseconds:0} ms)" : "") +
+                            ".");
+
+                        cancellationToken.WaitHandle.WaitOne(espera);
                         return;
                     }
 
@@ -1764,6 +1817,10 @@ public static class RelaySession
                 // despues.
                 var vuelta = Stopwatch.GetTimestamp();
                 Interlocked.Increment(ref cuenta.Vueltas);
+
+                // El latido de ESTA pantalla, aparte del total. El vigilante lo
+                // mira para ver si la bomba sigue girando o solo sigue viva.
+                Interlocked.Increment(ref flujo.Vueltas);
                 var intervalo = Stopwatch.Frequency /
                     Math.Clamp(_fpsDeseado, ControlFps.Minimo, ControlFps.Maximo);
 
@@ -1873,6 +1930,29 @@ public static class RelaySession
                     && Stopwatch.GetTimestamp() - ultimoFrame > Stopwatch.Frequency * 3)
                 {
                     flujo.Relevada = true;
+
+                    // EN WINLOGON NO SE RELEVA, Y ESTE ES EL CASO QUE MAS IMPORTA.
+                    //
+                    // GDI copia el escritorio de bloqueo SIN su interfaz: sale el
+                    // fondo, y el reloj y el cuadro de contrasena no. Relevar
+                    // ahi cambia una GPU sana por una ceguera garantizada -- y
+                    // justo para lo unico que se queria de esa pantalla, que es
+                    // poder entrar.
+                    //
+                    // Y DXGI no esta roto: una pantalla de bloqueo QUIETA no
+                    // presenta nada, asi que no hay primer frame que entregar.
+                    // La regla de los 3 s da por averiado lo que solo esta
+                    // callado. En cuanto algo se dibuje -- y el raton ya llega,
+                    // que la entrada entra en Winlogon -- DXGI entrega.
+                    if (!string.Equals(_escritorio, InputDesktop.Normal, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Avisar(opciones,
+                            $"La pantalla de bloqueo ({_escritorio}) esta quieta y no presenta nada, " +
+                            "asi que no hay primer frame. Mueve el raton o pulsa una tecla y aparecera. " +
+                            "No se releva por GDI: ahi se veria el fondo sin el cuadro de contrasena.");
+
+                        continue;
+                    }
 
                     Avisar(opciones,
                         $"DXGI no ha entregado ni un frame de la pantalla {flujo.DisplayId} en 3 s; se releva por GDI");
@@ -2500,6 +2580,21 @@ public static class RelaySession
         /// pantalla.</summary>
         public bool Arranco { get; set; }
 
+        /// <summary>
+        /// Vueltas del bucle de bombeo. El latido de esta pantalla.
+        ///
+        /// Campo y no propiedad porque lo escribe Interlocked. Se mira desde
+        /// OTRO hilo -- el vigilante -- para distinguir una bomba VIVA Y
+        /// ATASCADA de una bomba viva y callada: un escritorio quieto deja de
+        /// codificar a los diez repetidos, asi que "no produce frames" no
+        /// significa nada; "no da vueltas" si.
+        ///
+        /// Colgarse es posible en tres sitios de esta cadena -- AcquireNextFrame,
+        /// ProcessInput y la escritura al canal -- y en los tres el hilo sigue
+        /// vivo. Mirar solo IsAlive no los veria.
+        /// </summary>
+        public long Vueltas;
+
         /// <summary>Hay un escritorio delante ahora mismo. Solo sirve para no
         /// repetir el aviso en cada vuelta del bucle.</summary>
         public bool Tapada { get; set; }
@@ -3065,6 +3160,11 @@ public static class RelaySession
 
     /// <summary>El escritorio que se esta capturando: Default, Winlogon, o el
     /// que sea.</summary>
+    /// <summary>Rehechos de video seguidos, y cuando fue el ultimo. Ver
+    /// RepetirVideo: es lo que evita que un fallo permanente gire sin freno.</summary>
+    private static int _rehechosSeguidos;
+    private static DateTimeOffset? _ultimoRehecho;
+
     private static string _escritorio = "?";
 
     /// <summary>
