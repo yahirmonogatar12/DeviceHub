@@ -27,4 +27,14 @@
     <PackageReference Include="Vortice.MediaFoundation" Version="3.8.3" />
   </ItemGroup>
 
+
+  <!-- La barra de desplazamiento vive en src\Shared y la comparten el
+       dashboard y el visor: es la misma plantilla y una sola copia. -->
+  <ItemGroup>
+    <Page Include="..\Shared\Barras.xaml">
+      <Link>Styles\Barras.xaml</Link>
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+  </ItemGroup>
 </Project>
