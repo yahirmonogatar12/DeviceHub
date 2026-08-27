@@ -602,6 +602,7 @@ public static class RelaySession
         /// </summary>
         public long Vueltas;
 
+
         /// <summary>Frames que salieron y nadie confirmo en EsperaDeAcuseMs. Si
         /// esto sube, el visor no esta siguiendo el ritmo.</summary>
         public long AcusesPerdidos;
@@ -769,7 +770,8 @@ public static class RelaySession
                             ? $"hilos {_hilos}  prisa {_prisa}  "
                             : "") +
                         $"{(_comoSystem ? "SYSTEM" : "usuario (sin ventanas elevadas)")}  " +
-                        $"escritorio entrada={_escritorio} captura={_escritorioBomba}  " +
+                        $"escritorio entrada={_escritorio} hilo={_escritorioBomba} " +
+                        $"atado={_escritorioAtado} via {_comoSeCaptura}  " +
                         $"teclado@{_escritorioEntrada}  " +
                         $"objetivo {_bitrateDeseado / 1000} kbps ({_calidad:0.00}x)  " +
                         // Aplicados y rechazados de SendInput. Es lo que dice si
@@ -1777,6 +1779,20 @@ public static class RelaySession
     {
         try
         {
+            // ESTE HILO SE ATA AL ESCRITORIO, Y LO PRIMERO DE TODO.
+            //
+            // Un hilo nuevo NO hereda el escritorio del que lo creo: nace en el
+            // del proceso. Las capturas se construyen en el hilo de captura, que
+            // si esta atado, pero quien las USA es este -- y estaba en Default
+            // mientras Windows enseñaba Winlogon. De ahi el
+            // "entrada=Winlogon captura=Default" del overlay.
+            //
+            // Va antes de la primera captura porque SetThreadDesktop solo mueve
+            // un hilo SIN objetos USER, y este los tendra en cuanto codifique un
+            // frame. Ahora mismo es virgen; dentro de una vuelta ya no.
+            using var mio = new Capture.InputDesktop();
+            mio.SeguirActivo();
+
             // DONDE ESTA ESTE HILO, que es el que captura.
             //
             // El overlay ponia el escritorio de ENTRADA y lo llamaba "escritorio",
@@ -1785,6 +1801,8 @@ public static class RelaySession
             // vistazo el caso que no se veia -- entrada en Winlogon, captura en
             // Default -- que es capturar un escritorio que ya nadie mira.
             _escritorioBomba = InputDesktop.NombreDelHilo();
+            _escritorioAtado = flujo.EscritorioVinculado;
+            _comoSeCaptura = flujo.Captura is Capture.GdiDesktopCapture ? "GDI" : "DXGI";
 
             var ultimoFrame = Stopwatch.GetTimestamp();
 
@@ -2113,6 +2131,19 @@ public static class RelaySession
 
                     RehacerCodificador(flujo, opciones, cuenta);
                     repetidos = 0;
+                }
+
+                // NI UN FRAME MAS SI EL ESCRITORIO YA NO ES EL NUESTRO.
+                //
+                // En la bomba y no dentro de cada capturador: asi la regla vale
+                // igual para DXGI, para GDI y para lo que venga, en vez de
+                // depender de que cada backend se acuerde. Ninguno avisa por su
+                // cuenta -- todos devuelven imagen valida del escritorio viejo.
+                if (flujo.EscritorioVinculado.Length > 0
+                    && InputDesktop.NombreDeEntrada() is { Length: > 0 } deEntrada
+                    && !string.Equals(deEntrada, flujo.EscritorioVinculado, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new Capture.EscritorioCambiadoException(flujo.EscritorioVinculado, deEntrada);
                 }
 
                 var antesDeCapturar = Stopwatch.GetTimestamp();
@@ -2623,6 +2654,15 @@ public static class RelaySession
         /// vivo. Mirar solo IsAlive no los veria.
         /// </summary>
         public long Vueltas;
+        /// <summary>
+        /// El escritorio en el que NACIO esta cadena.
+        ///
+        /// La regla es universal y da igual el capturador: si el escritorio de
+        /// entrada deja de ser este, no se pide un frame mas. Da lo mismo que
+        /// detras haya DXGI, GDI o lo que venga -- todos entregarian imagen de
+        /// un escritorio que ya nadie mira, y con TRUE en el valor de retorno.
+        /// </summary>
+        public string EscritorioVinculado { get; set; } = string.Empty;
 
         /// <summary>Hay un escritorio delante ahora mismo. Solo sirve para no
         /// repetir el aviso en cada vuelta del bucle.</summary>
@@ -2743,6 +2783,7 @@ public static class RelaySession
                 new Flujo
                 {
                     DisplayId = pedida,
+                    EscritorioVinculado = InputDesktop.NombreDelHilo(),
                     Info = elegida,
                     Captura = unica,
                     BitrateBase = ControlBitrate.PorResolucion(unica.Width, unica.Height, 1.0),
@@ -2778,6 +2819,7 @@ public static class RelaySession
                 flujos.Add(new Flujo
                 {
                     DisplayId = pantalla.Id,
+                    EscritorioVinculado = InputDesktop.NombreDelHilo(),
                     Info = pantalla,
                     Captura = captura,
                     BitrateBase = ControlBitrate.PorResolucion(captura.Width, captura.Height, 1.0),
@@ -3198,6 +3240,12 @@ public static class RelaySession
 
     /// <summary>El escritorio al que esta atado el hilo que CAPTURA.</summary>
     private static string _escritorioBomba = "?";
+
+    /// <summary>El escritorio en el que NACIO la cadena, y con que capturador.
+    /// "atado" y no "captura": Default no es un tipo de captura, es donde vive
+    /// esta generacion.</summary>
+    private static string _escritorioAtado = "?";
+    private static string _comoSeCaptura = "?";
 
     /// <summary>
     /// El escritorio del hilo de ENTRADA y con que permiso lo tiene.
