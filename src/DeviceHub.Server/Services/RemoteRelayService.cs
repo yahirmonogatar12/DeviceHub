@@ -278,7 +278,9 @@ public sealed class RemoteRelayGrpcService(
                                && !cerroOrdenado
                                && motivo != SessionCloseReason.ProtocolError;
 
-            var otro = sesion.Leave(conexion, motivo, esperaAlHost);
+            var otro = sesion.Leave(
+                conexion, motivo, esperaAlHost,
+                viewerSeDespidio: cerroOrdenado && papel == RemoteRole.Viewer);
 
             if (esperaAlHost && sesion.State == RemoteSessionState.WaitingForHost)
             {
@@ -304,7 +306,12 @@ public sealed class RemoteRelayGrpcService(
             // El relay es el ultimo que sabe que el viewer se fue, asi que es el
             // que tiene que decirlo. Va antes del vigilante para que llegue
             // aunque el host se cierre a continuacion.
-            if (papel == RemoteRole.Viewer && otro is null && sesion.HostConectado is { } anfitrion)
+            //
+            // Y corre aunque al host se le vaya a cerrar a continuacion: una
+            // tecla hundida la inyecto SendInput en Windows, asi que sigue
+            // hundida despues de que RemoteHost termine. Cerrar sin soltarla
+            // deja a la PC de planta con un Ctrl invisible pulsado.
+            if (papel == RemoteRole.Viewer && sesion.HostConectado is { } anfitrion)
                 await SoltarLoQueQuedoPulsadoAsync(anfitrion, sesion);
 
             // Y EL ESPEJO DEL VIGILANTE, que solo existia en un sentido.

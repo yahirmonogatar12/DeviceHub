@@ -166,6 +166,16 @@ public partial class SesionRemota : UserControl
         Terminando = true;
         _gestor?.Close();
 
+        // EL ADIOS VA PRIMERO, y va antes de cancelar nada.
+        //
+        // Cortar el canal a secas es indistinguible de que se caiga la red, y
+        // desde que existe la ventana de reconexion eso significa "vuelvo
+        // enseguida": el relay guardaba la sesion en gracia y el RemoteHost
+        // seguia capturando y codificando en la PC de planta con nadie mirando.
+        // De regalo, la auditoria anotaba REMOTE_SESSION_FAILED cada vez que el
+        // tecnico cerraba una pestana a proposito.
+        Despedirse();
+
         Desactivar();
 
         // El dispositivo de sonido se suelta AQUI. Un IAudioClient vivo sigue
@@ -174,6 +184,47 @@ public partial class SesionRemota : UserControl
         _altavoz.Dispose();
 
         _cancelacion.Cancel();
+    }
+
+    /// <summary>Por donde se escribe a la conexion viva, o null si no hay.</summary>
+    private IClientStreamWriter<RemotePacket>? _adios;
+
+    /// <summary>
+    /// Decirle al relay que esto se cierra a proposito.
+    ///
+    /// Se espera al envio, con tope: es lo ultimo que hace la pestana y si no
+    /// sale, el otro extremo no se entera. Task.Run y no un await directo porque
+    /// esto corre en el hilo de la interfaz -- al cerrar la ventana el bucle de
+    /// mensajes ya no bombea, y esperar ahi a algo que necesite volver a este
+    /// hilo se quedaria clavado.
+    ///
+    /// Medio segundo de tope: si la red esta tan mal que el adios no sale, la
+    /// gracia del relay hace su trabajo igual y no hay nada que ganar esperando.
+    /// </summary>
+    private void Despedirse()
+    {
+        if (_adios is not { } salida)
+            return;
+
+        _adios = null;
+
+        try
+        {
+            Task.Run(() => salida.WriteAsync(new RemotePacket
+            {
+                ProtocolVersion = RemoteSessionProtocol.Version,
+                SessionId = _sesion,
+                Close = new SessionClose
+                {
+                    Reason = SessionCloseReason.Normal,
+                    Detail = "el tecnico cerro la sesion"
+                }
+            })).Wait(TimeSpan.FromMilliseconds(500));
+        }
+        catch (Exception)
+        {
+            // La conexion ya estaba muerta. No hay a quien despedirse.
+        }
     }
 
     /// <summary>
@@ -438,6 +489,9 @@ public partial class SesionRemota : UserControl
         // acuses son de un stream muerto y los frames que confirmaban ya no
         // existen.
         _salida.Reiniciar();
+
+        // Por aqui sale el adios. Ver Despedirse().
+        _adios = llamada.RequestStream;
 
         var latidos = LatirAsync(llamada.RequestStream, intento.Token);
 

@@ -121,6 +121,43 @@ public class RemoteRelayTests
     }
 
     [Fact]
+    public void The_viewer_that_says_goodbye_closes_the_host_too()
+    {
+        var sesion = new RemoteSessionRegistry().GetOrCreate("s");
+
+        using var host = new RelayConnection("s", RemoteRole.Host);
+        using var viewer = Viewer();
+
+        sesion.TryJoin(host);
+        sesion.TryJoin(viewer);
+
+        // CAERSE Y DESPEDIRSE NO SON LO MISMO. El de abajo se cayo y se le
+        // esperan 30 s; este cerro la pestana y lo dijo con un SessionClose,
+        // asi que esperarlo seria tener a la PC de planta capturando y
+        // codificando medio minuto para nadie.
+        Assert.Same(host, sesion.Leave(
+            viewer, SessionCloseReason.ViewerGone, viewerSeDespidio: true));
+
+        Assert.Equal(RemoteSessionState.Closing, sesion.State);
+    }
+
+    [Fact]
+    public void A_goodbye_with_no_host_left_changes_nothing()
+    {
+        var sesion = new RemoteSessionRegistry().GetOrCreate("s");
+
+        using var viewer = Viewer();
+        sesion.TryJoin(viewer);
+
+        // Sin host no hay a quien cerrar, y devolver algo aqui haria que el
+        // relay se mandara el adios a si mismo.
+        Assert.Null(sesion.Leave(
+            viewer, SessionCloseReason.ViewerGone, viewerSeDespidio: true));
+
+        Assert.Equal(RemoteSessionState.Closed, sesion.State);
+    }
+
+    [Fact]
     public void When_only_the_viewer_leaves_the_host_is_left_alone()
     {
         var sesion = new RemoteSessionRegistry().GetOrCreate("s");

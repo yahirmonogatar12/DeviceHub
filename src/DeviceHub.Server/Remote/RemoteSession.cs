@@ -178,7 +178,8 @@ public sealed class RemoteSession(string id)
     /// volvia, correctamente, a una sesion donde ya no habia nadie esperandolo.
     /// </param>
     public RelayConnection? Leave(
-        RelayConnection conexion, SessionCloseReason motivo, bool esperaAlHost = false)
+        RelayConnection conexion, SessionCloseReason motivo, bool esperaAlHost = false,
+        bool viewerSeDespidio = false)
     {
         lock (_puerta)
         {
@@ -218,6 +219,20 @@ public sealed class RemoteSession(string id)
 
                 CloseReason ??= motivo.ToString();
                 return Viewer;   // sin host no hay video: al viewer se le cierra
+            }
+
+            // EL VIEWER QUE SE DESPIDE NO VUELVE.
+            //
+            // Dejar al host en WaitingForViewer es lo correcto cuando el visor
+            // se CAYO: puede volver, y para eso estan los 30 s de gracia. Pero
+            // cuando el tecnico cierra la pestana a proposito y lo dice con un
+            // SessionClose, esperarlo es tener a la PC de planta capturando y
+            // codificando medio minuto para nadie.
+            if (viewerSeDespidio && Host is not null)
+            {
+                State = RemoteSessionState.Closing;
+                CloseReason ??= motivo.ToString();
+                return Host;
             }
 
             return null;   // se fue el viewer y el host sigue: no se avisa a nadie
