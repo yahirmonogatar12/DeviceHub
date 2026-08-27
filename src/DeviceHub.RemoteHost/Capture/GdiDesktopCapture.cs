@@ -165,6 +165,27 @@ public sealed class GdiDesktopCapture : IScreenCapture
             return null;
         }
 
+        // VACIAR EL LOTE DE GDI ANTES DE LEER EL DIB.
+        //
+        // GDI acumula por hilo las llamadas que devuelven BOOL, y BitBlt es una
+        // de ellas. El bitmap es un CreateDIBSection, o sea que _bits apunta
+        // DIRECTAMENTE a su memoria -- y leerla con Marshal.Copy no es una
+        // llamada GDI, asi que no vacia nada. Se copiaba la imagen ANTERIOR.
+        //
+        // Microsoft lo pide explicitamente para este patron: dibujar por GDI
+        // sobre una seccion DIB y despues acceder al puntero de bits exige
+        // GdiFlush en medio.
+        //
+        // El sintoma era de los que no se buscan solos: BitBlt devolvia TRUE,
+        // los contadores subian, se enviaban y se pintaban frames -- y todos
+        // llevaban los mismos pixeles. En la pantalla de bloqueo se veia el
+        // Sign in congelado mientras el clic SI llegaba y Windows SI avanzaba
+        // al otro lado.
+        //
+        // RustDesk no lo necesita porque lee con GetDIBits, que no devuelve
+        // BOOL: llamarla ya fuerza el vaciado del lote.
+        GdiFlush();
+
         Subir();
         _frameVivo = true;
 
@@ -489,6 +510,12 @@ public sealed class GdiDesktopCapture : IScreenCapture
     [DllImport("gdi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool DeleteObject(IntPtr objeto);
+
+    /// <summary>Vacia el lote de GDI de ESTE hilo. Ver la llamada en Capturar:
+    /// sin esto se lee el DIB antes de que BitBlt haya escrito en el.</summary>
+    [DllImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GdiFlush();
 
     [DllImport("gdi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
