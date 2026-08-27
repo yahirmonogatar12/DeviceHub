@@ -1879,33 +1879,16 @@ public static class RelaySession
                     //
                     // Solo en frio. Con salida ya emitida, un keyframe que no
                     // llega es otro problema y el codec no tiene la culpa.
-                    if (!flujo.ConfigEnviada && ++rehechosEnVano >= 2 && !_soloSoftware)
+                    if (!flujo.ConfigEnviada
+                        && ++rehechosEnVano >= EscaleraCodec.RehechosAntesDeBajar
+                        && EscaleraCodec.Siguiente(_codec, _soloSoftware) is { } paso)
                     {
-                        // PRIMERO EL OTRO CODEC, DESPUES EL SOFTWARE.
-                        //
-                        // En MATERIAL-P1 el cambio a H.264 no basto: los dos por
-                        // hardware se montan y ninguno entrega -- config 28 y
-                        // codificados 0. Queda el peldano que la escalera de
-                        // apertura nunca alcanza, porque solo baja cuando algo
-                        // FALLA al construirse.
-                        if (_codec == VideoCodec.H265)
-                        {
-                            Avisar(opciones,
-                                "El H.265 de esta PC acepta la configuracion y no entrega imagen; " +
-                                "se pasa a H.264.");
+                        Avisar(opciones, paso.Aviso);
 
-                            _codec = VideoCodec.H264;
-                        }
-                        else
-                        {
-                            Avisar(opciones,
-                                "Tampoco el H.264 por hardware entrega imagen en esta PC; " +
-                                "se pasa al codificador por SOFTWARE.");
-
-                            _soloSoftware = true;
-                        }
-
+                        _codec = paso.Codec;
+                        _soloSoftware = paso.SoloSoftware;
                         rehechosEnVano = 0;
+
                         return;
                     }
 
