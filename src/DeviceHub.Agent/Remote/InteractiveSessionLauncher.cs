@@ -44,16 +44,20 @@ public sealed class InteractiveSessionLauncher(
     /// exactamente como se llego a la conclusion equivocada.
     /// </summary>
     /// <summary>
-    /// ENCENDIDO POR DEFECTO desde 1.66, y no por la pantalla de bloqueo -- esa
-    /// sigue sin funcionar -- sino por las ventanas ELEVADAS. SendInput no entra
+    /// ENCENDIDO POR DEFECTO desde 1.66. Entonces se encendio por las ventanas
+    /// ELEVADAS, no por la pantalla de bloqueo; desde 1.143.0 hace falta
+    /// tambien para ESA, que ya se captura y se controla -- sin SYSTEM no se
+    /// puede abrir el escritorio de Winlogon. SendInput no entra
     /// en el Administrador de dispositivos, el editor del registro ni un dialogo
     /// de UAC si quien inyecta corre como el usuario: Windows lo bloquea por
     /// UIPI y no avisa. El raton se mueve, la ventana no responde, y parece que
     /// el control remoto se colgo. Como SYSTEM entra, que es lo que hace
     /// AnyDesk.
     ///
-    /// Estuvo apagado hasta aqui, y con motivo: se intento encender en 1.7.0 y
-    /// la pantalla de bloqueo siguio sin funcionar, mientras el control del
+    /// Estuvo apagado hasta aqui, y con motivo aparente: se intento encender en
+    /// 1.7.0 y la pantalla de bloqueo siguio sin funcionar -- pero no era culpa
+    /// de esto, sino de cinco fallos en la captura que tardaron hasta 1.143.0 en
+    /// salir (ver docs/remote-secure-desktop.md). Mientras tanto el control del
     /// escritorio normal se rompia tres versiones seguidas buscandola. Lo que
     /// cambia ahora no es esa apuesta -- la pantalla de bloqueo sigue sin
     /// funcionar -- sino que aparecio otra cosa que si depende de esto.

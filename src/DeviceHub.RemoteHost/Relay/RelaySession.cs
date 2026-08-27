@@ -1791,7 +1791,27 @@ public static class RelaySession
             // un hilo SIN objetos USER, y este los tendra en cuanto codifique un
             // frame. Ahora mismo es virgen; dentro de una vuelta ya no.
             using var mio = new Capture.InputDesktop();
-            mio.SeguirActivo();
+
+            var salto = mio.SeguirActivo();
+            var dondeEstoy = InputDesktop.NombreDelHilo();
+
+            // Y SE COMPRUEBA, en vez de dar por hecho que salio.
+            //
+            // Ignorar el resultado dejaba abierta la puerta al fallo que costo
+            // toda una tarde: EscritorioVinculado=Winlogon con el hilo en
+            // Default, capturando lo que ya nadie mira. La comprobacion de cada
+            // frame no lo cubre -- compara el escritorio DE ENTRADA contra el
+            // vinculado, no donde esta este hilo de verdad.
+            //
+            // Se lanza en vez de avisar: la bomba muere, el vigilante la ve y
+            // monta otra en un hilo nuevo, que es la unica forma de arreglarlo.
+            if (flujo.EscritorioVinculado.Length > 0
+                && !string.Equals(dondeEstoy, flujo.EscritorioVinculado, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"La bomba no pudo atarse: hilo={dondeEstoy}, " +
+                    $"esperado={flujo.EscritorioVinculado}, salto={salto}, error={mio.UltimoError}");
+            }
 
             // DONDE ESTA ESTE HILO, que es el que captura.
             //
@@ -1800,9 +1820,9 @@ public static class RelaySession
             // este dice donde estamos nosotros. Con los dos juntos se ve de un
             // vistazo el caso que no se veia -- entrada en Winlogon, captura en
             // Default -- que es capturar un escritorio que ya nadie mira.
-            _escritorioBomba = InputDesktop.NombreDelHilo();
+            _escritorioBomba = dondeEstoy;
             _escritorioAtado = flujo.EscritorioVinculado;
-            _comoSeCaptura = flujo.Captura is Capture.GdiDesktopCapture ? "GDI" : "DXGI";
+            _comoSeCaptura = Etiqueta(flujo.Captura);
 
             var ultimoFrame = Stopwatch.GetTimestamp();
 
@@ -1955,10 +1975,18 @@ public static class RelaySession
                 // Por tiempo y no por cuenta porque con la espera a 0 los nulos
                 // son constantes: tres seguidos no significan nada, tres
                 // segundos sin haber arrancado nunca si.
-                if (!flujo.Relevada && !flujo.Arranco
+                if (!flujo.AvisadoSinPrimerFrame && !flujo.Relevada && !flujo.Arranco
                     && Stopwatch.GetTimestamp() - ultimoFrame > Stopwatch.Frequency * 3)
                 {
-                    flujo.Relevada = true;
+                    // ESTA BANDERA SOLO CALLA EL AVISO.
+                    //
+                    // Antes se marcaba `Relevada` aqui, antes incluso de decidir
+                    // si se relevaba: en Winlogon se decide que NO, se sigue con
+                    // DXGI, y la bandera quedaba puesta. Si despues DXGI fallaba
+                    // de verdad, el respaldo de mas abajo -- que solo entra si
+                    // `!Relevada` -- ya no podia entrar nunca. Una bandera de
+                    // "no repitas el aviso" cerrando la unica salida que quedaba.
+                    flujo.AvisadoSinPrimerFrame = true;
 
                     // EN WINLOGON NO SE RELEVA, Y ESTE ES EL CASO QUE MAS IMPORTA.
                     //
@@ -1988,6 +2016,7 @@ public static class RelaySession
 
                     if (Relevar(flujo, opciones, cuenta))
                     {
+                        flujo.Relevada = true;
                         ultimoFrame = Stopwatch.GetTimestamp();
                         continue;
                     }
@@ -2163,15 +2192,11 @@ public static class RelaySession
                             $"({ex.Message}). Se intenta por GDI.");
                     }
 
-                    if (!flujo.Relevada)
+                    if (!flujo.Relevada && Relevar(flujo, opciones, cuenta))
                     {
                         flujo.Relevada = true;
-
-                        if (Relevar(flujo, opciones, cuenta))
-                        {
-                            flujo.Tapada = false;
-                            continue;
-                        }
+                        flujo.Tapada = false;
+                        continue;
                     }
 
                     // Ni DXGI ni GDI. Se espera y se vuelve a mirar: cuando el
@@ -2632,9 +2657,14 @@ public static class RelaySession
         public required int LayoutY { get; init; }
         public required Lienzo Lienzo { get; init; }
 
-        /// <summary>Ya se relevo una vez. No se vuelve: GDI es el ultimo
-        /// recurso, y girar entre los dos seria peor que quedarse en uno.</summary>
+        /// <summary>Ya se RELEVO de verdad: la captura de ahora es GDI. No se
+        /// vuelve, porque girar entre los dos seria peor que quedarse en uno.
+        /// Solo se pone cuando el cambio ocurrio, nunca al decidirlo.</summary>
         public bool Relevada { get; set; }
+
+        /// <summary>Ya se dijo que DXGI no habia dado su primer frame. Solo sirve
+        /// para no repetir el aviso; NO cierra el respaldo.</summary>
+        public bool AvisadoSinPrimerFrame { get; set; }
 
         /// <summary>Esta duplicacion ha entregado al menos un frame. A partir de
         /// ahi DXGI funciona y el silencio solo significa que nadie toca esa
@@ -3095,11 +3125,20 @@ public static class RelaySession
         {
             var gdi = new GdiDesktopCapture(info.X, info.Y, info.Ancho, info.Alto);
 
-            var codificador = new H264Encoder(
-                gdi.Device, gdi.Width, gdi.Height, FpsDeclarado(opciones),
-                Math.Max(flujo.BitrateDeseado, ControlBitrate.Minimo),
-                gdi.AdapterLuid, gdi.AdapterVendorId,
-                codec: flujo.Codificador.Codec);
+            // POR LA MISMA PUERTA QUE EL RESTO.
+            //
+            // Aqui se construia un H264Encoder a pelo, asi que caer a GDI se
+            // saltaba la escalera entera -- H.265 hardware, H.264 hardware,
+            // software -- la reduccion cuando va por CPU y la memoria de codec.
+            // Habia dos politicas de codec segun si DXGI habia caido o no, y la
+            // de este lado era la que nadie miraba.
+            //
+            // Y el bitrate salia de Math.Max(deseado, ControlBitrate.Minimo),
+            // cuando Minimo es el suelo de la SESION y no el de cada pantalla:
+            // esa correccion ya se hizo en el reparto normal y aqui se habia
+            // quedado la version vieja.
+            var codificador = Codificar(
+                gdi.Device, gdi.Width, gdi.Height, gdi.AdapterLuid, gdi.AdapterVendorId, opciones);
 
             // El viejo se suelta DESPUES de que el nuevo exista: si crear el
             // nuevo falla, la pantalla sigue con lo que tenia en vez de quedarse
@@ -3119,6 +3158,10 @@ public static class RelaySession
 
             anteriorCodificador.Dispose();
             anterior.Dispose();
+
+            // La etiqueta del overlay, aqui y no al arrancar la bomba: esto
+            // sustituye el capturador EN CALIENTE, sin reiniciarla.
+            _comoSeCaptura = Etiqueta(gdi);
 
             Avisar(opciones,
                 $"Pantalla {flujo.DisplayId} en GDI: {gdi.Width}x{gdi.Height} desde @{info.X},{info.Y}");
@@ -3242,11 +3285,29 @@ public static class RelaySession
     /// <summary>El escritorio al que esta atado el hilo que CAPTURA.</summary>
     private static string _escritorioBomba = "?";
 
-    /// <summary>El escritorio en el que NACIO la cadena, y con que capturador.
+    /// <summary>El escritorio en el que NACIO la cadena.
     /// "atado" y no "captura": Default no es un tipo de captura, es donde vive
     /// esta generacion.</summary>
     private static string _escritorioAtado = "?";
+
+    /// <summary>
+    /// Con que capturador se esta capturando AHORA.
+    ///
+    /// Se reescribe en cada informe y no una vez al arrancar la bomba: Relevar
+    /// sustituye el capturador en caliente sin reiniciarla, asi que un valor
+    /// calculado al principio acabaria diciendo DXGI mientras se captura por
+    /// GDI. Despues de lo que costo diagnosticar esto con un overlay ambiguo,
+    /// aqui no se deja ni una etiqueta que pueda quedarse vieja.
+    /// </summary>
     private static string _comoSeCaptura = "?";
+
+    /// <summary>Como se llama el capturador que hay puesto, para el overlay.</summary>
+    private static string Etiqueta(IScreenCapture captura) => captura switch
+    {
+        Capture.GdiDesktopCapture => "GDI",
+        Capture.VirtualDesktopCapture => "DXGI compuesto",
+        _ => "DXGI"
+    };
 
     /// <summary>
     /// El escritorio del hilo de ENTRADA y con que permiso lo tiene.
@@ -3293,10 +3354,14 @@ public static class RelaySession
     /// <summary>
     /// Abre la captura, con GDI de respaldo cuando DXGI se niega.
     ///
-    /// DXGI ata el dispositivo D3D al escritorio al CREARLO, asi que en el
-    /// escritorio seguro -- la pantalla de bloqueo, el login, UAC -- no esta
-    /// disponible y no hay forma de convencerlo desde dentro del proceso. GDI no
-    /// ata nada: se re-atacha el hilo y BitBlt captura lo que haya.
+    /// DXGI ata el dispositivo D3D al escritorio al CREARLO. Eso NO significa
+    /// que el escritorio seguro este vedado -- significa que hay que crear el
+    /// dispositivo YA dentro de el, en un hilo virgen atado antes de tocar nada.
+    /// Hecho asi, la duplicacion captura la pantalla de bloqueo, el login y UAC.
+    ///
+    /// Aqui decia lo contrario, y esa frase mantuvo un atajo Winlogon -> GDI
+    /// durante meses: se habia deducido de una medida tomada con el hilo en
+    /// Default, o sea del otro bug. Ver docs/remote-secure-desktop.md.
     ///
     /// Es la misma pareja que usa Chrome Remote Desktop, ruta rapida y respaldo.
     /// El respaldo copia por CPU y sube a la GPU -- caro -- pero solo se usa
