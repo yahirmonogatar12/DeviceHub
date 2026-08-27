@@ -2060,7 +2060,26 @@ public static class RelaySession
                     //
                     // Solo en frio. Con salida ya emitida, un keyframe que no
                     // llega es otro problema y el codec no tiene la culpa.
+                    // EN LA PANTALLA DE BLOQUEO NO SE JUZGA AL CODIFICADOR.
+                    //
+                    // Winlogon quieto no presenta nada, asi que al codificador
+                    // apenas le entran frames de verdad: se agotan las
+                    // repeticiones, no sale nada, y la escalera concluye que el
+                    // codec no entrega. Ahi el codec no es el sospechoso -- es
+                    // que no hay imagen que codificar.
+                    //
+                    // Y el veredicto no se quedaria en esta sesion: MemoriaCodec
+                    // lo apunta, y esa PC se pondria a codificar por CPU siete
+                    // dias por un diagnostico falso. En una PC de planta que
+                    // ademas corre el MES eso se paga en produccion.
+                    //
+                    // Se rehace igual -- de eso se encarga el Avisar de abajo --
+                    // pero no se baja peldano.
+                    var enElBloqueo = !string.Equals(
+                        _escritorio, InputDesktop.Normal, StringComparison.OrdinalIgnoreCase);
+
                     if (!flujo.ConfigEnviada
+                        && !enElBloqueo
                         && ++rehechosEnVano >= EscaleraCodec.RehechosAntesDeBajar
                         && EscaleraCodec.Siguiente(_codec, _soloSoftware) is { } paso)
                     {
