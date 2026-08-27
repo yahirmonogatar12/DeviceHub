@@ -174,6 +174,27 @@ public sealed class UpdateService(
             return true;
         }
 
+        // PRIMERO LA FIRMA, DESPUES QUIEN FIRMA.
+        //
+        // Sacar el certificado de un PE y comparar su huella NO es verificar la
+        // firma: dice quien lo firmo alguna vez, no que el archivo siga siendo
+        // el que se firmo. Un binario alterado despues de firmarlo conserva su
+        // bloque de certificado y devuelve el MISMO firmante -- o sea que la
+        // comprobacion anterior habria dejado pasar exactamente el ataque contra
+        // el que existe.
+        //
+        // Y va antes por orden logico: comparar la huella de un certificado
+        // sacado de un archivo cuya integridad no se ha comprobado es confiar en
+        // el archivo para decidir si confiar en el archivo.
+        if (Authenticode.Verificar(executable) is var codigo && codigo != 0)
+        {
+            logger.LogError(
+                "La firma de {Archivo} no es valida: {Motivo}",
+                executable, Authenticode.Motivo(codigo));
+
+            return false;
+        }
+
         try
         {
             // SYSLIB0057 marca obsoleta la CARGA de certificados por constructor,

@@ -19,9 +19,10 @@ namespace DeviceHub.Agent.Remote;
 ///     WTSGetActiveConsoleSessionId -> WTSQueryUserToken -> DuplicateTokenEx
 ///         -> CreateEnvironmentBlock -> CreateProcessAsUser
 ///
-/// Sin sesion interactiva NO HAY CAPTURA. La PC en la pantalla de bloqueo o sin
-/// nadie logueado falla con un motivo explicito; el escritorio seguro esta
-/// fuera de alcance por decision propia (Fase 16).
+/// Sin sesion interactiva NO HAY CAPTURA: una PC sin nadie logueado falla con
+/// un motivo explicito. La pantalla de BLOQUEO ya no entra en ese saco --
+/// desde 1.143.0 se captura y se controla, con la sesion abierta y bloqueada
+/// (Fase 19, docs/remote-secure-desktop.md).
 ///
 /// Todo con DllImport y marshalling explicito, sin AllowUnsafeBlocks, igual que
 /// Monitoring\SystemSampler.cs.
@@ -59,8 +60,10 @@ public sealed class InteractiveSessionLauncher(
     /// de esto, sino de cinco fallos en la captura que tardaron hasta 1.143.0 en
     /// salir (ver docs/remote-secure-desktop.md). Mientras tanto el control del
     /// escritorio normal se rompia tres versiones seguidas buscandola. Lo que
-    /// cambia ahora no es esa apuesta -- la pantalla de bloqueo sigue sin
-    /// funcionar -- sino que aparecio otra cosa que si depende de esto.
+    /// cambia ahora no era esa apuesta sino que aparecio otra cosa que
+    /// dependia de esto. La pantalla de bloqueo llego despues, en 1.143.0, y
+    /// resulta que tambien la necesitaba: sin SYSTEM no se abre el escritorio
+    /// de Winlogon.
     ///
     /// Si la escalada falla en alguna PC se cae al token del usuario: se pierden
     /// las ventanas elevadas, que es lo que se tenia antes, y no la sesion.

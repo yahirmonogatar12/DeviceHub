@@ -189,8 +189,8 @@ begin
     '    "DataDirectory": "C:\\ProgramData\\ILSANSYSTEM\\DeviceHub",' + #13#10 +
     '    "EnrollmentCode": "' + EscaparJson(Trim(ObtenerValor(2, 'CODE', '{#DefaultCode}'))) + '",' + #13#10 +
     '    "PinnedKeys": [' + PinLinea + '],' + #13#10 +
-    '    "UpdateShare": "' + EscaparJson(ExpandConstant('{param:UPDATESHARE|\\192.168.1.10\updates\Shared\DeviceHub\production}')) + '",' + #13#10 +
-    '    "UpdatePublisherThumbprint": "' + EscaparJson(ExpandConstant('{param:THUMBPRINT|}')) + '",' + #13#10 +
+    '    "UpdateShare": "' + EscaparJson(ExpandConstant('{param:UPDATESHARE|{#DefaultUpdateShare}}')) + '",' + #13#10 +
+    '    "UpdatePublisherThumbprint": "' + EscaparJson(ExpandConstant('{param:THUMBPRINT|{#DefaultThumbprint}}')) + '",' + #13#10 +
     '    "UpdateCheckHours": 6' + #13#10 +
     '  }' + #13#10 +
     '}' + #13#10;
