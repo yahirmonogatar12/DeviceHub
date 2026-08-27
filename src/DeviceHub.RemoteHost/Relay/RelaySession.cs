@@ -1422,12 +1422,17 @@ public static class RelaySession
         // codificador, su ritmo. DXGI y el MFT quieren un hilo para ellos solos,
         // y asi lo tienen -- que es la misma leccion de la Fase 2, ahora por
         // duplicado.
-        bombas.AddRange(flujos.Select(flujo =>
+        // Aparte del resto A PROPOSITO: son las unicas cuya muerte obliga a
+        // rehacer la cadena. La de sonido puede terminar sola en una PC sin
+        // tarjeta y eso no es motivo para tirar el video.
+        var bombasDePantalla = flujos.Select(flujo =>
             new Thread(() => Bombear(flujo, salida, cuenta, opciones, lienzo, pararBombas.Token))
             {
                 IsBackground = true,
                 Name = $"devicehub-pantalla-{flujo.DisplayId}"
-            }));
+            }).ToList();
+
+        bombas.AddRange(bombasDePantalla);
 
         // LA BOMBA DE SONIDO, en su propio hilo como cada pantalla.
         //
@@ -1536,6 +1541,31 @@ public static class RelaySession
                     if (_soloSoftware != softwarePedido)
                     {
                         Avisar(opciones, "Se rehace la captura con el codificador por software.");
+                        return;
+                    }
+
+                    // UNA BOMBA MUERTA ES UNA SESION MUERTA, Y HASTA AHORA EN
+                    // SILENCIO.
+                    //
+                    // Bombear atrapa cualquier excepcion, avisa y termina. El
+                    // hilo se acaba ahi y no habia nada mirando: la sesion
+                    // quedaba viva -- latidos, entrada, portapapeles -- con el
+                    // video congelado y los contadores parados. Se vio con el
+                    // peldano a software, y otra vez con un E_INVALIDARG al
+                    // saltar a Winlogon.
+                    //
+                    // No hace falta saber POR QUE murio para rehacerla: rehacer
+                    // la cadena es exactamente lo que se hace ante un cambio de
+                    // pantalla o de escritorio, y funciona igual de bien aqui.
+                    //
+                    // ponytail: sin tope de reintentos. Rehacer cuesta crear
+                    // duplicador y codificador, asi que no puede girar en vano;
+                    // si una PC entrara en bucle, se veria en el log como un
+                    // aviso por vuelta. Se pone tope el dia que se vea.
+                    if (bombasDePantalla.FirstOrDefault(h => !h.IsAlive) is { } muerta)
+                    {
+                        Avisar(opciones,
+                            $"El hilo {muerta.Name} termino solo; se rehace la captura.");
                         return;
                     }
 
@@ -2283,6 +2313,14 @@ public static class RelaySession
         catch (Exception ex)
         {
             Avisar(opciones, $"La pantalla {flujo.DisplayId} dejo de emitir: {ex.GetType().Name}: {ex.Message}");
+
+            // Y LA PILA AL LOG, que la barra no la aguanta.
+            //
+            // Un HRESULT suelto dice QUE fallo y no DONDE: E_INVALIDARG puede
+            // salir de media docena de llamadas de esta cadena, y sin el marco
+            // superior hay que adivinar cual. Al visor va el mensaje corto; aqui
+            // va lo que hace falta para arreglarlo.
+            opciones.Escribir($"Pantalla {flujo.DisplayId}, excepcion completa: {ex}");
         }
     }
 
