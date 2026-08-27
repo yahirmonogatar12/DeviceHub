@@ -83,9 +83,10 @@ public sealed class H264Encoder : IVideoEncoder
     public H264Encoder(
         ID3D11Device device, int width, int height, int framesPerSecond, int bitrate,
         Vortice.Luid adapterLuid, uint vendorId, int anchoEntrada = 0, int altoEntrada = 0,
-        VideoCodec codec = VideoCodec.H264, bool soloHardware = false)
+        VideoCodec codec = VideoCodec.H264, bool soloHardware = false, bool soloSoftware = false)
     {
         _soloHardware = soloHardware;
+        _soloSoftware = soloSoftware;
 
         Codec = codec;
 
@@ -226,6 +227,19 @@ public sealed class H264Encoder : IVideoEncoder
     /// solo despues, a proposito y diciendolo, acepta software.
     /// </summary>
     private bool _soloHardware;
+
+    /// <summary>
+    /// Descarta los MFT por hardware, aunque funcionen "en teoria".
+    ///
+    /// NO ES LO MISMO QUE soloHardware=false, y esa confusion costo una vuelta:
+    /// false solo significa "tambien vale software", y como MFTEnumEx devuelve
+    /// el hardware PRIMERO, se acababa eligiendo el mismo MFT que se queria
+    /// evitar. Para saltarselo hay que rechazarlo.
+    ///
+    /// Lo pide el bucle de captura cuando el hardware de esa PC ya demostro que
+    /// acepta la configuracion y no entrega imagen.
+    /// </summary>
+    private bool _soloSoftware;
 
     private static string? Atributo(IMFActivate activate, Guid clave)
     {
@@ -826,6 +840,13 @@ public sealed class H264Encoder : IVideoEncoder
         if (_soloHardware && !candidato.Hardware)
         {
             fallos.Add($"{candidato.Name}: por software, y se pidio hardware");
+            elegido = default;
+            return false;
+        }
+
+        if (_soloSoftware && candidato.Hardware)
+        {
+            fallos.Add($"{candidato.Name}: por hardware, y en esta PC el hardware no entrega");
             elegido = default;
             return false;
         }

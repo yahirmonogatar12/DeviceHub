@@ -2714,7 +2714,7 @@ public static class RelaySession
             {
                 codificador = new H264Encoder(
                     device, ancho, alto, fps, bitrate, luid, vendor,
-                    codec: codec, soloHardware: hardware);
+                    codec: codec, soloHardware: hardware, soloSoftware: _soloSoftware);
             }
             catch (Exception ex) when (!ultimo)
             {
