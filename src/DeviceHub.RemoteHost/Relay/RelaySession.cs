@@ -1220,6 +1220,18 @@ public static class RelaySession
 
         var codecPedido = _codec;
 
+        // Y CON QUE SE PIDIO, no solo cual.
+        //
+        // El segundo peldano de la escalera va de H.264 por hardware a H.264 por
+        // SOFTWARE: el codec no cambia, cambia con que se codifica. Sin esta
+        // marca, el vigilante de mas abajo comparaba H264 con H264, no veia
+        // nada, y no rehacia la cadena -- pero el hilo de bombeo ya se habia
+        // matado al bajar el peldano. La sesion quedaba viva y muerta a la vez:
+        // capturados 2, timeouts 120, codificados 0 congelados para siempre, el
+        // visor en "sin config" y la barra diciendo que se habia pasado a
+        // software mientras las estadisticas seguian poniendo Quick Sync.
+        var softwarePedido = _soloSoftware;
+
         // Todas a la vez compone N duplicaciones en una imagen del tamano del
         // escritorio virtual; una sola entrega la textura del duplicador sin
         // copiar nada. La entrada funciona igual con las dos: InputInjector
@@ -1482,6 +1494,12 @@ public static class RelaySession
                     if (_codec != codecPedido)
                     {
                         Avisar(opciones, $"El tecnico pidio {Etiqueta(_codec)}; se rehace la captura");
+                        return;
+                    }
+
+                    if (_soloSoftware != softwarePedido)
+                    {
+                        Avisar(opciones, "Se rehace la captura con el codificador por software.");
                         return;
                     }
 
