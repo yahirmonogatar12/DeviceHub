@@ -111,40 +111,43 @@ public sealed class InputDesktop : IDisposable
     /// un hilo, no el proceso, y DXGI ya vive ahi por la disciplina de un solo
     /// hilo que se arrastra desde la Fase 2.
     /// </summary>
-    public Salto SeguirActivo()
+    public Salto SeguirActivo(bool exigirEscritura = false)
     {
-        // De menos a mas, y en este orden por una razon aprendida a golpes: sobre
-        // un escritorio, PEDIR DE MAS ES COMO SE PIERDE EL PERMISO ENTERO. La
-        // peticion se concede o se deniega en bloque, asi que cada derecho que
-        // sobra es una forma nueva de que te digan que no.
+        var entrada = AbrirParaEscribir(out var mascara);
+
+        // Ultimo recurso: solo mirar. Vale para la CAPTURA -- podra seguir al
+        // escritorio aunque la entrada no llegue, y media sesion es mejor que
+        // ninguna -- y NO vale para el hilo de entrada.
         //
-        // Ya paso dos veces seguidas: GENERIC_ALL son nueve derechos y Winlogon
-        // no los da todos; y despues pedi DESKTOP_SWITCHDESKTOP, que ni siquiera
-        // usamos -- no llamamos a SwitchDesktop en ningun sitio -- y esta
-        // restringido, asi que tumbo la peticion en el escritorio normal y dejo
-        // la sesion sin control.
-        EscrituraConcedida = true;
-
-        var entrada = OpenInputDesktop(0, false, ParaEscribir);
-
-        // Ultimo recurso: solo mirar. La captura podra seguir al escritorio
-        // aunque la entrada no llegue. Media sesion es mejor que ninguna, y el
-        // contador de rechazados de SendInput dira que falta la otra mitad.
-        if (entrada == IntPtr.Zero)
+        // Atarse a Winlogon con permiso de lectura y seguir llamando a SendInput
+        // es la peor de las salidas: la llamada devuelve exito, el contador de
+        // aplicados sube, y la PC no responde. El tecnico ve "entrada 2748/1" y
+        // una pantalla de bloqueo quieta, que es un exito falso.
+        if (entrada == IntPtr.Zero && !exigirEscritura)
         {
             entrada = OpenInputDesktop(0, false, ParaMirar);
-            EscrituraConcedida = false;
+            mascara = ParaMirar;
         }
 
         if (entrada == IntPtr.Zero)
         {
             UltimoError = Marshal.GetLastWin32Error();
+            EscrituraConcedida = false;
+            NombrePedido = NombreDeEntrada();
             return Salto.NoSePudoAbrir;
         }
 
+        var escribible = mascara != ParaMirar;
         var nombre = NombreDe(entrada);
 
-        if (nombre == _nombre)
+        // "SIN CAMBIO" TIENE QUE MIRAR TAMBIEN EL PERMISO, no solo el nombre.
+        //
+        // Antes esto ponia EscrituraConcedida = true al entrar y luego salia por
+        // aqui al ver el mismo nombre, conservando un _actual que se habia
+        // abierto SOLO PARA LEER. Resultado: atado en lectura y anunciando
+        // escritura. Ademas de mentir, cerraba la puerta a mejorar -- si Winlogon
+        // empezaba a conceder escritura, este atajo no dejaba volver a atarse.
+        if (nombre == _nombre && escribible == EscrituraConcedida && _actual != IntPtr.Zero)
         {
             CloseDesktop(entrada);
             return Salto.SinCambio;
@@ -154,17 +157,11 @@ public sealed class InputDesktop : IDisposable
         {
             // FALLA SI EL HILO TIENE VENTANAS O GANCHOS, y eso incluye las
             // ventanas ocultas que crean D3D11 y Media Foundation. El hilo de
-            // captura las tiene en cuanto codifica un frame.
-            //
-            // Y aqui estaba el fallo de la pantalla de bloqueo: esto devolvia
-            // `false`, el MISMO valor que "no cambio nada", asi que el que
-            // llamaba no podia distinguirlos. El video seguia viendose -- la
-            // duplicacion DXGI entrega lo que haya en la salida, incluido
-            // Winlogon -- pero SendInput se quedaba disparando contra el
-            // escritorio viejo, donde no habia nadie escuchando. Se veia la
-            // pantalla de bloqueo y no se podia pulsar nada.
+            // captura las tiene en cuanto codifica un frame; el de entrada no
+            // las tiene nunca, y por eso es el que puede seguir a Winlogon.
             UltimoError = Marshal.GetLastWin32Error();
             NombrePedido = nombre;
+            EscrituraConcedida = false;
             CloseDesktop(entrada);
             return Salto.NoSePudoAtar;
         }
@@ -176,9 +173,60 @@ public sealed class InputDesktop : IDisposable
 
         _actual = entrada;
         _nombre = nombre;
+
+        // Y AQUI, no al entrar: solo se concede lo que de verdad se abrio.
+        EscrituraConcedida = escribible;
+        Mascara = mascara;
+        UltimoError = 0;
+        NombrePedido = string.Empty;
+
         Switches++;
         return Salto.Cambiado;
     }
+
+    /// <summary>
+    /// Abrir para escribir, de la mascara mas estrecha a la mas ancha.
+    ///
+    /// Es una ESCALERA y no una mascara sola porque las dos veces que se intento
+    /// afinar esto a secas se rompio el control del escritorio NORMAL, que es lo
+    /// que la gente usa todos los dias. Sobre un escritorio el permiso se
+    /// concede o se deniega EN BLOQUE, asi que cada derecho que sobra es una
+    /// forma nueva de que te digan que no -- y cada derecho que falta, una forma
+    /// de quedarte sin poder inyectar.
+    ///
+    /// Con la escalera no hay que acertar: se prueba la estrecha, que es la que
+    /// Winlogon puede conceder, y si no sale se cae a la ancha, que es la unica
+    /// con la que se ha visto controlar de verdad una PC. Ninguna PC pierde lo
+    /// que ya tenia y las bloqueadas ganan una oportunidad.
+    /// </summary>
+    private static IntPtr AbrirParaEscribir(out uint mascara)
+    {
+        foreach (var candidata in Mascaras)
+        {
+            var abierto = OpenInputDesktop(0, false, candidata);
+
+            if (abierto != IntPtr.Zero)
+            {
+                mascara = candidata;
+                return abierto;
+            }
+        }
+
+        mascara = 0;
+        return IntPtr.Zero;
+    }
+
+    /// <summary>Con que mascara se abrio el escritorio actual. Para el overlay.</summary>
+    public uint Mascara { get; private set; }
+
+    /// <summary>Como se llama la mascara, para que el tecnico no lea hexadecimal.</summary>
+    public string ComoSeAbrio => Mascara switch
+    {
+        LeerEscribirEjecutar => "lectura+escritura+ejecucion",
+        TodoElAcceso => "todo el acceso",
+        ParaMirar => "SOLO LECTURA",
+        _ => "sin abrir"
+    };
 
     /// <summary>Ultimo error de Win32 al no poder saltar. 0 = ninguno.</summary>
     public int UltimoError { get; private set; }
@@ -244,7 +292,27 @@ public sealed class InputDesktop : IDisposable
     /// los dias. La leccion no es cual es la mascara buena -- sigo sin saberlo --
     /// sino que esto no se toca sin poder medirlo en la maquina de destino.
     /// </summary>
-    private const uint ParaEscribir = 0x10000000;
+    /// <summary>
+    /// GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE. Lo que pide Chromium.
+    ///
+    /// Es la primera de la escalera porque es la que Winlogon puede conceder.
+    /// OJO con el mapeo generico de un escritorio: GENERIC_EXECUTE incluye
+    /// DESKTOP_SWITCHDESKTOP, que es justo el derecho que una vez tumbo la
+    /// peticion en el escritorio NORMAL. Por eso esta mascara no sustituye a la
+    /// de abajo, va delante de ella.
+    /// </summary>
+    private const uint LeerEscribirEjecutar = 0xE0000000;
+
+    /// <summary>
+    /// GENERIC_ALL: nueve derechos de golpe.
+    ///
+    /// Es lo unico con lo que se ha visto controlar de verdad una PC, y por eso
+    /// sigue en la escalera. Winlogon no la concede.
+    /// </summary>
+    private const uint TodoElAcceso = 0x10000000;
+
+    private static readonly uint[] Mascaras = [LeerEscribirEjecutar, TodoElAcceso];
+
     private const uint WinstaAllAccess = 0x0000037F;
     private const int UoiName = 2;
 

@@ -769,7 +769,7 @@ public static class RelaySession
                             ? $"hilos {_hilos}  prisa {_prisa}  "
                             : "") +
                         $"{(_comoSystem ? "SYSTEM" : "usuario (sin ventanas elevadas)")}  " +
-                        $"escritorio {_escritorio}  " +
+                        $"escritorio {_escritorio}  entrada@{_escritorioEntrada}  " +
                         $"objetivo {_bitrateDeseado / 1000} kbps ({_calidad:0.00}x)  " +
                         // Aplicados y rechazados de SendInput. Es lo que dice si
                         // la entrada llega de verdad al otro lado o se la traga
@@ -1025,7 +1025,10 @@ public static class RelaySession
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                var salto = escritorio.SeguirActivo();
+                // EXIGIENDO ESCRITURA. Este hilo no tiene nada que hacer con un
+                // escritorio de solo lectura: SendInput devolveria exito y no
+                // entraria nada. La captura si se conforma con mirar.
+                var salto = escritorio.SeguirActivo(exigirEscritura: true);
 
                 // Se avisa UNA vez por estado, no cada 20 ms: en un bucle asi, un
                 // log por vuelta convierte el visor de eventos en el cuello de
@@ -1041,8 +1044,19 @@ public static class RelaySession
                         $"NO se pudo atar la entrada a {escritorio.NombrePedido} " +
                         $"(error {escritorio.UltimoError}). El raton y el teclado van al escritorio viejo.",
 
+                    // Antes era silencioso porque siempre habia el respaldo de
+                    // solo lectura. Ahora que este hilo lo rechaza, este es EL
+                    // caso: escritorio abierto para nadie, entrada descartada.
+                    Salto.NoSePudoAbrir =>
+                        $"No se puede escribir en el escritorio {escritorio.NombrePedido} " +
+                        $"(error {escritorio.UltimoError}); el raton y el teclado no entran ahi.",
+
                     _ => ultimoAviso
                 };
+
+                _escritorioEntrada = escritorio.EscrituraConcedida
+                    ? $"{escritorio.Name} ({escritorio.ComoSeAbrio})"
+                    : $"{(escritorio.Name.Length == 0 ? escritorio.NombrePedido : escritorio.Name)} SIN ESCRITURA";
 
                 if (aviso != ultimoAviso)
                 {
@@ -1082,6 +1096,28 @@ public static class RelaySession
                         _congelado = pedido == 1;
 
                     Avisar(opciones, queja);
+                }
+
+                // SIN ESCRITURA NO SE INYECTA NADA, y la cola se TIRA.
+                //
+                // SendInput sobre un escritorio abierto en lectura devuelve
+                // exito -- el contador de aplicados sube igual -- y no entra
+                // nada. Eso es lo que ponia "entrada 2748/1" en la barra
+                // mientras la PC seguia en la pantalla de bloqueo sin responder:
+                // el numero decia que todo iba bien.
+                //
+                // Y se tira en vez de guardarse: cuando el escritorio vuelva a
+                // ser escribible, reproducir clics y teclas de hace medio minuto
+                // los aplicaria contra una pantalla que ya no es la que el
+                // tecnico estaba mirando.
+                if (!escritorio.EscrituraConcedida)
+                {
+                    while (Pendientes.TryDequeue(out _))
+                    {
+                    }
+
+                    cancellationToken.WaitHandle.WaitOne(20);
+                    continue;
                 }
 
                 while (Pendientes.TryDequeue(out var evento))
@@ -2992,6 +3028,17 @@ public static class RelaySession
     /// <summary>El escritorio que se esta capturando: Default, Winlogon, o el
     /// que sea.</summary>
     private static string _escritorio = "?";
+
+    /// <summary>
+    /// El escritorio del hilo de ENTRADA y con que permiso lo tiene.
+    ///
+    /// Separado del de captura a proposito: son dos hilos distintos atados a dos
+    /// escritorios que pueden no coincidir, y esa diferencia es exactamente lo
+    /// que hay que ver cuando se ve la pantalla de bloqueo y no se puede tocar.
+    /// Con un solo campo, "capturo Winlogon" y "escribo en Winlogon" eran la
+    /// misma linea y no habia forma de saber cual de las dos fallaba.
+    /// </summary>
+    private static string _escritorioEntrada = "?";
 
     private static string Bes()
         => _bframes switch
