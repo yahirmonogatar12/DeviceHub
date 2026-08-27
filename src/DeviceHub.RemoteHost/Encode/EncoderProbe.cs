@@ -30,30 +30,44 @@ public static class EncoderProbe
                 {
                     using (adapter)
                     {
-                        var suyos = EnumerateForAdapter(adapter.Description1.Luid);
-
                         Console.WriteLine($"GPU {a}: {adapter.Description.Description.Trim()}");
 
-                        foreach (var (nombre, hardware, activate) in suyos)
+                        // LOS DOS CODECS. Desde que H.265 es el de fabrica, saber
+                        // que ofrece cada GPU en HEVC importa tanto como en AVC --
+                        // y la pregunta "existe H.265 por software?" se contesta
+                        // mirando esta lista, no de memoria.
+                        foreach (var (etiqueta, subtipo) in Codecs)
                         {
-                            Console.WriteLine($"  [{(hardware ? "hardware" : "software")}] {nombre}");
-                            activate.Dispose();
-                        }
+                            var suyos = EnumerateForAdapter(adapter.Description1.Luid, subtipo);
 
-                        if (suyos.Count == 0)
-                            Console.WriteLine("  (ninguno)");
+                            Console.WriteLine($"  {etiqueta}:");
+
+                            foreach (var (nombre, hardware, activate) in suyos)
+                            {
+                                Console.WriteLine($"    [{(hardware ? "hardware" : "software")}] {nombre}");
+                                activate.Dispose();
+                            }
+
+                            if (suyos.Count == 0)
+                                Console.WriteLine("    (ninguno)");
+                        }
 
                         Console.WriteLine();
                     }
                 }
             }
 
-            Console.WriteLine("Todos los codificadores H.264 de la maquina (hardware primero):");
-            Console.WriteLine();
-
             var encontrados = 0;
 
-            using var lista = Enumerate();
+            foreach (var (etiqueta, subtipo) in Codecs)
+            {
+            Console.WriteLine($"Todos los codificadores {etiqueta} de la maquina (hardware primero):");
+            Console.WriteLine();
+
+            using var lista = Enumerate(subtipo);
+
+            if (lista.Items.Count == 0)
+                Console.WriteLine("  (ninguno)");
 
             foreach (var (nombre, hardware, activate) in lista.Items)
             {
@@ -68,7 +82,7 @@ public static class EncoderProbe
                         transform = activate.ActivateObject<IMFTransform>();
                         Unlock(transform);
 
-                        foreach (var formato in SupportedInputs(transform))
+                        foreach (var formato in SupportedInputs(transform, etiqueta, subtipo))
                             Console.WriteLine($"      {formato}");
                     }
                     catch (Exception ex)
@@ -84,9 +98,12 @@ public static class EncoderProbe
                 Console.WriteLine();
             }
 
+            Console.WriteLine();
+            }
+
             if (encontrados == 0)
             {
-                Console.Error.WriteLine("Ningun codificador H.264 en esta maquina.");
+                Console.Error.WriteLine("Ningun codificador de video en esta maquina.");
                 Console.Error.WriteLine("En Windows Server, Media Foundation es una caracteristica opcional que no viene instalada.");
                 return 2;
             }
@@ -224,6 +241,19 @@ public static class EncoderProbe
     /// </summary>
     private const uint EnumFlags = 0x1 | 0x2 | 0x4 | 0x40;
 
+    /// <summary>
+    /// Los dos codecs que este proyecto usa, en el orden de la escalera.
+    ///
+    /// El GUID de HEVC se escribe a mano porque Vortice no lo expone: es el
+    /// fourcc 'HEVC' dentro del GUID base de Media Foundation, igual que en
+    /// H264Encoder. No es un identificador inventado.
+    /// </summary>
+    private static readonly (string Etiqueta, Guid Subtipo)[] Codecs =
+    [
+        ("H.265", new Guid("43564548-0000-0010-8000-00aa00389b71")),
+        ("H.264", VideoFormatGuids.H264)
+    ];
+
     private static RegisterTypeInfo OutputH264 => new()
     {
         GuidMajorType = MediaTypeGuids.Video,
@@ -242,11 +272,12 @@ public static class EncoderProbe
     /// entradas admite hasta saber que tiene que producir, y preguntarle antes
     /// devuelve error. Es la razon de que el primer sondeo no listara ninguna.
     /// </summary>
-    private static IEnumerable<string> SupportedInputs(IMFTransform transform)
+    private static IEnumerable<string> SupportedInputs(
+        IMFTransform transform, string etiqueta, Guid subtipo)
     {
         using var salida = MediaFactory.MFCreateMediaType();
         salida.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
-        salida.Set(MediaTypeAttributeKeys.Subtype, VideoFormatGuids.H264);
+        salida.Set(MediaTypeAttributeKeys.Subtype, subtipo);
         salida.Set(MediaTypeAttributeKeys.AvgBitrate, 6_000_000u);
         salida.Set(MediaTypeAttributeKeys.FrameSize, Pack(1920, 1080));
         salida.Set(MediaTypeAttributeKeys.FrameRate, Pack(60, 1));
@@ -265,7 +296,7 @@ public static class EncoderProbe
 
         if (fallo is not null)
         {
-            yield return $"no acepta H.264 1080p60: {fallo}";
+            yield return $"no acepta {etiqueta} 1080p60: {fallo}";
             yield break;
         }
 
