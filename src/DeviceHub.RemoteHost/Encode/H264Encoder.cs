@@ -371,14 +371,33 @@ public sealed class H264Encoder : IVideoEncoder
         => ConCodec(_transform, codec =>
         {
             var api = MeanBitRate;
-            object valor = bitsPorSegundo;
 
-            if (codec.SetValue(ref api, ref valor) < 0)
+            // SIN SIGNO. AVEncCommonMeanBitRate es VT_UI4, y un int se marshala
+            // como VT_I4: otro tipo de VARIANT, y el MFT contesta E_INVALIDARG.
+            //
+            // Todas las demas propiedades de este archivo ya se piden con `0u` o
+            // `(uint)`; esta era la unica que no, y por eso era la unica que se
+            // rechazaba. El sintoma en la barra era "El codificador rechazo 2112
+            // kbps", que se leia como una limitacion del codificador y no como
+            // un tipo mal puesto de este lado.
+            object valor = (uint)Math.Max(bitsPorSegundo, 0);
+
+            var hr = codec.SetValue(ref api, ref valor);
+
+            if (hr < 0)
+            {
+                // El HRESULT, no solo el "no". Sin el, un rechazo por tipo y uno
+                // por no admitir bitrate dinamico son el mismo mensaje.
+                UltimoRechazoBitrate = hr;
                 return false;
+            }
 
             BitratesAplicados++;
             return true;
         });
+
+    /// <summary>HRESULT del ultimo bitrate rechazado. 0 = ninguno.</summary>
+    public int UltimoRechazoBitrate { get; private set; }
 
     /// <summary>
     /// Vortice no cubre ICodecAPI, asi que se declara aqui y solo esa. Es el

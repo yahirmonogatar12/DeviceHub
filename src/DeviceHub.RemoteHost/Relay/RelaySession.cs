@@ -1931,7 +1931,8 @@ public static class RelaySession
                         bitrateFijo = true;
 
                         Avisar(opciones,
-                            $"El codificador rechazo {flujo.BitrateDeseado / 1000} kbps: " +
+                            $"El codificador rechazo {flujo.BitrateDeseado / 1000} kbps " +
+                            $"(0x{flujo.Codificador.UltimoRechazoBitrate:X8}): " +
                             $"la pantalla {flujo.DisplayId} se queda con el bitrate de arranque.");
                     }
                 }
