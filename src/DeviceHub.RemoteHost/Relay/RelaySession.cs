@@ -3303,24 +3303,36 @@ public static class RelaySession
     /// </summary>
     private static IScreenCapture Abrir(int pedida, Pantalla? elegida, RelayOptions opciones)
     {
-        // SE DECIDE POR EL NOMBRE DEL ESCRITORIO, no esperando a que DXGI falle.
+        // SE INTENTA DXGI EN CUALQUIER ESCRITORIO, Winlogon incluido.
         //
-        // Esperar al fallo no sirve: en Winlogon la duplicacion NO da error, se
-        // queda entregando el ultimo frame del escritorio anterior. El visor
-        // ensenaba el fondo de escritorio congelado mientras la PC pedia la
-        // contrasena, y el respaldo no llegaba a entrar nunca porque nada habia
-        // fallado formalmente.
+        // Aqui habia un atajo: si el escritorio no era Default, GDI directo sin
+        // probar. Lo justificaba una observacion real -- "en Winlogon la
+        // duplicacion no da error, se queda entregando el ultimo frame del
+        // escritorio anterior" -- pero esa observacion se hizo con el HILO EN
+        // DEFAULT. Era el otro bug describiendose a si mismo.
+        //
+        // Son dos afirmaciones distintas y el codigo las confundio:
+        //
+        //   "DXGI no puede capturar Winlogon"                        <- nunca se probo
+        //   "DXGI no puede LLEVARSE a Winlogon una duplicacion       <- esto es lo cierto
+        //    creada en Default"
+        //
+        // Ahora el hilo se ata ANTES de crear nada, que es el orden que DXGI
+        // exige, asi que la primera merece intentarse. Y si volviera a quedarse
+        // callado entregando frames viejos, ya no pasaria desapercibido: el
+        // flujo esta sellado a su escritorio y la bomba muere en cuanto el de
+        // entrada cambia.
+        //
+        // Barato ademas: GDI copia por CPU y da unos 10 FPS con 130 ms de
+        // captura; la duplicacion no toca la RAM. Si funciona en la pantalla de
+        // bloqueo, se gana justo donde mas se notaba.
         var escritorio = InputDesktop.NombreDeEntrada();
 
         if (!string.IsNullOrEmpty(escritorio)
             && !escritorio.Equals(InputDesktop.Normal, StringComparison.OrdinalIgnoreCase))
         {
-            opciones.Escribir($"El escritorio de entrada es {escritorio}; se captura con el respaldo GDI");
-
-            var seguro = new GdiDesktopCapture();
-            opciones.Escribir($"Respaldo GDI activo sobre {seguro.Output}  {seguro.Width}x{seguro.Height}");
-
-            return seguro;
+            opciones.Escribir(
+                $"El escritorio de entrada es {escritorio}; se intenta DXGI ahi antes que el respaldo GDI");
         }
 
         try
