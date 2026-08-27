@@ -284,10 +284,34 @@ public sealed partial class MainViewModel
     /// "la pantalla dejo de emitir" que no explica por que.
     ///
     /// Se vio abriendo la tanda dos veces seguidas sobre los mismos 29 equipos.
+    ///
+    /// ponytail: sigue la ventana ENTERA, no cada pestana. Cerrar una sola
+    /// pestana deja su maquina marcada hasta que se cierre el visor, porque el
+    /// visor no tiene canal de vuelta -- la tuberia de stdin solo va de aqui
+    /// para alla. Se arregla el dia que el dashboard pregunte al servidor que
+    /// sesiones siguen CONNECTED, que es quien de verdad lo sabe.
     /// </summary>
     private readonly HashSet<string> _abiertas = [];
 
-    private bool YaAbierta(string machineId) => _abiertas.Contains(machineId);
+    private bool YaAbierta(string machineId)
+    {
+        // SI EL VISOR MURIO, SE FUERON TODAS SUS PESTANAS CON EL.
+        //
+        // Este conjunto solo crecia. Cerrar la ventana del visor con la tacha
+        // dejaba a las maquinas marcadas para siempre, y volver a seleccionarlas
+        // contestaba "ya tienen su pestana abierta en el visor" senalando a una
+        // ventana que ya no existe. La unica salida era reiniciar el dashboard.
+        //
+        // Se comprueba aqui y no con Process.Exited para no meter un evento en
+        // otro hilo tocando una coleccion que se lee desde la interfaz.
+        if (_visor is { HasExited: true })
+        {
+            _abiertas.Clear();
+            _visor = null;
+        }
+
+        return _abiertas.Contains(machineId);
+    }
 
     /// <summary>
     /// Localiza el cliente de control remoto EN ESTA PC.

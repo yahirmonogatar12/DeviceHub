@@ -147,6 +147,7 @@ public partial class ConsolaWindow : Window
         sesion.Visibility = Visibility.Collapsed;
 
         _pestanas.Add(pestana);
+        _huboAlguna = true;
         Pestanas.Children.Add(ficha);
         Contenido.Children.Add(sesion);
 
@@ -216,8 +217,27 @@ public partial class ConsolaWindow : Window
                 Seleccionar(_pestanas[^1]);
         }
 
+        // CERRADA LA ULTIMA, SE VA LA VENTANA.
+        //
+        // Un visor vacio no sirve para nada -- no hay pantalla que mirar ni a
+        // quien mandar teclas -- y ademas confundia al dashboard: mientras este
+        // proceso viva, alla sigue creyendo que esas maquinas tienen pestana, y
+        // volver a marcarlas contesta "ya estan abiertas" senalando a esto.
+        //
+        // El "habia alguna" es lo que salva el arranque: la ventana nace vacia y
+        // espera su primera sesion por la tuberia, asi que cerrar al ver cero
+        // pestanas a secas la cerraria antes de que llegara ninguna.
+        if (_pestanas.Count == 0 && _huboAlguna)
+        {
+            Close();
+            return;
+        }
+
         Repintar();
     }
+
+    /// <summary>Si esta ventana llego a tener alguna sesion. Ver Cerrar().</summary>
+    private bool _huboAlguna;
 
     // ------------------------------------------------------------- mosaico
 
