@@ -769,7 +769,8 @@ public static class RelaySession
                             ? $"hilos {_hilos}  prisa {_prisa}  "
                             : "") +
                         $"{(_comoSystem ? "SYSTEM" : "usuario (sin ventanas elevadas)")}  " +
-                        $"escritorio {_escritorio}  entrada@{_escritorioEntrada}  " +
+                        $"escritorio entrada={_escritorio} captura={_escritorioBomba}  " +
+                        $"teclado@{_escritorioEntrada}  " +
                         $"objetivo {_bitrateDeseado / 1000} kbps ({_calidad:0.00}x)  " +
                         // Aplicados y rechazados de SendInput. Es lo que dice si
                         // la entrada llega de verdad al otro lado o se la traga
@@ -1776,6 +1777,15 @@ public static class RelaySession
     {
         try
         {
+            // DONDE ESTA ESTE HILO, que es el que captura.
+            //
+            // El overlay ponia el escritorio de ENTRADA y lo llamaba "escritorio",
+            // que son dos cosas distintas: uno dice quien recibe la entrada y
+            // este dice donde estamos nosotros. Con los dos juntos se ve de un
+            // vistazo el caso que no se veia -- entrada en Winlogon, captura en
+            // Default -- que es capturar un escritorio que ya nadie mira.
+            _escritorioBomba = InputDesktop.NombreDelHilo();
+
             var ultimoFrame = Stopwatch.GetTimestamp();
 
             // Cuando se codifico algo por ultima vez, para el suelo de imagen.
@@ -3185,6 +3195,9 @@ public static class RelaySession
     private static DateTimeOffset? _ultimoRehecho;
 
     private static string _escritorio = "?";
+
+    /// <summary>El escritorio al que esta atado el hilo que CAPTURA.</summary>
+    private static string _escritorioBomba = "?";
 
     /// <summary>
     /// El escritorio del hilo de ENTRADA y con que permiso lo tiene.

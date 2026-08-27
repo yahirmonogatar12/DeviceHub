@@ -143,7 +143,7 @@ public sealed class GdiDesktopCapture : IScreenCapture
 
         _ultimaCaptura = Stopwatch.GetTimestamp();
 
-        SeguirAlEscritorioDeEntrada();
+        ComprobarEscritorio();
 
         if (_dcEscritorio == IntPtr.Zero || _dcMemoria == IntPtr.Zero)
         {
@@ -211,37 +211,51 @@ public sealed class GdiDesktopCapture : IScreenCapture
     /// parece. Al cambiar hay que soltar los DC viejos -- pertenecen al
     /// escritorio anterior y no dibujan nada del nuevo -- y crearlos de cero.
     /// </summary>
-    private void SeguirAlEscritorioDeEntrada()
+    /// <summary>
+    /// Comprobar que el escritorio de entrada SIGUE SIENDO el de este capturador.
+    ///
+    /// Antes esto intentaba SALTAR: si el escritorio habia cambiado, soltaba los
+    /// DC y se ataba al nuevo. Nunca podia funcionar, y fallaba en silencio.
+    /// SetThreadDesktop no mueve un hilo que ya tenga objetos USER, y este hilo
+    /// tiene los de D3D11 desde el primer frame -- asi que en la pantalla de
+    /// bloqueo devolvia false, se salia por el `return`, y BitBlt seguia
+    /// dibujando sobre los DC de Default.
+    ///
+    /// El resultado era la peor forma de fallo: cientos de frames PERFECTAMENTE
+    /// VALIDOS del escritorio equivocado. Contadores subiendo, codificador sano,
+    /// visor pintando, y en pantalla el fondo de antes del bloqueo, sin reloj y
+    /// sin login. Nada en la sesion decia que algo iba mal.
+    ///
+    /// Un capturador nace atado a UN escritorio y se muere con el. Cambiar de
+    /// escritorio es trabajo del vigilante: mata la bomba, crea un hilo VIRGEN,
+    /// lo ata primero y construye la captura despues -- que es el orden que
+    /// SetThreadDesktop exige y el unico que funciona.
+    ///
+    /// Aqui solo se avisa, y se avisa GRITANDO: la excepcion mata la bomba, el
+    /// vigilante la ve morir y rehace la cadena entera.
+    /// </summary>
+    private void ComprobarEscritorio()
     {
-        var entrada = OpenInputDesktop(0, false, DesktopGenericAll);
+        var entrada = OpenInputDesktop(0, false, SoloLeer);
 
         if (entrada == IntPtr.Zero)
-            return;
+            return;   // no se deja mirar; no es motivo para tirar lo que ya va
 
-        var nombre = NombreDe(entrada);
+        string nombre;
 
-        if (nombre == _nombreEscritorio && _dcEscritorio != IntPtr.Zero)
+        try
+        {
+            nombre = NombreDe(entrada);
+        }
+        finally
         {
             CloseDesktop(entrada);
-            return;
         }
 
-        if (!SetThreadDesktop(entrada))
-        {
-            CloseDesktop(entrada);
+        if (nombre.Length == 0 || nombre == _nombreEscritorio)
             return;
-        }
 
-        SoltarGdi();
-
-        if (_escritorioAtado != IntPtr.Zero)
-            CloseDesktop(_escritorioAtado);
-
-        _escritorioAtado = entrada;
-        _nombreEscritorio = nombre;
-        AccessLostRecoveries++;
-
-        CrearGdi();
+        throw new EscritorioCambiadoException(_nombreEscritorio, nombre);
     }
 
     private void CrearGdi()
@@ -367,7 +381,19 @@ public sealed class GdiDesktopCapture : IScreenCapture
             BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource
         });
 
-        SeguirAlEscritorioDeEntrada();
+        // El hilo ya viene atado por quien nos creo. Aqui solo se anota DONDE
+        // estamos, que es contra lo que se comparara en cada captura.
+        _nombreEscritorio = EscritorioDelHilo();
+
+        CrearGdi();
+    }
+
+    /// <summary>El escritorio al que esta atado ESTE hilo ahora mismo.</summary>
+    private static string EscritorioDelHilo()
+    {
+        var propio = GetThreadDesktop(GetCurrentThreadId());
+
+        return propio == IntPtr.Zero ? string.Empty : NombreDe(propio);
     }
 
     private static string NombreDe(IntPtr escritorio)
@@ -404,7 +430,15 @@ public sealed class GdiDesktopCapture : IScreenCapture
     /// <summary>Solo mirar: este capturador lee la pantalla, no inyecta nada.
     /// GENERIC_READ es lo que concede el escritorio de Winlogon, y es lo que
     /// pide Chrome Remote Desktop para lo mismo.</summary>
-    private const uint DesktopGenericAll = 0x80000000;
+    /// <summary>GENERIC_READ. Solo se lee el NOMBRE del escritorio de entrada;
+    /// atarse a el es cosa de quien crea el hilo, no de aqui.</summary>
+    private const uint SoloLeer = 0x80000000;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr GetThreadDesktop(uint hilo);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
     private const int UoiName = 2;
 
     [StructLayout(LayoutKind.Sequential)]

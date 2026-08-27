@@ -86,6 +86,21 @@ public sealed class InputDesktop : IDisposable
     }
 
     /// <summary>
+    /// El escritorio al que esta atado EL HILO QUE LLAMA.
+    ///
+    /// No es lo mismo que NombreDeEntrada: uno dice quien recibe la entrada y
+    /// este dice donde estamos nosotros. Cuando no coinciden, se captura y se
+    /// inyecta en un escritorio que ya no es el que se ve -- y todo lo demas
+    /// parece sano, que es lo que lo hacia indetectable.
+    /// </summary>
+    public static string NombreDelHilo()
+    {
+        var propio = GetThreadDesktop(GetCurrentThreadId());
+
+        return propio == IntPtr.Zero ? string.Empty : NombreDe(propio);
+    }
+
+    /// <summary>
     /// El escritorio normal del usuario. Cualquier otro -- Winlogon,
     /// Screen-saver, o uno creado por una aplicacion -- es un escritorio que
     /// DXGI no va a poder duplicar.
@@ -315,6 +330,12 @@ public sealed class InputDesktop : IDisposable
 
     private const uint WinstaAllAccess = 0x0000037F;
     private const int UoiName = 2;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr GetThreadDesktop(uint hilo);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr OpenInputDesktop(
