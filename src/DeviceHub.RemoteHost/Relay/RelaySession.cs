@@ -1199,7 +1199,24 @@ public static class RelaySession
         // vuelta fija _codec para que la comparacion de mas abajo no se dispare
         // sola en el primer medio segundo.
         if (_codec == VideoCodec.Unspecified)
-            _codec = opciones.UsarH265 ? VideoCodec.H265 : CodecPorDefecto;
+        {
+            // Si esta PC ya bajo la escalera hace poco, se empieza donde acabo
+            // en vez de volver a descubrirlo peldano a peldano. La nota solo
+            // existe en las PCs que dieron problema, y caduca a los 7 dias.
+            if (MemoriaCodec.Leer() is { } nota)
+            {
+                _codec = nota.Codec;
+                _soloSoftware = nota.SoloSoftware;
+
+                Avisar(opciones, $"Esta PC ya fallo antes con los codecs de encima; " +
+                                 $"se arranca directo en {Etiqueta(_codec)}" +
+                                 (_soloSoftware ? " por SOFTWARE." : "."));
+            }
+            else
+            {
+                _codec = opciones.UsarH265 ? VideoCodec.H265 : CodecPorDefecto;
+            }
+        }
 
         var codecPedido = _codec;
 
@@ -1888,6 +1905,9 @@ public static class RelaySession
                         _codec = paso.Codec;
                         _soloSoftware = paso.SoloSoftware;
                         rehechosEnVano = 0;
+
+                        // Que la proxima sesion no vuelva a pagar este descubrimiento.
+                        MemoriaCodec.Anotar(_codec, _soloSoftware);
 
                         return;
                     }
