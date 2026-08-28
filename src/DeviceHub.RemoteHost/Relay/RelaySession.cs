@@ -1653,6 +1653,20 @@ public static class RelaySession
                         var aviso = new ClipboardFiles();
                         aviso.Paths.AddRange(archivosCopiados);
 
+                        // El tamano viaja con el anuncio para que el otro lado
+                        // pueda decidir si traerlo solo. Un archivo que ya no
+                        // este cuenta cero en vez de tirar el anuncio entero.
+                        foreach (var ruta in archivosCopiados)
+                        {
+                            try
+                            {
+                                aviso.TotalBytes += (ulong)new FileInfo(ruta).Length;
+                            }
+                            catch (Exception)
+                            {
+                            }
+                        }
+
                         Fiable(salida, new RemotePacket
                         {
                             ProtocolVersion = RemoteSessionProtocol.Version,

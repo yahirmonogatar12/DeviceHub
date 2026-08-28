@@ -229,6 +229,15 @@ message ClipboardFiles {
   // true  = "estos ya estan en TU disco: ponlos en el portapapeles".
   //         Solo se manda despues de haber transferido los bytes.
   bool apply = 2;
+
+  // Cuanto ocupa TODO junto, en bytes. Solo en el anuncio.
+  //
+  // Existe para poder decidir sin preguntar: unos documentos se traen solos en
+  // cuanto se copian, y una carpeta de gigas espera a que el tecnico pulse
+  // Traer. Sin el tamano habria que elegir entre sorprender con una descarga
+  // enorme o hacer pulsar un boton para copiar un .txt, y ninguna de las dos
+  // es lo que hace un escritorio remoto decente.
+  uint64 total_bytes = 3;
 }
 
 // ---------------------------------------------------------------------------

@@ -1961,8 +1961,47 @@ public partial class SesionRemota : UserControl
             // remota sin ningun aviso.
             _gestor?.HayCopiadoAlla(_copiadoAlla.Count > 0);
 
-            Nota($"{_copiadoAlla.Count} archivos copiados alla. Abre archivos y pulsa Traer.");
+            // LO PEQUENO SE TRAE SOLO. Ctrl+C alla, Ctrl+V aqui, y ya esta.
+            //
+            // El boton existia por una razon buena -- copiar 4 GB con Ctrl+C es
+            // un gesto de un segundo, y mandarlos por la red de planta sin que
+            // nadie lo pida seria una sorpresa cara -- pero esa razon no aplica
+            // a unos documentos. Cobrarle al tecnico un paso extra por copiar un
+            // .docx es exigirle que sepa la diferencia antes de copiar.
+            //
+            // Asi que la decide el tamano, que ahora viene en el anuncio: por
+            // debajo del tope se trae sin preguntar, y por encima sigue
+            // esperando a Traer, con el tamano dicho para que la espera se
+            // entienda.
+            if (aviso.TotalBytes > 0 && aviso.TotalBytes <= TopeParaTraerSolo)
+            {
+                Nota($"{_copiadoAlla.Count} archivo(s) copiados alla ({Tamano(aviso.TotalBytes)}); trayendolos...");
+                TraerCopiado();
+                return;
+            }
+
+            Nota(aviso.TotalBytes > 0
+                ? $"{_copiadoAlla.Count} archivo(s) copiados alla, {Tamano(aviso.TotalBytes)}. " +
+                  "Son muchos para traerlos solos: abre archivos y pulsa Traer."
+                : $"{_copiadoAlla.Count} archivos copiados alla. Abre archivos y pulsa Traer.");
         });
+
+    /// <summary>
+    /// Hasta aqui se trae solo; de aqui en adelante hay que pulsar Traer.
+    ///
+    /// 64 MB: cabe cualquier tanda de documentos, planos o capturas -- que es
+    /// para lo que se usa esto todo el dia -- y no cabe una carpeta de
+    /// instaladores ni un video. Por la red de planta son unos segundos.
+    /// </summary>
+    private const ulong TopeParaTraerSolo = 64UL * 1024 * 1024;
+
+    private static string Tamano(ulong bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
+        < 1024UL * 1024 * 1024 => $"{bytes / (1024.0 * 1024):0.#} MB",
+        _ => $"{bytes / (1024.0 * 1024 * 1024):0.##} GB"
+    };
 
     /// <summary>
     /// Baja lo que copiaron alla y lo deja en el portapapeles de aqui.
