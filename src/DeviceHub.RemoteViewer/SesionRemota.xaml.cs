@@ -1952,6 +1952,14 @@ public partial class SesionRemota : UserControl
         {
             _copiadoAlla = [.. aviso.Paths];
 
+            // Las PIEZAS, si el host las mando: cada archivo con su sitio dentro
+            // del arbol. Es lo que convierte "copiar una carpeta" en una tanda
+            // de archivos que se colocan solos. Un host viejo no las manda y se
+            // sigue como antes, con las raices tal cual.
+            _piezasAlla = aviso.Entries.Count > 0
+                ? [.. aviso.Entries.Select(e => (e.Path, e.Relative))]
+                : [];
+
             // NO SE ABRE EL GESTOR. Esto es un ANUNCIO: llega solo, cada vez que
             // alguien copia archivos al otro lado. Cuando el gestor era un panel
             // dentro de la sesion, enseñarlo no le quitaba el foco a nadie;
@@ -2031,11 +2039,40 @@ public partial class SesionRemota : UserControl
         // tanda anterior que no llego a cerrarse, pegaria donde no toca.
         _pegarEn = null;
 
-        foreach (var remoto in _copiadoAlla)
-            _cola.Enqueue((remoto, Path.Combine(deposito, Path.GetFileName(remoto)), true));
+        // CADA PIEZA A SU SITIO. La ruta relativa la calculo el host desde el
+        // padre de la raiz, asi que "Planos6.dwg" cuelga del deposito y
+        // la carpeta se rehace sola: IniciarBajada crea los directorios que
+        // falten antes de escribir.
+        if (_piezasAlla.Count > 0)
+        {
+            foreach (var (ruta, relativa) in _piezasAlla)
+                _cola.Enqueue((ruta, Path.Combine(deposito, relativa), true));
+        }
+        else
+        {
+            foreach (var remoto in _copiadoAlla)
+                _cola.Enqueue((remoto, Path.Combine(deposito, Path.GetFileName(remoto)), true));
+        }
+
+        // LO QUE SE PEGA SON LAS RAICES, no las cuarenta piezas.
+        //
+        // Sin esto, copiar una carpeta de cuarenta archivos dejaria los cuarenta
+        // sueltos en el portapapeles y al pegar saldrian todos al mismo nivel,
+        // sin carpeta. Lo que el tecnico copio fue "Planos"; eso es lo que tiene
+        // que pegar.
+        _raicesDelDeposito = [.. _copiadoAlla.Select(
+            r => Path.Combine(deposito, Path.GetFileName(r.TrimEnd(Path.DirectorySeparatorChar))))];
 
         SiguienteDeLaCola();
     }
+
+    /// <summary>Las piezas anunciadas: cada archivo de alla con su sitio en el
+    /// arbol. Vacio con un host viejo.</summary>
+    private List<(string Ruta, string Relativa)> _piezasAlla = [];
+
+    /// <summary>Lo que acabara en el portapapeles al terminar la tanda: las
+    /// raices ya colocadas en el deposito, no cada archivo.</summary>
+    private List<string> _raicesDelDeposito = [];
 
     /// <summary>Sube lo que hay copiado aqui y lo deja en el portapapeles de
     /// alla.</summary>
@@ -2045,7 +2082,11 @@ public partial class SesionRemota : UserControl
 
         try
         {
-            locales = [.. Clipboard.GetFileDropList().Cast<string>().Where(File.Exists)];
+            // Carpetas TAMBIEN. El `Where(File.Exists)` que habia aqui las
+            // tiraba en silencio: el tecnico copiaba una carpeta, pulsaba
+            // Llevar, y le decia que no habia nada copiado en esta PC.
+            locales = [.. Clipboard.GetFileDropList().Cast<string>()
+                .Where(r => File.Exists(r) || Directory.Exists(r))];
         }
         catch (System.Runtime.InteropServices.COMException)
         {
@@ -2069,11 +2110,26 @@ public partial class SesionRemota : UserControl
 
         // El deposito es del temporal de ALLA, no de la carpeta que este abierta:
         // pegar no deberia ensuciar el sitio donde el tecnico estuviera mirando.
+        // Igual que al traer, pero al reves: se expande aqui y cada pieza sube
+        // con su ruta relativa dentro del deposito de alla. El host escribe
+        // creando los directorios que falten, asi que la carpeta se rehace.
+        foreach (var pieza in DeviceHub.Archivos.Expandir.Todo(locales))
+        {
+            var remoto = $@"%TEMP%\DeviceHub\portapapeles\hacia-remoto\{pieza.Relativa}";
+            _cola.Enqueue((remoto, pieza.Ruta, false));
+        }
+
+        // Y lo que se pone en el portapapeles de alla son las RAICES.
+        _transferidos.Clear();
+
         foreach (var local in locales)
         {
-            var remoto = $@"%TEMP%\DeviceHub\portapapeles\hacia-remoto\{Path.GetFileName(local)}";
-            _cola.Enqueue((remoto, local, false));
+            _transferidos.Add(
+                $@"%TEMP%\DeviceHub\portapapeles\hacia-remoto\" +
+                Path.GetFileName(local.TrimEnd(Path.DirectorySeparatorChar)));
         }
+
+        _portapapelesAlFinal = false;   // ya se apuntaron las raices a mano
 
         SiguienteDeLaCola();
     }
@@ -2105,11 +2161,23 @@ public partial class SesionRemota : UserControl
             return;
         }
 
-        if (_transferidos.Count == 0)
+        // Las dos listas, no solo una: al traer carpetas lo que vale son las
+        // raices, y mirar solo _transferidos saldria por aqui antes de llegar a
+        // ellas el dia que se deje de apuntar cada pieza.
+        if (_transferidos.Count == 0 && _raicesDelDeposito.Count == 0)
             return;
 
-        var rutas = _transferidos.ToList();
+        // Las raices mandan sobre la lista de transferidos cuando las hay: una
+        // carpeta se pega como carpeta, no como su contenido desparramado.
+        var rutas = _raicesDelDeposito.Count > 0
+            ? _raicesDelDeposito.Where(r => File.Exists(r) || Directory.Exists(r)).ToList()
+            : _transferidos.ToList();
+
+        _raicesDelDeposito = [];
         _transferidos.Clear();
+
+        if (rutas.Count == 0)
+            return;
 
         // Bajando: las rutas son de AQUI y el portapapeles es el de aqui.
         // Subiendo: son de ALLA y hay que pedirle al host que lo ponga el.

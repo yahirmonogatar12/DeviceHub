@@ -1651,20 +1651,27 @@ public static class RelaySession
                     if (archivosCopiados.Count > 0)
                     {
                         var aviso = new ClipboardFiles();
+
+                        // Las RAICES: lo que el tecnico selecciono, que es lo
+                        // que acabara en su portapapeles.
                         aviso.Paths.AddRange(archivosCopiados);
 
-                        // El tamano viaja con el anuncio para que el otro lado
-                        // pueda decidir si traerlo solo. Un archivo que ya no
-                        // este cuenta cero en vez de tirar el anuncio entero.
-                        foreach (var ruta in archivosCopiados)
+                        // Y las PIEZAS: cada archivo con su sitio en el arbol.
+                        // Una carpeta se expande aqui y viaja como archivos
+                        // sueltos con ruta relativa; el otro lado la rehace al
+                        // escribir. Sin esto, seleccionar una carpeta mandaba su
+                        // ruta y nada mas: el visor pedia un "archivo" que era
+                        // un directorio y no llegaba un solo byte.
+                        foreach (var pieza in DeviceHub.Archivos.Expandir.Todo(archivosCopiados))
                         {
-                            try
+                            aviso.Entries.Add(new ClipboardEntry
                             {
-                                aviso.TotalBytes += (ulong)new FileInfo(ruta).Length;
-                            }
-                            catch (Exception)
-                            {
-                            }
+                                Path = pieza.Ruta,
+                                Relative = pieza.Relativa,
+                                Size = pieza.Tamano
+                            });
+
+                            aviso.TotalBytes += pieza.Tamano;
                         }
 
                         Fiable(salida, new RemotePacket

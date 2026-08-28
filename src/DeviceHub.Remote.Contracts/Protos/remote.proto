@@ -238,6 +238,28 @@ message ClipboardFiles {
   // enorme o hacer pulsar un boton para copiar un .txt, y ninguna de las dos
   // es lo que hace un escritorio remoto decente.
   uint64 total_bytes = 3;
+
+  // Carpetas. Cada archivo con su sitio dentro del arbol.
+  //
+  // Las carpetas no llevan protocolo propio: se expanden aqui y cada pieza
+  // viaja por la transferencia de la Fase 24 como cualquier archivo suelto.
+  // Quien recibe reconstruye el arbol creando directorios al escribir.
+  //
+  // `paths` sigue siendo lo que el tecnico SELECCIONO -- las raices -- y es lo
+  // que acaba en el portapapeles del otro lado. Un host viejo no manda esto y
+  // el receptor cae en el comportamiento de antes: archivos sueltos.
+  repeated ClipboardEntry entries = 4;
+}
+
+message ClipboardEntry {
+  // Ruta completa en la maquina de ORIGEN.
+  string path = 1;
+
+  // Donde va, relativo al padre de la raiz seleccionada.
+  //   raiz C:	rabajo\Planos  ->  "Planos6.dwg"
+  string relative = 2;
+
+  uint64 size = 3;
 }
 
 // ---------------------------------------------------------------------------
