@@ -51,15 +51,20 @@ public static class ClipboardBridge
 
         if (archivos.Count > 0)
         {
-            // La firma hace de "lo ultimo" para los archivos igual que el texto
-            // para el texto: sin ella, lo que llega del tecnico se detectaria
-            // como copia local y se le devolveria.
-            var firma = string.Join("|", archivos);
-
-            if (firma == _ultimo)
-                return (null, []);
-
-            _ultimo = firma;
+            // COPIAR LO MISMO OTRA VEZ ES COPIAR OTRA VEZ, no un eco.
+            //
+            // Aqui se comparaba la lista con la anterior y se descartaba si
+            // coincidia. Efecto: el tecnico copia unos archivos, algo no sale
+            // como esperaba, vuelve a pulsar Ctrl+C sobre LOS MISMOS -- que es
+            // lo que hace cualquiera -- y no pasa nada en absoluto. Silencio,
+            // sin aviso ni motivo. Es lo que hacia que "sigue sin funcionar"
+            // fuera verdad justo despues de actualizar.
+            //
+            // Y no hacia falta: el eco de lo que el tecnico SUBE ya lo corta el
+            // numero de secuencia, que EscribirArchivos actualiza al terminar
+            // (ver el finally de ese metodo). Esta comparacion solo bloqueaba
+            // repeticiones legitimas.
+            _ultimo = string.Join("|", archivos);
             return (null, archivos);
         }
 
