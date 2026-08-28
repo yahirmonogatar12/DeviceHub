@@ -64,6 +64,13 @@
     </Style>
 
     <Style TargetType="ScrollBar">
+        <!-- NO SE LLEVA EL FOCO. Lo pone el estilo del tema, y declarar uno
+             implicito lo SUSTITUYE ENTERO: sin repetirlo aqui, la barra se
+             volvia enfocable y el teclado se le quedaba dentro. Se noto como
+             "dejo de funcionar el copiar y pegar": con el foco en una barra,
+             Ctrl+C y Ctrl+V no llegan a la sesion remota. -->
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="IsTabStop" Value="False" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Width" Value="10" />
@@ -113,6 +120,11 @@
          esquina oscura. No hay forma de quitarlo sin rehacer la plantilla, asi
          que se rehace: son cuatro celdas y ninguna logica. -->
     <Style TargetType="ScrollViewer">
+        <!-- Igual que la barra, y por lo mismo. Este es ademas el que sostiene
+             el PART_ContentHost de un TextBox: enfocable ahi significa que el
+             TextBox no recibe teclas. -->
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="IsTabStop" Value="False" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ScrollViewer">
