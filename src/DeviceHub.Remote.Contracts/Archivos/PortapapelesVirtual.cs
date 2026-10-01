@@ -69,15 +69,32 @@ public sealed class PortapapelesVirtual
             .Where(e => e.Relativa.Length is > 0 and < 260)
             .ToList();
 
-        string? error = "el hilo del portapapeles no contesto";
+        // Si el hilo no contesta, lo que dijo la traza por ultimo dice DONDE se
+        // quedo: sin "OleSetClipboard empieza" ni siquiera llego a la cola.
+        string? error = "el hilo del portapapeles no contesto en 4 s";
         var hecho = new ManualResetEventSlim();
+        var reloj = System.Diagnostics.Stopwatch.StartNew();
 
         Hacer(() =>
         {
             try
             {
                 var datos = new DatosVirtuales(lista, _pedir);
-                var hr = OleSetClipboard(datos);
+                var hr = CfECantOpen;
+
+                // OTRA APLICACION PUEDE TENERLO ABIERTO en ese instante -- leerlo
+                // es abrirlo -- y entonces falla en el acto. Se reintenta un poco
+                // antes de darlo por imposible.
+                for (var intento = 0; intento < 10 && hr == CfECantOpen; intento++)
+                {
+                    if (intento > 0)
+                        Thread.Sleep(50);
+
+                    Traza?.Invoke($"OleSetClipboard empieza (intento {intento + 1}, {reloj.ElapsedMilliseconds} ms)");
+                    hr = OleSetClipboard(datos);
+                }
+
+                Traza?.Invoke($"OleSetClipboard 0x{hr:X8} en {reloj.ElapsedMilliseconds} ms");
 
                 if (hr == 0)
                 {
@@ -97,9 +114,16 @@ public sealed class PortapapelesVirtual
             hecho.Set();
         });
 
-        hecho.Wait(TimeSpan.FromSeconds(5));
+        hecho.Wait(TimeSpan.FromSeconds(4));
         return error;
     }
+
+    /// <summary>Donde contar cada paso, si alguien escucha. El ayudante de la PC
+    /// remota lo manda a su salida de errores, que RemoteHost pega a los fallos.</summary>
+    public Action<string>? Traza { get; init; }
+
+    /// <summary>CLIPBRD_E_CANT_OPEN: otro proceso tiene el portapapeles abierto.</summary>
+    private const int CfECantOpen = unchecked((int)0x800401D0);
 
     /// <summary>Quita la promesa si sigue siendo lo que hay copiado. Despues de
     /// esto ya no hay quien sirva los trozos, y dejarla seria un pegado que

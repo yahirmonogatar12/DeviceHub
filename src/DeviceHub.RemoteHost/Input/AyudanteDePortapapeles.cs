@@ -30,8 +30,24 @@ public static class AyudanteDePortapapeles
     /// stream vivo, no por el de antes del microcorte.</summary>
     public static Action<RemotePacket>? Enviar;
 
+    /// <summary>A la barra del tecnico. Lo pone el hilo de red al conectar.</summary>
+    public static Action<string>? Avisar;
+
+    /// <summary>Al registro de esta PC (visor de eventos, via el agente).</summary>
+    public static Action<string>? Escribir;
+
     private static readonly object Cerrojo = new();
     private static Stream? _haciaAyudante;
+
+    /// <summary>El proceso ayudante, para saber si sigue vivo y con que codigo
+    /// salio. Sin esto, "no contesto" no distingue entre lento y muerto.</summary>
+    private static SafeProcessHandle? _ayudante;
+
+    /// <summary>Lo ultimo que el ayudante escribio por su salida de errores. Va
+    /// pegado a cualquier fallo: es lo unico que cuenta que paso alla dentro.</summary>
+    private static readonly ConcurrentQueue<string> Ultimas = new();
+
+    private static readonly Stopwatch DesdeElArranque = new();
 
     /// <summary>Rutas con una peticion en vuelo. Solo esas se le entregan al
     /// ayudante; cualquier otro FileChunk es una subida normal.</summary>
@@ -61,14 +77,62 @@ public static class AyudanteDePortapapeles
             return $"No se pudo preparar el pegado de archivos: {ex.Message}";
         }
 
-        if (!confirmacion.Task.Wait(TimeSpan.FromSeconds(5)))
-            return "El portapapeles de esta PC no contesto a tiempo.";
-
         var archivos = anuncio.Entries.Count;
+        var reloj = Stopwatch.StartNew();
+
+        // 8 s, mas que los 4 que espera el propio ayudante a su hilo del
+        // portapapeles: si algo se atasca alla dentro, su error concreto llega
+        // antes que este plazo generico.
+        if (!confirmacion.Task.Wait(TimeSpan.FromSeconds(8)))
+        {
+            // TARDE NO ES NUNCA. Si la promesa acaba quedando puesta, se dice
+            // entonces: el Ctrl+V que vino detras se la perdio, pero el siguiente
+            // ya pega.
+            confirmacion.Task.ContinueWith(t =>
+            {
+                if (t.Result is null)
+                    Avisar?.Invoke($"{archivos} archivo(s) del tecnico listos para pegar: " +
+                                   $"tardo {reloj.Elapsed.TotalSeconds:0.0} s, vuelve a pulsar Ctrl+V.");
+            }, TaskScheduler.Default);
+
+            return $"El portapapeles de esta PC no contesto en 8 s.{Diagnostico()}";
+        }
 
         return confirmacion.Task.Result is { } error
-            ? $"No se pudo preparar el pegado de archivos: {error}"
+            ? $"No se pudo preparar el pegado de archivos: {error}{Diagnostico()}"
             : $"{archivos} archivo(s) del tecnico listos para pegar con Ctrl+V.";
+    }
+
+    /// <summary>
+    /// Arranca el ayudante ya, sin esperar al primer pegado. Lo llama la sesion
+    /// al conectar: asi el Ctrl+V no paga el arranque de un proceso, y si el
+    /// ayudante no puede arrancar en esta PC queda escrito desde el principio.
+    /// </summary>
+    public static void Preparar()
+    {
+        try
+        {
+            lock (Cerrojo)
+                _haciaAyudante ??= Arrancar();
+        }
+        catch (Exception ex)
+        {
+            Escribir?.Invoke($"Portapapeles de archivos no disponible: {ex.Message}");
+        }
+    }
+
+    /// <summary>Si el ayudante vive y lo ultimo que dijo, para pegarlo a un fallo.</summary>
+    private static string Diagnostico()
+    {
+        var estado = _ayudante is null
+            ? "sin ayudante"
+            : GetExitCodeProcess(_ayudante, out var codigo) && codigo != StillActive
+                ? $"el ayudante se cerro con codigo 0x{codigo:X}"
+                : $"ayudante vivo desde hace {DesdeElArranque.Elapsed.TotalSeconds:0.0} s";
+
+        var dijo = string.Join(" | ", Ultimas);
+
+        return $" [{estado}{(dijo.Length > 0 ? "; " + dijo : string.Empty)}]";
     }
 
     /// <summary>Un trozo que llega del visor. True si era para el ayudante.</summary>
@@ -95,6 +159,14 @@ public static class AyudanteDePortapapeles
     {
         lock (Cerrojo)
         {
+            // Uno muerto se sustituye en vez de escribirle: la tuberia rota solo
+            // se notaria al fallar, y el aviso que va dentro se perderia.
+            if (_ayudante is not null && GetExitCodeProcess(_ayudante, out var codigo) && codigo != StillActive)
+            {
+                Escribir?.Invoke($"El ayudante del portapapeles se habia cerrado (codigo 0x{codigo:X}); se arranca otro.");
+                _haciaAyudante = null;
+            }
+
             _haciaAyudante ??= Arrancar();
 
             try
@@ -135,6 +207,15 @@ public static class AyudanteDePortapapeles
                     case RemotePacket.PayloadOneofCase.Error:
                         _confirmacion?.TrySetResult(paquete.Error.Detail);
                         break;
+
+                    case RemotePacket.PayloadOneofCase.HostStatus:
+                        // "Listo": el ayudante arranco y tiene su portapapeles.
+                        // Se anota cuanto tardo, que es lo primero que hay que
+                        // saber cuando alguna PC dice que no contesta.
+                        Escribir?.Invoke(
+                            $"Ayudante del portapapeles {paquete.HostStatus.Text} en " +
+                            $"{DesdeElArranque.Elapsed.TotalMilliseconds:0} ms.");
+                        break;
                 }
             }
         }
@@ -160,6 +241,11 @@ public static class AyudanteDePortapapeles
     /// </summary>
     public static int Correr()
     {
+        // Lo que se rompa aqui dentro tiene que salir por algun sitio: la salida
+        // de errores la recoge RemoteHost y la pega a cualquier fallo.
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            Console.Error.WriteLine($"fallo: {e.ExceptionObject}");
+
         var entrada = Console.OpenStandardInput();
         var salida = Console.OpenStandardOutput();
         var cerrojo = new object();
@@ -192,7 +278,9 @@ public static class AyudanteDePortapapeles
                 : new FileChunk { Path = ruta, Offset = desde, Error = "La PC del tecnico no contesto." };
         }
 
-        var portapapeles = new PortapapelesVirtual(Pedir);
+        var portapapeles = new PortapapelesVirtual(Pedir) { Traza = Console.Error.WriteLine };
+
+        Mandar(new RemotePacket { HostStatus = new HostStatus { Text = "listo" } });
 
         while (true)
         {
@@ -216,6 +304,9 @@ public static class AyudanteDePortapapeles
                     // que solo este bucle puede entregar: esperar aqui a que lo
                     // atienda seria un abrazo mortal.
                     var anuncio = paquete.ClipboardFiles;
+
+                    Console.Error.WriteLine(
+                        $"anuncio: {anuncio.Directories.Count} carpetas, {anuncio.Entries.Count} archivos");
 
                     _ = Task.Run(() =>
                     {
@@ -251,6 +342,9 @@ public static class AyudanteDePortapapeles
         var exe = Environment.ProcessPath
                   ?? throw new InvalidOperationException("No se sabe donde esta DeviceHub.RemoteHost.exe");
 
+        Ultimas.Clear();
+        DesdeElArranque.Restart();
+
         if (!WindowsIdentity.GetCurrent().IsSystem)
         {
             // Ya somos el usuario (SecureDesktop apagado, o desarrollo): basta
@@ -260,24 +354,30 @@ public static class AyudanteDePortapapeles
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardInput = true,
-                RedirectStandardOutput = true
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
             }) ?? throw new InvalidOperationException("No arranco el ayudante del portapapeles");
 
+            _ayudante = proceso.SafeHandle;
             Hilo(proceso.StandardOutput.BaseStream);
+            Errores(proceso.StandardError.BaseStream);
             return proceso.StandardInput.BaseStream;
         }
 
         var hacia = new AnonymousPipeServerStream(PipeDirection.Out, HandleInheritability.Inheritable);
         var desde = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
+        var errores = new AnonymousPipeServerStream(PipeDirection.In, HandleInheritability.Inheritable);
 
         try
         {
-            LanzarComoUsuario(exe, hacia.ClientSafePipeHandle, desde.ClientSafePipeHandle);
+            _ayudante = LanzarComoUsuario(
+                exe, hacia.ClientSafePipeHandle, desde.ClientSafePipeHandle, errores.ClientSafePipeHandle);
         }
         catch
         {
             hacia.Dispose();
             desde.Dispose();
+            errores.Dispose();
             throw;
         }
 
@@ -285,13 +385,37 @@ public static class AyudanteDePortapapeles
         // nunca daria fin de archivo: seguiria habiendo un escritor abierto.
         hacia.DisposeLocalCopyOfClientHandle();
         desde.DisposeLocalCopyOfClientHandle();
+        errores.DisposeLocalCopyOfClientHandle();
 
         Hilo(desde);
+        Errores(errores);
         return hacia;
     }
 
     private static void Hilo(Stream desdeAyudante)
         => new Thread(() => Leer(desdeAyudante)) { IsBackground = true, Name = "ayudante portapapeles" }.Start();
+
+    /// <summary>La salida de errores del ayudante, linea a linea: al registro, y
+    /// las ultimas a mano para pegarlas a un fallo.</summary>
+    private static void Errores(Stream errores) => new Thread(() =>
+    {
+        try
+        {
+            using var lector = new StreamReader(errores);
+
+            while (lector.ReadLine() is { } linea)
+            {
+                Escribir?.Invoke($"Ayudante del portapapeles: {linea}");
+                Ultimas.Enqueue(linea);
+
+                while (Ultimas.Count > 4)
+                    Ultimas.TryDequeue(out _);
+            }
+        }
+        catch (Exception)
+        {
+        }
+    }) { IsBackground = true, Name = "ayudante portapapeles errores" }.Start();
 
     /// <summary>
     /// El ayudante con el token del usuario de ESTA sesion, y sus stdin/stdout
@@ -305,7 +429,8 @@ public static class AyudanteDePortapapeles
     /// las tuberias. .NET los crea no heredables, asi que hoy son solo estas;
     /// si eso cambia, PROC_THREAD_ATTRIBUTE_HANDLE_LIST.
     /// </summary>
-    private static void LanzarComoUsuario(string exe, SafePipeHandle entrada, SafePipeHandle salida)
+    private static SafeProcessHandle LanzarComoUsuario(
+        string exe, SafePipeHandle entrada, SafePipeHandle salida, SafePipeHandle errores)
     {
         var sesion = (uint)Process.GetCurrentProcess().SessionId;
 
@@ -328,21 +453,37 @@ public static class AyudanteDePortapapeles
                     lpDesktop = @"winsta0\default",
                     dwFlags = StartfUseStdHandles,
                     hStdInput = entrada.DangerousGetHandle(),
-                    hStdOutput = salida.DangerousGetHandle()
+                    hStdOutput = salida.DangerousGetHandle(),
+                    hStdError = errores.DangerousGetHandle()
                 };
+
+                // EL ENTORNO DEL USUARIO, no el de SYSTEM: sin esto el ayudante
+                // hereda TEMP, USERPROFILE y APPDATA del perfil de sistema, que
+                // el usuario no puede ni abrir. Lo mismo que hace el agente.
+                if (!CreateEnvironmentBlock(out var entorno, primario, false))
+                    entorno = IntPtr.Zero;
 
                 // CreateProcessAsUser puede ESCRIBIR en la linea de comandos: no
                 // se le puede pasar una cadena, igual que en el agente.
                 var linea = new System.Text.StringBuilder($"\"{exe}\" --portapapeles");
 
-                if (!CreateProcessAsUser(primario, null, linea, IntPtr.Zero, IntPtr.Zero,
-                        bInheritHandles: true, CreateNoWindow, IntPtr.Zero, null, ref inicio, out var proceso))
+                try
                 {
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcessAsUser");
-                }
+                    if (!CreateProcessAsUser(primario, null, linea, IntPtr.Zero, IntPtr.Zero,
+                            bInheritHandles: true, CreateNoWindow | CreateUnicodeEnvironment, entorno,
+                            null, ref inicio, out var proceso))
+                    {
+                        throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcessAsUser");
+                    }
 
-                CloseHandle(proceso.hThread);
-                CloseHandle(proceso.hProcess);
+                    CloseHandle(proceso.hThread);
+                    return new SafeProcessHandle(proceso.hProcess, ownsHandle: true);
+                }
+                finally
+                {
+                    if (entorno != IntPtr.Zero)
+                        DestroyEnvironmentBlock(entorno);
+                }
             }
         }
     }
@@ -352,6 +493,8 @@ public static class AyudanteDePortapapeles
     private const int TokenPrimary = 1;
     private const int StartfUseStdHandles = 0x00000100;
     private const uint CreateNoWindow = 0x08000000;
+    private const uint CreateUnicodeEnvironment = 0x00000400;
+    private const uint StillActive = 259;
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct StartupInfo
@@ -388,4 +531,13 @@ public static class AyudanteDePortapapeles
 
     [DllImport("kernel32.dll")]
     private static extern bool CloseHandle(IntPtr mango);
+
+    [DllImport("kernel32.dll")]
+    private static extern bool GetExitCodeProcess(SafeProcessHandle proceso, out uint codigo);
+
+    [DllImport("userenv.dll", SetLastError = true)]
+    private static extern bool CreateEnvironmentBlock(out IntPtr entorno, SafeAccessTokenHandle token, bool heredar);
+
+    [DllImport("userenv.dll")]
+    private static extern bool DestroyEnvironmentBlock(IntPtr entorno);
 }

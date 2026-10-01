@@ -3604,6 +3604,13 @@ public static class RelaySession
                 Suelto(peticion);
             };
 
+            Input.AyudanteDePortapapeles.Avisar = texto => Avisar(opciones, texto);
+            Input.AyudanteDePortapapeles.Escribir = opciones.Escribir;
+
+            // El ayudante YA, en segundo plano: que el primer Ctrl+V no pague el
+            // arranque de un proceso. Si ya estaba arrancado, no hace nada.
+            _ = Task.Run(Input.AyudanteDePortapapeles.Preparar);
+
             while (await llamada.ResponseStream.MoveNext(cancelacion.Token))
             {
                 var paquete = llamada.ResponseStream.Current;
