@@ -216,7 +216,13 @@ public sealed class FileService : IDisposable
                 trozo.Data.WriteTo(_subida);
             }
 
-            if (trozo.Last)
+            // Para un archivo vacio, el primer mensaje tambien es el sondeo:
+            // no habra un segundo trozo que pueda traer Last=true. Cerrarlo aqui
+            // evita dejar el ultimo archivo de una tanda bloqueado justo cuando
+            // Explorer intenta leerlo desde el portapapeles.
+            var terminado = trozo.Last || (trozo.Total == 0 && trozo.Data.Length == 0);
+
+            if (terminado)
             {
                 // Un archivo que se reescribe mas corto que el que habia dejaria
                 // cola del anterior detras.
@@ -226,7 +232,7 @@ public sealed class FileService : IDisposable
 
             var recibidos = (ulong)_subida.Length;
 
-            if (trozo.Last)
+            if (terminado)
                 Cerrar();
 
             return new FileAck { Path = trozo.Path, Received = recibidos };

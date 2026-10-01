@@ -413,6 +413,16 @@ public sealed partial class MainViewModel : ObservableObject
             Entrar();
     }
 
+    [RelayCommand]
+    private void CambiarContrasena()
+    {
+        var dialogo = new CambiarContrasenaWindow(_client) { Owner = Application.Current?.MainWindow };
+
+        if (dialogo.ShowDialog() == true)
+            MessageBox.Show("Contrasena cambiada. La siguiente vez que inicies sesion usa la nueva.",
+                "Cambiar contrasena", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
     /// <summary>Cierra la sesion y olvida la guardada.</summary>
     [RelayCommand]
     private void Salir()

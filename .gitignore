@@ -4,7 +4,7 @@ obj/
 *.suo
 .vs/
 TestResults/
-
+.history/
 # Nunca versionar material criptografico ni identidades de maquina
 *.pfx
 *.key

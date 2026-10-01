@@ -169,6 +169,22 @@ public class RemoteFileTests : IDisposable
         Assert.Equal(1, ultimos);
     }
 
+    [Fact]
+    public void El_sondeo_de_una_subida_vacia_crea_y_libera_el_archivo()
+    {
+        var ruta = Ruta("subida-vacia.bin");
+
+        using var servicio = new FileService();
+        var acuse = servicio.Escribir(new FileChunk { Path = ruta, Total = 0 });
+
+        Assert.Empty(acuse.Error);
+        Assert.Equal(0UL, acuse.Received);
+
+        // FileShare.None demuestra que FileService ya no conserva su handle.
+        using var archivo = new FileStream(ruta, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        Assert.Equal(0, archivo.Length);
+    }
+
     /// <summary>Ningun trozo puede pasar del tope del protocolo: el relay los
     /// rechazaria y la transferencia moriria a la primera.</summary>
     [Fact]

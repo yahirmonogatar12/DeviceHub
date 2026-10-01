@@ -39,6 +39,10 @@
                             Margin="10,0,0,0" Height="24" ToolTip="Cerrar la sesion en esta PC"
                             Command="{Binding SalirCommand}" />
 
+                    <Button DockPanel.Dock="Right" Content="Contrasena" Style="{StaticResource BtnLink}"
+                            Margin="10,0,0,0" Height="24" ToolTip="Cambiar la contrasena de este usuario"
+                            Command="{Binding CambiarContrasenaCommand}" />
+
                     <TextBlock DockPanel.Dock="Right" Text="{Binding SessionLabel}"
                                Style="{StaticResource Caption}" Margin="16,0,0,0" />
 

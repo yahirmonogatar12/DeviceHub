@@ -138,7 +138,15 @@ public static class ClipboardBridge
     /// </summary>
     public static bool EscribirArchivos(IReadOnlyList<string> rutas)
     {
-        if (rutas.Count == 0 || !Abrir())
+        // Una seleccion grande puede contener una carpeta vacia (que no produce
+        // piezas), un archivo borrado durante la transferencia o una raiz que no
+        // se pudo crear. Una sola ruta inexistente puede hacer que Explorer
+        // rechace el CF_HDROP completo al pegar.
+        var existentes = rutas
+            .Where(r => File.Exists(r) || Directory.Exists(r))
+            .ToList();
+
+        if (existentes.Count == 0 || !Abrir())
             return false;
 
         var mango = IntPtr.Zero;
@@ -148,7 +156,7 @@ public static class ClipboardBridge
             if (!EmptyClipboard())
                 return false;
 
-            var contenido = Dropfiles(rutas);
+            var contenido = Dropfiles(existentes);
 
             mango = GlobalAlloc(GmemMoveable, (UIntPtr)contenido.Length);
 

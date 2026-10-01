@@ -12,7 +12,10 @@ namespace DeviceHub.Contracts;
 /// </summary>
 public static class PasswordPolicy
 {
-    public const int MinimumLength = 12;
+    // Eran 12, y se bajo a peticion: el que la teclea a diario prefiere una
+    // corta. 8 sigue siendo el minimo habitual, y el limitador de intentos del
+    // login es lo que frena la fuerza bruta.
+    public const int MinimumLength = 8;
 
     private static readonly string[] Forbidden =
     [

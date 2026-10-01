@@ -10,6 +10,7 @@ public class PasswordPolicyTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("corta")]
+    [InlineData("fct-202")]                 // uno menos que el minimo
     [InlineData("ILSANMES2026")]      // contiene "ilsan"
     [InlineData("password1234")]
     [InlineData("devicehub123")]
@@ -24,6 +25,7 @@ public class PasswordPolicyTests
     [Theory]
     [InlineData("caballo grapadora correcto")]
     [InlineData("mantenimiento-fct-2026")]
+    [InlineData("fct-2026")]                // justo el minimo
     public void Long_phrases_are_accepted(string password)
         => Assert.True(PasswordPolicy.IsValid(password, out _));
 

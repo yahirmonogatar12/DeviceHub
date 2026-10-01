@@ -156,6 +156,11 @@ public sealed class DeviceHubClient : IDisposable
         }
     }
 
+    public Task<UserRecord> ChangeOwnPasswordAsync(string actual, string nueva, CancellationToken ct)
+        => _client.ChangeOwnPasswordAsync(
+            new ChangeOwnPasswordRequest { CurrentPassword = actual, NewPassword = nueva },
+            _auth, cancellationToken: ct).ResponseAsync;
+
     public async Task LoginAsync(string username, string password, CancellationToken ct)
     {
         var reply = await _client.LoginAsync(

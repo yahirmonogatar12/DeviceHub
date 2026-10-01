@@ -4,6 +4,10 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <OutputType>WinExe</OutputType>
     <UseWPF>true</UseWPF>
+    <!-- Interaction.InputBox (los numeros del codigo de enrolamiento) dibuja con
+         WinForms: sin esto lanza "Method requires System.Windows.Forms" y no se
+         llega a emitir ningun codigo. -->
+    <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>DeviceHub.Dashboard</RootNamespace>
 
     <!-- WPF NO funciona con globalizacion invariante.
@@ -23,6 +27,13 @@
     <!-- Enlazado y no copiado: el png vive en assets, con el ico que sale de el.
          Dos copias del mismo logo acaban divergiendo. -->
     <Resource Include="..\..\assets\logo.png" Link="Assets\logo.png" />
+  </ItemGroup>
+
+  <!-- Los using implicitos de WinForms chocan con los de WPF (MessageBox,
+       Application...). Solo hace falta el ensamblado, no sus nombres. -->
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
   </ItemGroup>
 
   <ItemGroup>

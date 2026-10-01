@@ -1608,10 +1608,7 @@ public partial class SesionRemota : UserControl
         if (cuales.Count == 0)
             return;
 
-        _cola.Clear();
-        _transferidos.Clear();
-        _portapapelesAlFinal = false;
-        _pegarEn = null;
+        PrepararTanda(portapapelesAlFinal: false);
 
         foreach (var (remoto, local) in cuales)
             _cola.Enqueue((remoto, local, true));
@@ -1625,10 +1622,7 @@ public partial class SesionRemota : UserControl
         if (cuales.Count == 0)
             return;
 
-        _cola.Clear();
-        _transferidos.Clear();
-        _portapapelesAlFinal = false;
-        _pegarEn = null;
+        PrepararTanda(portapapelesAlFinal: false);
 
         foreach (var (local, remoto) in cuales)
             _cola.Enqueue((remoto, local, false));
@@ -1679,6 +1673,8 @@ public partial class SesionRemota : UserControl
                 _bajando.Dispose();
                 _bajando = null;
                 Decir($"Fallo: {trozo.Error}");
+                RegistrarFallo(trozo.Error);
+                SiguienteDeLaCola();
                 return;
             }
 
@@ -1791,13 +1787,10 @@ public partial class SesionRemota : UserControl
             return;
         }
 
-        _cola.Clear();
-        _transferidos.Clear();
-
         // Sin portapapeles al terminar: esto no es "copiar y pegar", es dejar
         // unos archivos alla. Ponerlos ademas en el portapapeles remoto seria un
         // efecto que nadie pidio.
-        _portapapelesAlFinal = false;
+        PrepararTanda(portapapelesAlFinal: false);
 
         foreach (var (local, remoto) in plan.Subidas)
             _cola.Enqueue((remoto, local, false));
@@ -1814,11 +1807,8 @@ public partial class SesionRemota : UserControl
         // Sin abrir el gestor: taparle el escritorio remoto con una ventana
         // justo donde acaba de soltar es lo contrario de lo que pidio, y le
         // quitaria el foco a la sesion.
-        _cola.Clear();
-        _transferidos.Clear();
-
         // SI se toca el portapapeles de alla: es el transporte del pegado.
-        _portapapelesAlFinal = true;
+        PrepararTanda(portapapelesAlFinal: true);
         _pegarEn = donde;
 
         // Al temporal de ALLA y no a la carpeta abierta en el panel: estos
@@ -1881,6 +1871,8 @@ public partial class SesionRemota : UserControl
                 _subiendo.Dispose();
                 _subiendo = null;
                 Decir($"Fallo: {acuse.Error}");
+                RegistrarFallo(acuse.Error);
+                SiguienteDeLaCola();
                 return;
             }
 
@@ -1940,6 +1932,11 @@ public partial class SesionRemota : UserControl
     /// <summary>Rutas ya transferidas de la tanda en curso. Al vaciarse la cola,
     /// son las que van al portapapeles del destino.</summary>
     private readonly List<string> _transferidos = [];
+
+    /// <summary>Una pieza mala no cancela las demas. En tandas grandes es normal
+    /// que alguna desaparezca, este bloqueada o sea un placeholder sin descargar.</summary>
+    private int _fallosDeLaTanda;
+    private string? _ultimoFalloDeLaTanda;
 
     /// <summary>Lo que la PC remota anuncio tener copiado. Rutas, no bytes.</summary>
     private IReadOnlyList<string> _copiadoAlla = [];
@@ -2031,13 +2028,7 @@ public partial class SesionRemota : UserControl
         try { if (Directory.Exists(deposito)) Directory.Delete(deposito, recursive: true); }
         catch (IOException) { }
 
-        _cola.Clear();
-        _transferidos.Clear();
-        _portapapelesAlFinal = true;
-
-        // Una tanda de portapapeles NO es un arrastre: si quedo un punto de una
-        // tanda anterior que no llego a cerrarse, pegaria donde no toca.
-        _pegarEn = null;
+        PrepararTanda(portapapelesAlFinal: true);
 
         // CADA PIEZA A SU SITIO. La ruta relativa la calculo el host desde el
         // padre de la raiz, asi que "Planos6.dwg" cuelga del deposito y
@@ -2100,13 +2091,7 @@ public partial class SesionRemota : UserControl
             return;
         }
 
-        _cola.Clear();
-        _transferidos.Clear();
-        _portapapelesAlFinal = true;
-
-        // Una tanda de portapapeles NO es un arrastre: si quedo un punto de una
-        // tanda anterior que no llego a cerrarse, pegaria donde no toca.
-        _pegarEn = null;
+        PrepararTanda(portapapelesAlFinal: true);
 
         // El deposito es del temporal de ALLA, no de la carpeta que este abierta:
         // pegar no deberia ensuciar el sitio donde el tecnico estuviera mirando.
@@ -2142,7 +2127,7 @@ public partial class SesionRemota : UserControl
     /// </summary>
     private void SiguienteDeLaCola()
     {
-        if (_cola.Count > 0)
+        while (_cola.Count > 0)
         {
             var (remoto, local, bajando) = _cola.Dequeue();
 
@@ -2152,10 +2137,24 @@ public partial class SesionRemota : UserControl
             if (_portapapelesAlFinal)
                 _transferidos.Add(bajando ? local : remoto);
 
-            if (bajando)
-                IniciarBajada(remoto, local);
-            else
-                IniciarSubida(local, remoto);
+            try
+            {
+                if (bajando)
+                    IniciarBajada(remoto, local);
+                else
+                    IniciarSubida(local, remoto);
+            }
+            catch (Exception ex) when (ex is IOException
+                                       or UnauthorizedAccessException
+                                       or System.Security.SecurityException
+                                       or NotSupportedException)
+            {
+                // El archivo puede desaparecer entre el anuncio y su turno, o
+                // ser un placeholder de OneDrive que no se deja abrir. Saltarlo
+                // evita que una sola pieza deje la tanda entera sin Ctrl+V.
+                RegistrarFallo($"{Path.GetFileName(local)}: {ex.Message}");
+                continue;
+            }
 
             Decir(_ultimoEstado + $"   ({_cola.Count} en cola)");
             return;
@@ -2177,7 +2176,12 @@ public partial class SesionRemota : UserControl
         _transferidos.Clear();
 
         if (rutas.Count == 0)
+        {
+            if (_fallosDeLaTanda > 0)
+                Decir(ResumenDeFallos("No se pudo transferir ningun archivo."));
+
             return;
+        }
 
         // Bajando: las rutas son de AQUI y el portapapeles es el de aqui.
         // Subiendo: son de ALLA y hay que pedirle al host que lo ponga el.
@@ -2189,7 +2193,7 @@ public partial class SesionRemota : UserControl
                 lista.AddRange([.. rutas]);
 
                 Clipboard.SetFileDropList(lista);
-                Decir($"{rutas.Count} archivos listos para pegar aqui.");
+                Decir(ResumenDeFallos($"{rutas.Count} archivos listos para pegar aqui."));
             }
             catch (System.Runtime.InteropServices.COMException)
             {
@@ -2224,8 +2228,34 @@ public partial class SesionRemota : UserControl
             return;
         }
 
-        Decir($"{rutas.Count} archivos listos para pegar en la PC remota.");
+        Decir(ResumenDeFallos($"{rutas.Count} archivos listos para pegar en la PC remota."));
     }
+
+    /// <summary>Empieza una tanda sin heredar raices ni errores de la anterior.</summary>
+    private void PrepararTanda(bool portapapelesAlFinal)
+    {
+        _cola.Clear();
+        _transferidos.Clear();
+        _raicesDelDeposito = [];
+        _fallosDeLaTanda = 0;
+        _ultimoFalloDeLaTanda = null;
+        _portapapelesAlFinal = portapapelesAlFinal;
+
+        // Una tanda de portapapeles NO es un arrastre: si quedo un punto de una
+        // tanda anterior que no llego a cerrarse, pegaria donde no toca.
+        _pegarEn = null;
+    }
+
+    private void RegistrarFallo(string detalle)
+    {
+        _fallosDeLaTanda++;
+        _ultimoFalloDeLaTanda = detalle;
+    }
+
+    private string ResumenDeFallos(string mensaje)
+        => _fallosDeLaTanda == 0
+            ? mensaje
+            : $"{mensaje} Se omitieron {_fallosDeLaTanda}; ultimo fallo: {_ultimoFalloDeLaTanda}";
 
     // --------------------------------------------------------------- pantallas
 
