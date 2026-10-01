@@ -2933,16 +2933,7 @@ public partial class SesionRemota : UserControl
             return;
         }
 
-        var (boton, pulsado) = mensaje switch
-        {
-            0x0201 => (MouseButtonId.MouseButtonLeft, true),
-            0x0202 => (MouseButtonId.MouseButtonLeft, false),
-            0x0204 => (MouseButtonId.MouseButtonRight, true),
-            0x0205 => (MouseButtonId.MouseButtonRight, false),
-            0x0207 => (MouseButtonId.MouseButtonMiddle, true),
-            0x0208 => (MouseButtonId.MouseButtonMiddle, false),
-            _ => (MouseButtonId.MouseButtonUnspecified, false)
-        };
+        var (boton, pulsado) = Boton(mensaje);
 
         if (boton == MouseButtonId.MouseButtonUnspecified)
             return;
@@ -2961,6 +2952,28 @@ public partial class SesionRemota : UserControl
             }
         });
     }
+
+    /// <summary>
+    /// Que boton y si se pulsa o se suelta, a partir del mensaje de Win32.
+    ///
+    /// EL DOBLE CLIC ES UNA PULSACION MAS. La ventana del video es de la clase
+    /// "static", que lleva CS_DBLCLKS: Windows convierte el SEGUNDO clic rapido
+    /// en WM_xBUTTONDBLCLK en vez de WM_xBUTTONDOWN. Sin estas tres lineas ese
+    /// segundo clic se perdia y la PC remota recibia pulsar-soltar-soltar: el
+    /// clic suelto funcionaba y el doble -- abrir una carpeta -- no. Se manda
+    /// como pulsacion normal y el doble clic lo detecta Windows alla, por el
+    /// tiempo entre los dos, igual que con un raton de verdad.
+    /// </summary>
+    public static (MouseButtonId Boton, bool Pulsado) Boton(int mensaje) => mensaje switch
+    {
+        0x0201 or 0x0203 => (MouseButtonId.MouseButtonLeft, true),
+        0x0202 => (MouseButtonId.MouseButtonLeft, false),
+        0x0204 or 0x0206 => (MouseButtonId.MouseButtonRight, true),
+        0x0205 => (MouseButtonId.MouseButtonRight, false),
+        0x0207 or 0x0209 => (MouseButtonId.MouseButtonMiddle, true),
+        0x0208 => (MouseButtonId.MouseButtonMiddle, false),
+        _ => (MouseButtonId.MouseButtonUnspecified, false)
+    };
 
     private const int WmMouseMove = 0x0200;
 
