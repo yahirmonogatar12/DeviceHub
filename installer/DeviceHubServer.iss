@@ -238,7 +238,10 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   Codigo: Integer;
 begin
-  if CurStep = ssInstall then
+  { SOLO SI SE INSTALA EL SERVIDOR. Sin la condicion, elegir "Solo el dashboard"
+    paraba y BORRABA el servicio igual: ejecutado en el servidor, dejaba a todos
+    los agentes sin servidor por instalar un dashboard. }
+  if (CurStep = ssInstall) and WizardIsComponentSelected('servidor') then
   begin
     { Soltar el ejecutable antes de sobrescribirlo. }
     Exec(ExpandConstant('{sys}\sc.exe'), 'stop {#ServiceName}', '', SW_HIDE, ewWaitUntilTerminated, Codigo);

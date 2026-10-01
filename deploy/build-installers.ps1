@@ -7,10 +7,11 @@
     .\build-installers.ps1 -Version 1.1.0
 
 .NOTES
-    Salen DOS instaladores, no uno:
+    Salen TRES instaladores, no uno:
 
       DeviceHubAgent-setup-X.Y.Z.exe    ~80 MB   va a decenas de PCs
       DeviceHubServer-setup-X.Y.Z.exe  ~250 MB   servidor y dashboard
+      DeviceHubDashboard-setup-X.Y.Z.exe       solo el dashboard, para la PC del tecnico
 
     Meterlo todo en un archivo obligaria a copiar 250 MB a cada PC de planta para
     instalar un agente de 80.
@@ -109,7 +110,7 @@ Cierra lo que este corriendo desde ahi y reintenta:
 $salida = $Output
 New-Item -ItemType Directory -Force -Path $salida | Out-Null
 
-foreach ($script in 'DeviceHubAgent', 'DeviceHubServer') {
+foreach ($script in 'DeviceHubAgent', 'DeviceHubServer', 'DeviceHubDashboard') {
     Write-Host "Compilando $script..." -ForegroundColor Cyan
 
     # Se borra el .exe anterior antes de compilar. Windows o el antivirus pueden
