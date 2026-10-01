@@ -60,6 +60,39 @@ public static class Expandir
     }
 
     /// <summary>
+    /// Las carpetas de <paramref name="raices"/>, cada raiz incluida, y cada
+    /// una ANTES que las que cuelgan de ella.
+    ///
+    /// La transferencia no las necesita -- se crean al escribir -- pero pegar
+    /// con el Explorador si: lee una lista de entradas y crea las carpetas que
+    /// ve en ella, en orden. Es tambien lo unico que hace viajar una carpeta
+    /// vacia, que <see cref="Todo"/> deja fuera.
+    /// </summary>
+    public static List<string> Carpetas(IEnumerable<string> raices)
+    {
+        var carpetas = new List<string>();
+        var opciones = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
+
+        foreach (var raiz in raices)
+        {
+            var limpia = raiz.TrimEnd(Path.DirectorySeparatorChar);
+
+            // Una unidad entera ("D:\") no tiene nombre con el que colgarla.
+            if (!Directory.Exists(limpia) || Relativa(limpia, limpia) is not { Length: > 0 } propia)
+                continue;
+
+            carpetas.Add(propia);
+
+            // El enumerador devuelve cada carpeta al recorrer su padre, asi que
+            // el padre siempre sale antes.
+            foreach (var carpeta in Directory.EnumerateDirectories(limpia, "*", opciones))
+                carpetas.Add(Relativa(limpia, carpeta));
+        }
+
+        return carpetas;
+    }
+
+    /// <summary>
     /// Todo lo que hay que mover para llevarse <paramref name="raices"/>.
     ///
     /// Una carpeta vacia no produce piezas y por tanto no viaja. Es una perdida

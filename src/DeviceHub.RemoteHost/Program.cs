@@ -9,6 +9,11 @@ using DeviceHub.RemoteHost.Relay;
 // Los modos de diagnostico salen antes de montar nada, igual que --inventory y
 // --metrics en DeviceHub.Agent\Program.cs.
 
+// El ayudante del portapapeles: corre como el USUARIO y es el dueno de lo que
+// se pega con Ctrl+V. Lo arranca la propia sesion; ver AyudanteDePortapapeles.
+if (args.Contains("--portapapeles"))
+    return DeviceHub.RemoteHost.Input.AyudanteDePortapapeles.Correr();
+
 if (args.Contains("--displays"))
 {
     foreach (var linea in DxgiDesktopCapture.Enumerate())

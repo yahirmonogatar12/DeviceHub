@@ -1650,7 +1650,11 @@ public static class RelaySession
                     // solo si el tecnico lo pide.
                     if (archivosCopiados.Count > 0)
                     {
-                        var aviso = new ClipboardFiles();
+                        // A PETICION: el visor pone una promesa en el
+                        // portapapeles del tecnico y pide cada trozo cuando su
+                        // Explorador pega, como RustDesk. Un visor de antes no
+                        // mira este campo y sigue descargando primero.
+                        var aviso = new ClipboardFiles { OnDemand = true };
 
                         // Las RAICES: lo que el tecnico selecciono, que es lo
                         // que acabara en su portapapeles.
@@ -1673,6 +1677,21 @@ public static class RelaySession
 
                             aviso.TotalBytes += pieza.Tamano;
                         }
+
+                        // Las carpetas, para que el Explorador de alla las cree
+                        // aunque esten vacias. En su propio campo: un visor de
+                        // antes trataria cada entrada como un archivo.
+                        aviso.Directories.AddRange(DeviceHub.Archivos.Expandir.Carpetas(archivosCopiados));
+
+                        // Lo que el visor puede pedir. SE ACUMULA: si aqui se
+                        // copia otra cosa mientras alla se esta pegando lo
+                        // anterior, ese pegado sigue pidiendo trozos.
+                        var anunciados = new Dictionary<string, ulong>(_anunciados, StringComparer.OrdinalIgnoreCase);
+
+                        foreach (var pieza in aviso.Entries)
+                            anunciados[pieza.Path] = pieza.Size;
+
+                        _anunciados = anunciados;
 
                         Fiable(salida, new RemotePacket
                         {
@@ -3459,6 +3478,11 @@ public static class RelaySession
         }
     }
 
+    /// <summary>Lo que se copio aqui y se anuncio al visor: ruta y tamano. Es lo
+    /// unico que su Explorador puede pedir a trozos. Se sustituye entera, nunca
+    /// se toca en sitio: la escribe el hilo de captura y la lee el de red.</summary>
+    private static volatile Dictionary<string, ulong> _anunciados = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Subidas en curso. Una por sesion, y la sesion es el proceso.</summary>
     private static readonly Files.FileService _archivos = new();
 
@@ -3570,6 +3594,15 @@ public static class RelaySession
             // cola propia para archivos, no quitar la espera.
             void Suelto(RemotePacket salida)
                 => EscribirAsync(llamada, salida, cancelacion.Token).GetAwaiter().GetResult();
+
+            // Las peticiones del Explorador al pegar salen por ESTE stream: tras
+            // un microcorte, el de antes ya no lleva a ningun sitio.
+            Input.AyudanteDePortapapeles.Enviar = peticion =>
+            {
+                peticion.ProtocolVersion = RemoteSessionProtocol.Version;
+                peticion.SessionId = opciones.SesionId;
+                Suelto(peticion);
+            };
 
             while (await llamada.ResponseStream.MoveNext(cancelacion.Token))
             {
@@ -3703,6 +3736,30 @@ public static class RelaySession
 
                         break;
 
+                    case RemotePacket.PayloadOneofCase.FileAck:
+                        // El Explorador del TECNICO pegando lo copiado aqui:
+                        // pide un trozo desde un byte. Solo de lo anunciado, y
+                        // fuera del hilo de red, como las descargas.
+                        if (_anunciados.TryGetValue(paquete.FileAck.Path, out var total))
+                        {
+                            var pedido = paquete.FileAck;
+
+                            _ = Task.Run(() => Suelto(new RemotePacket
+                            {
+                                ProtocolVersion = RemoteSessionProtocol.Version,
+                                SessionId = opciones.SesionId,
+                                FileChunk = DeviceHub.Archivos.TrozoDeArchivo.Leer(pedido.Path, pedido.Received, total)
+                            }), cancelacion.Token);
+                        }
+
+                        break;
+
+                    case RemotePacket.PayloadOneofCase.FileChunk
+                        when Input.AyudanteDePortapapeles.Entregar(paquete.FileChunk):
+                        // Un trozo que pidio el Explorador al pegar: ya va
+                        // camino del ayudante, no es una subida.
+                        break;
+
                     case RemotePacket.PayloadOneofCase.FileChunk:
                         // Una subida. Se escribe aqui mismo: es E/S con bufer y
                         // el acuse tiene que salir pegado al trozo, porque es lo
@@ -3771,7 +3828,14 @@ public static class RelaySession
 
                     case RemotePacket.PayloadOneofCase.ClipboardFiles:
                         // Anuncio del visor: el tecnico copio archivos en SU PC.
-                        // No se hace nada hasta que decida traerlos.
+                        // Se pone la promesa en el portapapeles de aqui y el
+                        // Ctrl+V del Explorador los trae. AQUI y esperando, no en
+                        // otro hilo: el Ctrl+V viene detras en este mismo stream
+                        // y no puede llegar antes que la promesa.
+                        // Avisar y no solo Escribir: es la confirmacion que ve el
+                        // tecnico. El visor no dice nada al anunciar, porque un
+                        // host de antes ignoraria el anuncio.
+                        Avisar(opciones, Input.AyudanteDePortapapeles.Ofrecer(paquete.ClipboardFiles));
                         break;
 
                     case RemotePacket.PayloadOneofCase.PasteAt:

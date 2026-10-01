@@ -178,6 +178,14 @@ public partial class SesionRemota : UserControl
 
         Desactivar();
 
+        // LA PROMESA SE VA CON LA SESION. Sin nadie que sirva los trozos, un
+        // Ctrl+V despues de cerrar la pestana esperaria 30 s por archivo y
+        // acabaria en error.
+        foreach (var esperando in _pedidosAlla.Values)
+            esperando.TrySetResult(new FileChunk { Error = "La sesion remota se cerro." });
+
+        _portapapelesLocal?.Cerrar();
+
         // El dispositivo de sonido se suelta AQUI. Un IAudioClient vivo sigue
         // reservado en el motor de audio de Windows aunque nadie escriba en el,
         // y con varias pestañas abiertas y cerradas eso se acumula.
@@ -990,11 +998,25 @@ public partial class SesionRemota : UserControl
                         break;
 
                     case RemotePacket.PayloadOneofCase.FileChunk:
-                        RecibirTrozo(paquete.FileChunk);
+                        // Un trozo que pidio el Explorador de aqui al pegar va a
+                        // quien lo espera; cualquier otro es una descarga.
+                        if (_pedidosAlla.TryRemove(paquete.FileChunk.Path, out var esperando))
+                            esperando.TrySetResult(paquete.FileChunk);
+                        else
+                            RecibirTrozo(paquete.FileChunk);
+
                         break;
 
                     case RemotePacket.PayloadOneofCase.FileAck:
-                        RecibirAcuse(paquete.FileAck);
+                        // Dos cosas viajan como acuse: el de una subida en curso,
+                        // y la PETICION de un trozo de lo copiado aqui -- el
+                        // Explorador de alla pegando con Ctrl+V. Manda la subida.
+                        if ((_subiendo is not null && paquete.FileAck.Path == _destinoRemoto)
+                            || !ServirOfrecido(paquete.FileAck))
+                        {
+                            RecibirAcuse(paquete.FileAck);
+                        }
+
                         break;
 
                     // El motivo se AÑADE al informe, no lo sustituye. Reemplazarlo
@@ -1966,6 +1988,27 @@ public partial class SesionRemota : UserControl
             // remota sin ningun aviso.
             _gestor?.HayCopiadoAlla(_copiadoAlla.Count > 0);
 
+            // COMO RUSTDESK: si el host sirve a peticion, aqui solo se pone la
+            // promesa y el Ctrl+V del Explorador trae cada archivo al pegar.
+            // Sin tope de tamano: no se mueve un byte hasta que alguien pega, asi
+            // que copiar 4 GB alla ya no es una descarga sorpresa.
+            if (aviso.OnDemand && aviso.Entries.Count + aviso.Directories.Count > 0)
+            {
+                _portapapelesLocal ??= new DeviceHub.Archivos.PortapapelesVirtual(PedirAlla);
+
+                if (_portapapelesLocal.Ofrecer(aviso) is { } error)
+                {
+                    Nota($"No se pudo preparar el pegado ({error}). Abre archivos y pulsa Traer.");
+                    return;
+                }
+
+                Nota($"{aviso.Entries.Count} archivo(s) copiados alla ({Tamano(aviso.TotalBytes)}): " +
+                     "pega con Ctrl+V aqui.");
+                return;
+            }
+
+            // Un host de antes: hay que traerlo todo primero.
+
             // LO PEQUENO SE TRAE SOLO. Ctrl+C alla, Ctrl+V aqui, y ya esta.
             //
             // El boton existia por una razon buena -- copiar 4 GB con Ctrl+C es
@@ -2193,6 +2236,11 @@ public partial class SesionRemota : UserControl
                 lista.AddRange([.. rutas]);
 
                 Clipboard.SetFileDropList(lista);
+
+                // Lo que acaba de llegar de alla no se le vuelve a anunciar
+                // como copia nueva al recuperar el foco.
+                _secuenciaAnunciada = GetClipboardSequenceNumber();
+
                 Decir(ResumenDeFallos($"{rutas.Count} archivos listos para pegar aqui."));
             }
             catch (System.Runtime.InteropServices.COMException)
@@ -2400,6 +2448,15 @@ public partial class SesionRemota : UserControl
     {
         try
         {
+            // LOS ARCHIVOS ANTES QUE EL TEXTO, igual que en el host: al copiar en
+            // el Explorador pueden venir tambien los nombres como texto, y
+            // mandarlos le pisaria alla los archivos recien anunciados.
+            if (Clipboard.ContainsFileDropList())
+            {
+                AnunciarArchivosLocales();
+                return;
+            }
+
             if (!Clipboard.ContainsText())
                 return;
 
@@ -2427,6 +2484,152 @@ public partial class SesionRemota : UserControl
             // la sesion: se reintenta la proxima vez que la ventana se active.
         }
     }
+
+    // ------------------------------- copiar aqui, pegar alla (como RustDesk)
+
+    /// <summary>
+    /// Anuncia a la PC remota los archivos copiados aqui, y con eso basta: alla
+    /// queda una promesa en el portapapeles, y el Ctrl+V del Explorador pide
+    /// cada archivo a trozos (ver PortapapelesVirtual en RemoteHost). No se sube
+    /// nada hasta que alguien pega.
+    ///
+    /// Solo si el portapapeles CAMBIO desde el ultimo anuncio. Si no, cada vez
+    /// que el visor recupera el foco se volveria a anunciar lo mismo, y se le
+    /// pisaria a la PC remota lo que hubieran copiado alla mientras tanto.
+    /// </summary>
+    private void AnunciarArchivosLocales()
+    {
+        var secuencia = GetClipboardSequenceNumber();
+
+        if (secuencia == _secuenciaAnunciada)
+            return;
+
+        _secuenciaAnunciada = secuencia;
+
+        var raices = Clipboard.GetFileDropList().Cast<string>()
+            .Where(r => File.Exists(r) || Directory.Exists(r))
+            .ToList();
+
+        if (raices.Count == 0)
+            return;
+
+        var carpetas = DeviceHub.Archivos.Expandir.Carpetas(raices);
+        var archivos = DeviceHub.Archivos.Expandir.Todo(raices);
+
+        if (carpetas.Count + archivos.Count > MaxOfrecidos)
+        {
+            Nota($"Hay {archivos.Count} archivos copiados: demasiados para pegarlos con Ctrl+V. " +
+                 "Usa Llevar en el gestor de archivos.");
+            return;
+        }
+
+        var aviso = new ClipboardFiles { OnDemand = true };
+        aviso.Paths.AddRange(raices);
+        aviso.Directories.AddRange(carpetas);
+
+        // SE ACUMULA, no se sustituye: si el tecnico copia otra cosa mientras
+        // alla todavia se esta pegando lo anterior, ese pegado sigue pidiendo
+        // trozos de lo de antes y no puede quedarse sin respuesta.
+        var ofrecidos = new Dictionary<string, ulong>(_ofrecidos, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var archivo in archivos)
+        {
+            aviso.Entries.Add(new ClipboardEntry
+            {
+                Path = archivo.Ruta,
+                Relative = archivo.Relativa,
+                Size = archivo.Tamano
+            });
+
+            aviso.TotalBytes += archivo.Tamano;
+            ofrecidos[archivo.Ruta] = archivo.Tamano;
+        }
+
+        _ofrecidos = ofrecidos;
+
+        // Sin aviso aqui: lo da el host cuando la promesa YA esta puesta
+        // ("listos para pegar con Ctrl+V"). Un host de antes ignora el anuncio,
+        // y decir "pega con Ctrl+V" seria prometer algo que alla no pasa.
+        Encolar(new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = _sesion,
+            ClipboardFiles = aviso
+        });
+    }
+
+    /// <summary>
+    /// Un trozo de lo anunciado, para el Explorador de alla que esta pegando.
+    ///
+    /// SOLO DE LO ANUNCIADO. La peticion trae una ruta de ESTA PC; sin la lista,
+    /// un host comprometido podria pedir cualquier archivo del tecnico. False
+    /// si la ruta no es de las ofrecidas, y entonces el acuse es otra cosa.
+    /// </summary>
+    private bool ServirOfrecido(FileAck peticion)
+    {
+        if (!_ofrecidos.TryGetValue(peticion.Path, out var tamano))
+            return false;
+
+        // Fuera del hilo de red: leer del disco aqui frenaria el video mientras
+        // dura el pegado.
+        _ = Task.Run(() => Encolar(new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = _sesion,
+            FileChunk = DeviceHub.Archivos.TrozoDeArchivo.Leer(peticion.Path, peticion.Received, tamano)
+        }));
+
+        return true;
+    }
+
+    /// <summary>
+    /// Un trozo de lo copiado alla, para el Explorador de aqui que esta pegando.
+    /// Se pide con un FileAck -- "mandame desde este byte", lo mismo que hace el
+    /// host en el otro sentido -- y el host contesta con el FileChunk.
+    ///
+    /// Lo llama el hilo de la promesa, nunca el de interfaz: esperar aqui al
+    /// trozo no congela el video.
+    /// </summary>
+    private FileChunk PedirAlla(string ruta, ulong desde)
+    {
+        var espera = new TaskCompletionSource<FileChunk>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pedidosAlla[ruta] = espera;
+
+        Encolar(new RemotePacket
+        {
+            ProtocolVersion = RemoteSessionProtocol.Version,
+            SessionId = _sesion,
+            FileAck = new FileAck { Path = ruta, Received = desde }
+        });
+
+        return espera.Task.Wait(TimeSpan.FromSeconds(30))
+            ? espera.Task.Result
+            : new FileChunk { Path = ruta, Offset = desde, Error = "La PC remota no contesto." };
+    }
+
+    /// <summary>Trozos pedidos a la PC remota y todavia sin llegar, por ruta de
+    /// alla. El Explorador lee cada archivo en orden: uno por ruta a la vez.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<FileChunk>>
+        _pedidosAlla = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>La promesa de lo copiado alla. Se crea con el primer anuncio.</summary>
+    private DeviceHub.Archivos.PortapapelesVirtual? _portapapelesLocal;
+
+    /// <summary>El portapapeles de aqui cuando se anuncio por ultima vez.</summary>
+    private uint _secuenciaAnunciada;
+
+    /// <summary>Lo unico que la PC remota puede pedir: ruta de aqui y tamano
+    /// anunciado, de todo lo anunciado en esta sesion. Se sustituye por una
+    /// copia ampliada en cada anuncio; nunca se modifica en sitio, porque la lee
+    /// el hilo de red.</summary>
+    private volatile Dictionary<string, ulong> _ofrecidos = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Piezas por anuncio. El anuncio es UN mensaje y gRPC corta en
+    /// 4 MB: 20 000 rutas caben con holgura.</summary>
+    private const int MaxOfrecidos = 20_000;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint GetClipboardSequenceNumber();
 
     /// <summary>Lo que copiaron en la PC remota, en el portapapeles de aqui.</summary>
     private void RecibirPortapapeles(string texto)

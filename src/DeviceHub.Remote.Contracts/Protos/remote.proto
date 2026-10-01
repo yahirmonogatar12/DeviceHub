@@ -249,6 +249,22 @@ message ClipboardFiles {
   // que acaba en el portapapeles del otro lado. Un host viejo no manda esto y
   // el receptor cae en el comportamiento de antes: archivos sueltos.
   repeated ClipboardEntry entries = 4;
+
+  // Quien anuncia sirve los trozos A PETICION: el otro lado puede poner una
+  // promesa en su portapapeles y pedir cada trozo con un FileAck {path,
+  // received=desde} cuando el Explorador pegue, como RustDesk. Sin esto -- un
+  // host de antes -- hay que traerlo todo primero.
+  bool on_demand = 5;
+
+  // Las CARPETAS, relativas como `entries`, cada una antes que las que cuelgan
+  // de ella. El Explorador pega leyendo una lista de entradas y crea cada
+  // carpeta que ve en ella; sin esto una carpeta vacia no llegaria, porque no
+  // tiene archivos que la arrastren.
+  //
+  // Aparte y no mezcladas en `entries` a proposito: un visor de antes trata
+  // cada entrada como un archivo que descargar, y con carpetas dentro las
+  // pediria y fallarian.
+  repeated string directories = 6;
 }
 
 message ClipboardEntry {
