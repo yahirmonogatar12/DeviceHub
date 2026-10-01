@@ -154,6 +154,16 @@ public partial class ConsolaWindow : Window
         _mosaico = false;
         Seleccionar(pestana);
 
+        // LA VENTANA DEL VIDEO SE CREA YA, no en la proxima pasada de layout.
+        //
+        // El video vive dentro de un ScrollViewer, y su plantilla -- y con ella
+        // el HWND -- solo se monta cuando se mide. Si llega otra sesion antes de
+        // esa pasada, esta queda oculta sin haberse medido nunca: sin HWND no
+        // conectaba. Le pasaba a la primera de cada tanda, la que se abre
+        // mientras el visor todavia esta arrancando; las demas llegaban con la
+        // ventana ya pintada.
+        UpdateLayout();
+
         // Al frente: el tecnico acaba de pulsar CONTROLAR PC en el dashboard, y
         // si la consola se queda detras parece que no paso nada.
         if (WindowState == WindowState.Minimized)

@@ -78,6 +78,9 @@ public partial class SesionRemota : UserControl
     /// mismo proceso serian dos hilos leyendo la misma tuberia, y el ticket de
     /// una acabaria en la otra.
     /// </param>
+    /// <summary>1 en cuanto arranca el hilo de la conexion. Ver el Loaded del constructor.</summary>
+    private int _arrancada;
+
     public SesionRemota(
         string servidor, string sesion, string machineId, bool permitirSinConfianza,
         string pin = "", string? ticket = null, string? titulo = null)
@@ -97,11 +100,20 @@ public partial class SesionRemota : UserControl
         // pestañas -- y el segundo no se sabe hasta que el host conteste.
         Titulo = string.IsNullOrWhiteSpace(titulo) ? Corto(sesion) : titulo;
 
-        Loaded += (_, _) => new Thread(Ejecutar)
+        // UNA vez. Loaded se repite cada vez que el control sale y vuelve al
+        // arbol -- reordenar una pestaña arrastrandola lo hace -- y cada
+        // repeticion arrancaba OTRO hilo con otra conexion para la misma sesion.
+        Loaded += (_, _) =>
         {
-            IsBackground = true,
-            Name = "devicehub-relay-viewer"
-        }.Start();
+            if (Interlocked.Exchange(ref _arrancada, 1) == 1)
+                return;
+
+            new Thread(Ejecutar)
+            {
+                IsBackground = true,
+                Name = "devicehub-relay-viewer"
+            }.Start();
+        };
 
         // Del WndProc de la ventana hija, no de los eventos de WPF: el video se
         // dibuja en una ventana Win32 encima del arbol visual, y los mensajes del
@@ -416,11 +428,19 @@ public partial class SesionRemota : UserControl
         using var intento = CancellationTokenSource.CreateLinkedTokenSource(_cancelacion.Token);
         var hwnd = Video.WaitForWindow(TimeSpan.FromSeconds(5));
 
-        if (hwnd == IntPtr.Zero)
+        // NO SE RINDE. Antes se mostraba "la superficie de video no llego a
+        // crearse" y la sesion se quedaba asi para siempre, sin reintentar: la
+        // unica salida era cerrar la pestaña y volver a abrirla. Si el HWND llega
+        // tarde -- una pestaña que no se ha llegado a mostrar --, se sigue
+        // esperando y se conecta en cuanto exista.
+        while (hwnd == IntPtr.Zero && !intento.IsCancellationRequested)
         {
-            Mostrar("La superficie de video no llego a crearse.");
-            return;
+            Mostrar("Esperando a que se cree la ventana del video...");
+            hwnd = Video.WaitForWindow(TimeSpan.FromSeconds(1));
         }
+
+        if (hwnd == IntPtr.Zero)
+            return;
 
         var opciones = new GrpcChannelOptions();
 
