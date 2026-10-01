@@ -13,12 +13,14 @@ namespace DeviceHub.Dashboard;
 public sealed partial class MainViewModel : ObservableObject
 {
     private readonly DeviceHubClient _client;
+    private readonly Actualizacion _actualizacion;
     private readonly DispatcherTimer _clock;
     private CancellationTokenSource? _watch;
 
     public MainViewModel(DeviceHubClient client)
     {
         _client = client;
+        _actualizacion = new Actualizacion(client);
 
         MachinesView = CollectionViewSource.GetDefaultView(Machines);
         MachinesView.Filter = MatchesFilter;
@@ -397,6 +399,96 @@ public sealed partial class MainViewModel : ObservableObject
 
         _watch = new CancellationTokenSource();
         _ = WatchAsync(_watch.Token);
+
+        _ = AvisarSiHayNuevaAsync();
+    }
+
+    /// <summary>La version nueva publicada, si la hay. Vacio = al dia.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TextoActualizar))]
+    private string _versionNueva = string.Empty;
+
+    public string TextoActualizar => VersionNueva.Length == 0 ? "Actualizar" : $"Actualizar a {VersionNueva}";
+
+    /// <summary>
+    /// Al entrar se mira, sin preguntar ni instalar nada: solo cambia el boton
+    /// a "Actualizar a X". Asi el tecnico se entera de que hay arreglos
+    /// publicados sin que nadie tenga que decirselo.
+    /// </summary>
+    private async Task AvisarSiHayNuevaAsync()
+    {
+        try
+        {
+            if (await _actualizacion.BuscarAsync(CancellationToken.None) is { } nueva)
+                VersionNueva = nueva.Version;
+        }
+        catch (Exception)
+        {
+            // Sin servidor de actualizaciones no es un fallo para quien solo
+            // quiere entrar: el boton sigue ahi para preguntar a mano.
+        }
+    }
+
+    [RelayCommand]
+    private async Task ActualizarAsync()
+    {
+        Actualizacion.Manifiesto? nueva;
+
+        try
+        {
+            nueva = await _actualizacion.BuscarAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"No se pudo consultar el servidor de actualizaciones:\n{ex.Message}",
+                "Actualizar", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        if (nueva is null)
+        {
+            VersionNueva = string.Empty;
+            MessageBox.Show($"El dashboard esta al dia ({Actualizacion.Actual.ToString(3)}).",
+                "Actualizar", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        // Las sesiones remotas son OTRO proceso, el visor, que comparte carpeta
+        // con el dashboard: tambien hay que cerrarlo para sobrescribirlo. Mejor
+        // decirlo antes que cortarle a alguien una sesion a mitad.
+        var conSesiones = System.Diagnostics.Process.GetProcessesByName("DeviceHub.RemoteViewer").Length > 0;
+
+        var respuesta = MessageBox.Show(
+            $"Hay una version nueva del dashboard: {nueva.Version} (tienes {Actualizacion.Actual.ToString(3)}).\n\n" +
+            $"Se cerrara el dashboard{(conSesiones ? " Y LAS SESIONES REMOTAS ABIERTAS" : string.Empty)}, " +
+            "se instalara la nueva y se volvera a abrir sola. Windows pedira permiso.\n\nActualizar ahora?",
+            "Actualizar", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+        if (respuesta != MessageBoxResult.Yes)
+            return;
+
+        IsBusy = true;
+        StatusMessage = $"Bajando la version {nueva.Version}...";
+
+        try
+        {
+            if (await _actualizacion.InstalarAsync(nueva, CancellationToken.None) is { } motivo)
+            {
+                StatusMessage = motivo;
+                return;
+            }
+
+            // El script espera a que este proceso se cierre para sobrescribirlo.
+            Application.Current.Shutdown();
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"No se pudo actualizar: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
     }
 
     /// <summary>

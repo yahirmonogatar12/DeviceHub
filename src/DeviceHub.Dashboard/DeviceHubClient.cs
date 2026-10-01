@@ -87,6 +87,45 @@ public sealed class DeviceHubClient : IDisposable
     /// vive en ese puerto: no hay que configurar nada aparte.</summary>
     public string ServerAddress => $"https://{_settings.ServerHost}:{_settings.ServerPort}";
 
+    private HttpClient? _http;
+
+    /// <summary>
+    /// Para bajar archivos del servidor -- las actualizaciones del propio
+    /// dashboard -- por el MISMO puerto y validando el MISMO pin que el resto.
+    /// Un segundo transporte (el recurso SMB) seria otra forma de fallar: es lo
+    /// que le paso al agente, que paso meses sin poder leerlo.
+    /// </summary>
+    private HttpClient Http => _http ??= new HttpClient(new SocketsHttpHandler
+    {
+        SslOptions = new SslClientAuthenticationOptions
+        {
+            RemoteCertificateValidationCallback = (_, certificate, _, _) =>
+            {
+                if (certificate is null)
+                    return false;
+
+                if (string.IsNullOrWhiteSpace(_settings.ServerPin))
+                    return true;
+
+                using var cert = X509CertificateLoader.LoadCertificate(certificate.GetRawCertData());
+                return PublicKeyPin.Compute(cert) == _settings.ServerPin;
+            }
+        }
+    })
+    {
+        BaseAddress = new Uri(ServerAddress),
+        Timeout = TimeSpan.FromMinutes(10)
+    };
+
+    public Task<string> BajarTextoAsync(string ruta, CancellationToken ct) => Http.GetStringAsync(ruta, ct);
+
+    public async Task BajarAArchivoAsync(string ruta, string destino, CancellationToken ct)
+    {
+        await using var origen = await Http.GetStreamAsync(ruta, ct);
+        await using var archivo = File.Create(destino);
+        await origen.CopyToAsync(archivo, ct);
+    }
+
     /// <summary>El pin con el que ESTE dashboard valida al servidor. Se le pasa
     /// al visor para que valide igual: no es secreto, es el hash de una clave
     /// publica.</summary>
@@ -281,5 +320,9 @@ public sealed class DeviceHubClient : IDisposable
     public Task<CommandList> ListCommandsAsync(string machineId, CancellationToken ct)
         => _client.ListCommandsAsync(new MachineRef { MachineId = machineId }, _auth, cancellationToken: ct).ResponseAsync;
 
-    public void Dispose() => _channel.Dispose();
+    public void Dispose()
+    {
+        _channel.Dispose();
+        _http?.Dispose();
+    }
 }
