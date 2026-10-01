@@ -264,6 +264,12 @@ public sealed class UpdateService(
                 Move-Item $instalado $respaldo
                 Move-Item $nuevo $instalado
 
+                # MOVER CONSERVA LA ACL DE ORIGEN, y el origen es el temporal de
+                # SYSTEM, que solo abre SYSTEM. Sin esto la carpeta quedaba
+                # ilegible para los usuarios, y el ayudante del portapapeles de
+                # RemoteHost -- que corre como el usuario -- no arrancaba.
+                & icacls $instalado /reset /T /C /Q | Out-Null
+
                 # LA CONFIGURACION ES DE ESTA PC, y el paquete no la trae a
                 # proposito: publish-update.ps1 la quita para no pisar el
                 # servidor ni el codigo de enrolamiento de cada maquina.

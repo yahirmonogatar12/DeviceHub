@@ -40,6 +40,11 @@ public sealed class Worker(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Antes que nada: una actualizacion pudo dejar la carpeta solo para
+        // SYSTEM, y el ayudante del portapapeles de las sesiones remotas corre
+        // como el usuario.
+        Updater.PermisosDeLaInstalacion.Reparar(logger);
+
         _identity = identityStore.Load();
 
         // El instalador puede traer el pin del servidor. Solo siembra: una vez que
