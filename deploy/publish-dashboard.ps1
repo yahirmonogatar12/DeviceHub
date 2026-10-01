@@ -46,7 +46,9 @@ if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
 foreach ($proyecto in @('DeviceHub.Dashboard', 'DeviceHub.RemoteViewer')) {
     Write-Host "Publicando $proyecto $Version..." -ForegroundColor Cyan
 
-    dotnet publish "$root\src\$proyecto" `
+    # El .csproj explicito: un build de WPF interrumpido deja un *_wpftmp.csproj
+    # al lado, y con dos proyectos en la carpeta dotnet se niega a elegir.
+    dotnet publish "$root\src\$proyecto\$proyecto.csproj" `
         --configuration Release --runtime win-x64 --self-contained true `
         -p:Version=$Version --output $staging --nologo -v q
 
