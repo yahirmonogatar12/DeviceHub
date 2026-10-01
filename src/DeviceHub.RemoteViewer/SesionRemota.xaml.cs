@@ -498,6 +498,15 @@ public partial class SesionRemota : UserControl
         // existen.
         _salida.Reiniciar();
 
+        // Y CON ELLO EL PORTAPAPELES QUE SE HUBIERA ANUNCIADO. La ventana se
+        // activa al abrirse, ANTES de que esto conecte: lo copiado antes de abrir
+        // la sesion se anunciaba, se tiraba aqui mismo y quedaba marcado como
+        // ya enviado -- Ctrl+V alla no encontraba nada y no habia forma de que
+        // se volviera a mandar. Olvidar las marcas hace que el siguiente Ctrl+V
+        // o la siguiente activacion lo manden de nuevo.
+        _secuenciaAnunciada = 0;
+        _ultimoPortapapeles = null;
+
         // Por aqui sale el adios. Ver Despedirse().
         _adios = llamada.RequestStream;
 
@@ -3026,6 +3035,16 @@ public partial class SesionRemota : UserControl
             e.Handled = true;
             return;
         }
+
+        // CTRL+V MIRA EL PORTAPAPELES ANTES DE IRSE. Es el momento en que el
+        // tecnico quiere pegar lo de aqui, y no depender solo de activar la
+        // ventana cierra los huecos de ese camino: un anuncio que se perdio al
+        // conectar, o una ventana que ya estaba activa. Solo manda algo si el
+        // portapapeles cambio desde el ultimo anuncio, y sale por la misma cola
+        // POR DELANTE de la tecla, asi que alla la promesa ya esta puesta
+        // cuando llega el Ctrl+V.
+        if (pulsada && tecla == Key.V && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+            EnviarPortapapeles(this, EventArgs.Empty);
 
         var vk = KeyInterop.VirtualKeyFromKey(tecla);
 
