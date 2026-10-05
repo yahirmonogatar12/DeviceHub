@@ -92,6 +92,11 @@ public static class RelaySession
 
         MediaFactory.MFStartup(true).CheckError();
 
+        // LA PANTALLA DE ALLA NO SE APAGA mientras alguien la esta mirando. Con
+        // la pantalla en ahorro de energia DXGI no presenta nada, y eso era lo
+        // que congelaba la primera entrada. Ver Capture.PantallaDespierta.
+        Capture.PantallaDespierta.Mientras(cancellationToken);
+
         // EL RELOJ DE WINDOWS, A UN MILISEGUNDO.
         //
         // Por defecto el temporizador del sistema tiene una granularidad de
@@ -1866,6 +1871,10 @@ public static class RelaySession
 
             var ultimoFrame = Stopwatch.GetTimestamp();
 
+            // Cuando se vuelve a probar DXGI si esta pantalla cayo en GDI.
+            var proximoDxgi = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 5;
+            var esperaDxgi = 5;
+
             // Cuando se codifico algo por ultima vez, para el suelo de imagen.
             var ultimoCodificado = 0L;
             var bitrateActual = 0;
@@ -2060,6 +2069,26 @@ public static class RelaySession
                         ultimoFrame = Stopwatch.GetTimestamp();
                         continue;
                     }
+                }
+
+                // DE VUELTA A DXGI EN CUANTO SE PUEDA. Ver Recuperar.
+                //
+                // Solo en el escritorio normal: en Winlogon GDI es lo que hay. Y
+                // con espera creciente hasta 20 s, porque en una PC donde DXGI
+                // no funciona nunca cada intento son 300 ms sin capturar.
+                if (flujo.Captura is Capture.GdiDesktopCapture
+                    && string.Equals(_escritorio, InputDesktop.Normal, StringComparison.OrdinalIgnoreCase)
+                    && Stopwatch.GetTimestamp() >= proximoDxgi)
+                {
+                    if (Recuperar(flujo, opciones, cuenta))
+                    {
+                        esperaDxgi = 5;
+                        ultimoFrame = Stopwatch.GetTimestamp();
+                        continue;
+                    }
+
+                    proximoDxgi = Stopwatch.GetTimestamp() + Stopwatch.Frequency * esperaDxgi;
+                    esperaDxgi = Math.Min(esperaDxgi * 2, 20);
                 }
 
                 // El frame DXGI se suelta ANTES de esperar por nada. Encolar
@@ -3211,6 +3240,70 @@ public static class RelaySession
         catch (Exception ex)
         {
             Avisar(opciones, $"El respaldo GDI de la pantalla {flujo.DisplayId} tampoco pudo: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// De GDI otra vez a DXGI, en cuanto DXGI vuelve a dar imagen.
+    ///
+    /// Relevar era para siempre, y eso dejaba sesiones enteras CONGELADAS: al
+    /// entrar la primera vez, con la pantalla de alla apagada por ahorro de
+    /// energia o sin nada que presentar, DXGI no daba su primer frame en 3 s, se
+    /// relevaba por GDI y ahi se quedaba -- con la imagen de antes. Cerrar y
+    /// volver a entrar lo arreglaba porque el RemoteHost nuevo probaba DXGI de
+    /// cero con la pantalla ya despierta. Esto es lo mismo, sin cerrar nada.
+    ///
+    /// Que ENTREGUE un frame, no que se deje crear: el fallo que se cura es
+    /// justo una duplicacion que existe y no da imagen.
+    /// </summary>
+    private static bool Recuperar(Flujo flujo, RelayOptions opciones, Contadores cuenta)
+    {
+        Capture.DxgiDesktopCapture? dxgi = null;
+
+        try
+        {
+            dxgi = new Capture.DxgiDesktopCapture(
+                flujo.Info?.AdapterIndex ?? opciones.Adapter,
+                flujo.Info?.OutputIndex ?? opciones.Output)
+            {
+                EsperaMs = 300
+            };
+
+            using (var prueba = dxgi.CaptureAsync(CancellationToken.None).GetAwaiter().GetResult())
+            {
+                if (prueba is null)
+                {
+                    dxgi.Dispose();
+                    return false;
+                }
+            }
+
+            var codificador = Codificar(
+                dxgi.Device, dxgi.Width, dxgi.Height, dxgi.AdapterLuid, dxgi.AdapterVendorId, opciones);
+
+            var anterior = flujo.Captura;
+            var anteriorCodificador = flujo.Codificador;
+
+            flujo.Captura = dxgi;
+            flujo.Codificador = codificador;
+            flujo.Version = SiguienteVersion(cuenta);
+            flujo.ConfigEnviada = false;
+            flujo.Relevada = false;
+            flujo.Arranco = true;
+
+            anteriorCodificador.Dispose();
+            anterior.Dispose();
+
+            _comoSeCaptura = Etiqueta(dxgi);
+
+            Avisar(opciones, $"Pantalla {flujo.DisplayId} de vuelta en DXGI: {dxgi.Width}x{dxgi.Height}");
+            return true;
+        }
+        catch (Exception)
+        {
+            // Sigue sin poder: se queda en GDI y se vuelve a probar mas tarde.
+            dxgi?.Dispose();
             return false;
         }
     }
