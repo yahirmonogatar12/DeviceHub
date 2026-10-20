@@ -1918,16 +1918,45 @@ public partial class RelayWindow : Window
 
         _ultimoPortapapeles = texto;
 
-        Dispatcher.BeginInvoke(() =>
+        Dispatcher.BeginInvoke(() => PonerPortapapeles(texto, intento: 1));
+    }
+
+    /// <summary>
+    /// Lo copiado en la PC remota, en el portapapeles de aqui. CON REINTENTOS y
+    /// diciendo lo que paso.
+    ///
+    /// Antes era un intento y un catch vacio. Si el portapapeles local estaba
+    /// ocupado -- el historial de Windows, un gestor de portapapeles, Office --
+    /// la copia se perdia sin rastro. Desde aqui no habia
+    /// forma de saber si el texto llego y no se pudo poner, o no llego nunca.
+    /// Ahora la barra lo dice en los dos casos.
+    /// </summary>
+    private void PonerPortapapeles(string texto, int intento)
+    {
+        try
         {
-            try
+            Clipboard.SetText(texto);
+            Nota($"Copiado de la PC remota: {texto.Length} caracteres.");
+        }
+        catch (System.Runtime.InteropServices.ExternalException ex)
+        {
+            // Lo mas nuevo gana: si mientras se reintentaba llego otra copia,
+            // esta ya no es la que el tecnico quiere pegar.
+            if (texto != _ultimoPortapapeles)
+                return;
+
+            if (intento < 5)
             {
-                Clipboard.SetText(texto);
+                _ = Task.Delay(200 * intento).ContinueWith(
+                    _ => Dispatcher.BeginInvoke(() => PonerPortapapeles(texto, intento + 1)));
+                return;
             }
-            catch (System.Runtime.InteropServices.COMException)
-            {
-            }
-        });
+
+            // `_ultimoPortapapeles` NO se olvida: con el vacio, la proxima vez
+            // que la ventana se active mandaria lo viejo de aqui y pisaria lo
+            // que el tecnico acaba de copiar alla.
+            Nota($"Llego lo copiado en la PC remota, pero el portapapeles de esta PC esta ocupado: {ex.Message}");
+        }
     }
 
     private void Nota(string texto)

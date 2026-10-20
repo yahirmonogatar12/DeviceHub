@@ -1125,6 +1125,12 @@ public static class RelaySession
 
                     var (copiado, archivosCopiados) = ClipboardBridge.LeerSiCambio();
 
+                    // Si lo copiado aqui no puede salir, que el tecnico lo lea en
+                    // su barra. Antes fallaba en silencio y la unica pista era
+                    // que "de alla para aca no copia".
+                    if (ClipboardBridge.TomarAviso() is { } avisoPortapapeles)
+                        Avisar(opciones, avisoPortapapeles);
+
                     if (copiado is not null)
                     {
                         // Lo copiado pasa UNA vez. Perderlo es que el tecnico
