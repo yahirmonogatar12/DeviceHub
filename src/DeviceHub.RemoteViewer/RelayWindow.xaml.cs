@@ -215,34 +215,80 @@ public partial class RelayWindow : Window
             // Bucle de reconexion. Mientras haya token vigente se vuelve a la
             // MISMA sesion sin gastar un ticket nuevo; cuando el servidor lo
             // rechaza -- porque paso la gracia -- se termina.
-            var corte = DateTimeOffset.UtcNow;
-
             while (!_cancelacion.IsCancellationRequested)
             {
+                string motivo;
+                Exception? fallo = null;
+
                 try
                 {
-                    corte = DateTimeOffset.UtcNow;
                     RecibirAsync().GetAwaiter().GetResult();
+
+                    // TERMINAR SIN EXCEPCION TAMBIEN ES UN CORTE. Si el relay
+                    // cierra el stream sin mandar Close -- se reinicio, o lo
+                    // cerro un proxy por el camino -- antes se salia del bucle
+                    // aqui y la ventana se quedaba con el ultimo frame, quieta
+                    // y sin decir nada.
+                    motivo = "el relay cerro el stream";
                 }
-                catch (RpcException ex) when (PuedeReconectar(corte))
+                catch (Exception ex) when (!_cancelacion.IsCancellationRequested)
                 {
-                    Mostrar(
-                        $"Conexion perdida ({ex.StatusCode}). Reintentando en {_espera.TotalSeconds:0.0} s...\n" +
-                        $"{_cierre ?? string.Empty}");
+                    fallo = ex;
+                    motivo = ex is RpcException rpc ? rpc.StatusCode.ToString() : $"{ex.GetType().Name}: {ex.Message}";
 
-                    // Espera CANCELABLE: con Thread.Sleep, cerrar la ventana
-                    // dejaba el hilo dormido y el proceso sin terminar.
-                    if (_cancelacion.Token.WaitHandle.WaitOne(_espera))
-                        break;
-
-                    _espera = _espera < TimeSpan.FromSeconds(5)
-                        ? _espera + _espera
-                        : TimeSpan.FromSeconds(5);
-
-                    continue;
+                    // Lo que no es de red es de AQUI: casi siempre la GPU (un
+                    // reinicio del driver, la PC que volvio de suspender). Ese
+                    // device ya no sirve, y reconectar sobre el dejaria la imagen
+                    // congelada igual. Se tira y la vuelta lo crea de nuevo.
+                    //
+                    // Y sin la espera corta: la reconexion SI funciona -- el
+                    // HelloAccepted la reinicia -- y un fallo que se repite en
+                    // cada vuelta martillearia al relay cuatro veces por segundo.
+                    if (!EsDeRed(ex))
+                    {
+                        DescartarVideo();
+                        _espera = TimeSpan.FromSeconds(2);
+                    }
                 }
 
-                break;
+                if (_cancelacion.IsCancellationRequested)
+                    break;
+
+                // El reloj de la gracia empieza en el PRIMER corte y no en cada
+                // intento. Antes se ponia a cero al empezar cada conexion, asi
+                // que una sesion que llevaba mas de un minuto abierta no se
+                // reintentaba NUNCA al caerse: "desde" ya era de hace un rato.
+                _corte ??= DateTimeOffset.UtcNow;
+
+                if (!PuedeReconectar(_corte.Value))
+                {
+                    // Cierre ordenado sin error: el informe con las cifras y el
+                    // motivo ya esta en la barra y no se pisa.
+                    if (fallo is not null || _token is not null)
+                    {
+                        Mostrar(
+                            $"Conexion perdida ({motivo}). " +
+                            (_token is null
+                                ? "La sesion termino."
+                                : "No se pudo recuperar en 1 min: abre la sesion otra vez desde el dashboard.") +
+                            $"\n{_cierre ?? string.Empty}");
+                    }
+
+                    break;
+                }
+
+                Mostrar(
+                    $"Conexion perdida ({motivo}). Reintentando en {_espera.TotalSeconds:0.0} s...\n" +
+                    $"{_cierre ?? string.Empty}");
+
+                // Espera CANCELABLE: con Thread.Sleep, cerrar la ventana
+                // dejaba el hilo dormido y el proceso sin terminar.
+                if (_cancelacion.Token.WaitHandle.WaitOne(_espera))
+                    break;
+
+                _espera = _espera < TimeSpan.FromSeconds(5)
+                    ? _espera + _espera
+                    : TimeSpan.FromSeconds(5);
             }
         }
         catch (OperationCanceledException)
@@ -254,8 +300,46 @@ public partial class RelayWindow : Window
         }
         finally
         {
+            DescartarVideo();
             MediaFactory.MFShutdown();
         }
+    }
+
+    /// <summary>Lo que se arregla volviendo a conectar. Todo lo demas -- la GPU,
+    /// el descodificador -- se arregla rehaciendo el video.</summary>
+    private static bool EsDeRed(Exception ex)
+        => ex is RpcException or IOException or HttpRequestException or OperationCanceledException;
+
+    /// <summary>
+    /// El device y el presentador son de la VENTANA, no de la conexion.
+    ///
+    /// Antes se creaban en cada intento. Un swapchain NUEVO sobre el mismo HWND
+    /// no lo compone el DWM hasta que llega un WM_SIZE -- es la imagen clavada
+    /// del cambio de monitor, documentada en VideoPresenter -- y al reconectar
+    /// la ventana no cambia de tamano: la sesion volvia, el video llegaba, se
+    /// "pintaba", y en pantalla seguia el ultimo frame de antes del corte.
+    /// </summary>
+    private ID3D11Device? _device;
+    private VideoPresenter? _presentador;
+
+    /// <summary>El presentador se tuvo que rehacer: el proximo necesita que la
+    /// ventana reciba un WM_SIZE para que el DWM lo componga.</summary>
+    private bool _sacudirSuperficie;
+
+    /// <summary>Cuando empezo el corte en curso. Null mientras la sesion esta
+    /// viva; lo pone a null cada HelloAccepted.</summary>
+    private DateTimeOffset? _corte;
+
+    private void DescartarVideo()
+    {
+        if (_presentador is not null)
+            _sacudirSuperficie = true;
+
+        _presentador?.Dispose();
+        _presentador = null;
+
+        _device?.Dispose();
+        _device = null;
     }
 
     /// <summary>
@@ -280,6 +364,10 @@ public partial class RelayWindow : Window
 
     private async Task RecibirAsync()
     {
+        // El informe de un intento anterior no es de este. Si se quedara, el
+        // primer paquete de la conexion nueva lo tomaria por un cierre.
+        _cierre = null;
+
         // UN token por intento, enlazado al de la ventana.
         //
         // Antes esto usaba el de la ventana directamente y el `finally` de abajo
@@ -294,10 +382,24 @@ public partial class RelayWindow : Window
         if (hwnd == IntPtr.Zero)
         {
             Mostrar("La superficie de video no llego a crearse.");
+            _token = null;   // no es un corte: reconectar no la va a crear
             return;
         }
 
-        var opciones = new GrpcChannelOptions();
+        // SocketsHttpHandler SIEMPRE, por el keepalive de HTTP/2. Sin el, un
+        // cable que se mueve o un switch que se reinicia dejan el TCP medio
+        // abierto: nada lanza, MoveNext espera para siempre y la imagen se queda
+        // congelada en el ultimo frame. Con un PING cada 5 s, la conexion muerta
+        // se descubre en 10 y entra el bucle de reconexion.
+        var manejador = new SocketsHttpHandler
+        {
+            // Y que intentar conectar con el servidor caido no tarde los ~21 s
+            // del SYN de Windows en cada vuelta del bucle.
+            ConnectTimeout = TimeSpan.FromSeconds(5),
+            KeepAlivePingDelay = TimeSpan.FromSeconds(5),
+            KeepAlivePingTimeout = TimeSpan.FromSeconds(5),
+            KeepAlivePingPolicy = HttpKeepAlivePingPolicy.Always
+        };
 
         if (!string.IsNullOrWhiteSpace(_pin))
         {
@@ -305,14 +407,11 @@ public partial class RelayWindow : Window
             // adelanto desde la Fase 17 porque la 19 da acceso a la pantalla de
             // login: conceder eso sobre un canal que no valida al servidor seria
             // descuidado.
-            opciones.HttpHandler = new SocketsHttpHandler
+            manejador.SslOptions = new System.Net.Security.SslClientAuthenticationOptions
             {
-                SslOptions = new System.Net.Security.SslClientAuthenticationOptions
-                {
-                    RemoteCertificateValidationCallback = (_, certificado, _, _) =>
-                        certificado is not null
-                        && PinSpki(certificado) == _pin
-                }
+                RemoteCertificateValidationCallback = (_, certificado, _, _) =>
+                    certificado is not null
+                    && PinSpki(certificado) == _pin
             };
         }
         else if (_permitirSinConfianza)
@@ -322,60 +421,30 @@ public partial class RelayWindow : Window
             // fingir que la sesion es segura.
             Mostrar("AVISO: no se valida el certificado del servidor. Configura ServerPin en el dashboard.");
 
-            opciones.HttpHandler = new HttpClientHandler
+            manejador.SslOptions = new System.Net.Security.SslClientAuthenticationOptions
             {
-                ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+                RemoteCertificateValidationCallback = (_, _, _, _) => true
             };
         }
 
-        using var canal = GrpcChannel.ForAddress(_servidor, opciones);
+        // DisposeHttpClient: el manejador muere con el canal. Sin esto cada
+        // reconexion dejaba atras un pool de conexiones vivo.
+        using var canal = GrpcChannel.ForAddress(_servidor, new GrpcChannelOptions
+        {
+            HttpHandler = manejador,
+            DisposeHttpClient = true
+        });
+
         var cliente = new RemoteRelayService.RemoteRelayServiceClient(canal);
 
         using var llamada = cliente.ViewerChannel(cancellationToken: intento.Token);
 
-        await llamada.RequestStream.WriteAsync(new RemotePacket
-        {
-            ProtocolVersion = RemoteSessionProtocol.Version,
-            SessionId = _sesion,
-            Hello = new Hello
-            {
-                Role = RemoteRole.Viewer,
-                MachineId = _machineId,
+        // Si contesto HelloAccepted en ESTE intento. Un Error antes de eso, con un
+        // token en la mano, casi siempre es que el servidor todavia no se entero
+        // de que la conexion anterior murio: se reintenta en vez de rendirse.
+        var aceptado = false;
 
-                // Exclusivos: arranque con ticket, reconexion con token. Mandar
-                // los dos es un error de protocolo y el relay lo rechaza.
-                Ticket = _token is null ? _ticket : string.Empty,
-                ReconnectToken = _token ?? string.Empty,
-                Capabilities = new RemoteCapabilities
-                {
-                    MaxProtocolVersion = RemoteSessionProtocol.Version,
-                    // LOS DOS, y ahora es verdad: el visor monta el
-                    // descodificador que diga VideoConfig. Anunciar solo H.264
-                    // mientras se descodifica H.265 es un contrato que miente, y
-                    // muerde el dia que el relay negocie de verdad con esto.
-                    Codecs = { VideoCodec.H264, VideoCodec.H265 },
-                    SupportsCursor = true,
-                    SupportsInput = true
-                }
-            }
-        }, intento.Token);
-
-        // LO QUE QUEDO DE LA CONEXION ANTERIOR NO SE REPRODUCE.
-        //
-        // _salida es de la VENTANA y no de la conexion, asi que al caerse la red
-        // se queda dentro lo que no llego a salir. Reproducirlo ahora seria
-        // aplicar en la PC remota clics y teclas de hace medio minuto, contra
-        // una pantalla que ya no es la que el tecnico estaba mirando -- y encima
-        // por delante del ReleaseInput, que quedaria al final de la fila.
-        //
-        // Nada de lo pendiente sigue valiendo: el relay nunca lo recibio, los
-        // acuses son de un stream muerto y los frames que confirmaban ya no
-        // existen.
-        _salida.Reiniciar();
-
-        var latidos = LatirAsync(llamada.RequestStream, intento.Token);
-
-        using var device = VideoPresenter.CreateDevice();
+        Task? latidos = null;
 
         // UN DECODIFICADOR Y UNA CONFIG POR PANTALLA.
         //
@@ -384,74 +453,119 @@ public partial class RelayWindow : Window
         // los frames de una pantalla se descodificaran con los parametros de la
         // otra, y eso no da error: da imagen corrupta.
         var decodificadores = new Dictionary<uint, H264Decoder>();
-        var configs = new Dictionary<uint, VideoConfig>();
-
-        VideoPresenter? presentador = null;
-
-        // Y UN REENSAMBLADOR POR PANTALLA, por el mismo motivo y con mas
-        // consecuencias.
-        //
-        // El reensamblador monta UN frame a la vez y descarta como atrasado todo
-        // id menor o igual al ultimo completado. Con dos hilos de captura
-        // escribiendo en el mismo canal, los trozos llegan entrelazados:
-        //
-        //   p0/frame100 chunk0 | p1/frame101 chunk0 | p0/frame100 chunk1 | ...
-        //
-        // Compartido, el chunk0 del 101 abandona el 100 a medias y el chunk1 del
-        // 100 llega ya como atrasado. La pantalla con frames de varios trozos --
-        // la que mas se mueve, o la que acaba de mandar su IDR -- pierde
-        // practicamente todo, y eso se ve como una imagen que carga una vez y se
-        // queda quieta.
-        //
-        // Es la separacion que RustDesk tiene de serie: cada display lleva su
-        // manejador y su estado, y nada de una pantalla toca el de la otra.
-        var montadores = new Dictionary<uint, VideoFrameAssembler>();
-
-        var proceso = Process.GetCurrentProcess();
-        var ramInicio = proceso.PrivateMemorySize64;
-
-        // Trozos por pantalla. Con varios flujos, "chunks 534" no dice si los
-        // dos estan llegando o si uno se quedo mudo, que es exactamente la
-        // diferencia entre un problema de red y uno de captura.
-        var porPantalla = new Dictionary<uint, long>();
-
-        // Cuantos frames llevaba abandonados cada reensamblador la ultima vez
-        // que se miro. Lo que dispara la peticion de IDR es que ESTE numero
-        // suba, no su valor.
-        var perdidasVistas = new Dictionary<uint, long>();
-
-        // LAS MEDIDAS SON DE AHORA, LOS CONTADORES SON DE LA SESION.
-        //
-        // Un contador -- frames, chunks, perdidas -- cuenta desde el principio y
-        // asi tiene que ser: sirve para saber que ha pasado. Una MEDIDA de
-        // rendimiento promediada desde el principio no sirve para nada, porque
-        // la pantalla remota se pasa la mayor parte del tiempo quieta y arrastra
-        // la media al suelo mientras la imagen va fina.
-        var ritmo = new Ritmo();
-
-        // Lo ultimo que conto el host de si mismo. Es la mitad que falta para
-        // decidir donde esta el techo: aqui se ve la red y el descodificador,
-        // pero no cuanto se queda el codificador de la PC de planta por el
-        // camino.
-        var medidasDelHost = string.Empty;
-
-        // Y lo mismo con los tiempos de descodificado: los ultimos 600, que a 30
-        // FPS son los ultimos 20 s. De paso deja de crecer sin limite -- en una
-        // sesion de ocho horas eran cien mil entradas para calcular dos
-        // percentiles.
-        const int MuestrasDeDecode = 600;
-        var decodificaciones = new Queue<long>();
-        long chunks = 0, reconstruidos = 0, decodificados = 0, pintados = 0;
-        long cambiosConfig = 0, idr = 0;
-
-        var reloj = Stopwatch.StartNew();
-        var siguienteAviso = TimeSpan.Zero;
 
         try
         {
+            await llamada.RequestStream.WriteAsync(new RemotePacket
+            {
+                ProtocolVersion = RemoteSessionProtocol.Version,
+                SessionId = _sesion,
+                Hello = new Hello
+                {
+                    Role = RemoteRole.Viewer,
+                    MachineId = _machineId,
+
+                    // Exclusivos: arranque con ticket, reconexion con token. Mandar
+                    // los dos es un error de protocolo y el relay lo rechaza.
+                    Ticket = _token is null ? _ticket : string.Empty,
+                    ReconnectToken = _token ?? string.Empty,
+                    Capabilities = new RemoteCapabilities
+                    {
+                        MaxProtocolVersion = RemoteSessionProtocol.Version,
+                        // LOS DOS, y ahora es verdad: el visor monta el
+                        // descodificador que diga VideoConfig. Anunciar solo H.264
+                        // mientras se descodifica H.265 es un contrato que miente, y
+                        // muerde el dia que el relay negocie de verdad con esto.
+                        Codecs = { VideoCodec.H264, VideoCodec.H265 },
+                        SupportsCursor = true,
+                        SupportsInput = true
+                    }
+                }
+            }, intento.Token);
+
+            // LO QUE QUEDO DE LA CONEXION ANTERIOR NO SE REPRODUCE.
+            //
+            // _salida es de la VENTANA y no de la conexion, asi que al caerse la red
+            // se queda dentro lo que no llego a salir. Reproducirlo ahora seria
+            // aplicar en la PC remota clics y teclas de hace medio minuto, contra
+            // una pantalla que ya no es la que el tecnico estaba mirando -- y encima
+            // por delante del ReleaseInput, que quedaria al final de la fila.
+            //
+            // Nada de lo pendiente sigue valiendo: el relay nunca lo recibio, los
+            // acuses son de un stream muerto y los frames que confirmaban ya no
+            // existen.
+            _salida.Reiniciar();
+
+            latidos = LatirAsync(llamada.RequestStream, intento.Token);
+
+            var device = _device ??= VideoPresenter.CreateDevice();
+
+            var configs = new Dictionary<uint, VideoConfig>();
+
+            // Y UN REENSAMBLADOR POR PANTALLA, por el mismo motivo y con mas
+            // consecuencias.
+            //
+            // El reensamblador monta UN frame a la vez y descarta como atrasado todo
+            // id menor o igual al ultimo completado. Con dos hilos de captura
+            // escribiendo en el mismo canal, los trozos llegan entrelazados:
+            //
+            //   p0/frame100 chunk0 | p1/frame101 chunk0 | p0/frame100 chunk1 | ...
+            //
+            // Compartido, el chunk0 del 101 abandona el 100 a medias y el chunk1 del
+            // 100 llega ya como atrasado. La pantalla con frames de varios trozos --
+            // la que mas se mueve, o la que acaba de mandar su IDR -- pierde
+            // practicamente todo, y eso se ve como una imagen que carga una vez y se
+            // queda quieta.
+            //
+            // Es la separacion que RustDesk tiene de serie: cada display lleva su
+            // manejador y su estado, y nada de una pantalla toca el de la otra.
+            var montadores = new Dictionary<uint, VideoFrameAssembler>();
+
+            var proceso = Process.GetCurrentProcess();
+            var ramInicio = proceso.PrivateMemorySize64;
+
+            // Trozos por pantalla. Con varios flujos, "chunks 534" no dice si los
+            // dos estan llegando o si uno se quedo mudo, que es exactamente la
+            // diferencia entre un problema de red y uno de captura.
+            var porPantalla = new Dictionary<uint, long>();
+
+            // Cuantos frames llevaba abandonados cada reensamblador la ultima vez
+            // que se miro. Lo que dispara la peticion de IDR es que ESTE numero
+            // suba, no su valor.
+            var perdidasVistas = new Dictionary<uint, long>();
+
+            // LAS MEDIDAS SON DE AHORA, LOS CONTADORES SON DE LA SESION.
+            //
+            // Un contador -- frames, chunks, perdidas -- cuenta desde el principio y
+            // asi tiene que ser: sirve para saber que ha pasado. Una MEDIDA de
+            // rendimiento promediada desde el principio no sirve para nada, porque
+            // la pantalla remota se pasa la mayor parte del tiempo quieta y arrastra
+            // la media al suelo mientras la imagen va fina.
+            var ritmo = new Ritmo();
+
+            // Lo ultimo que conto el host de si mismo. Es la mitad que falta para
+            // decidir donde esta el techo: aqui se ve la red y el descodificador,
+            // pero no cuanto se queda el codificador de la PC de planta por el
+            // camino.
+            var medidasDelHost = string.Empty;
+
+            // Y lo mismo con los tiempos de descodificado: los ultimos 600, que a 30
+            // FPS son los ultimos 20 s. De paso deja de crecer sin limite -- en una
+            // sesion de ocho horas eran cien mil entradas para calcular dos
+            // percentiles.
+            const int MuestrasDeDecode = 600;
+            var decodificaciones = new Queue<long>();
+            long chunks = 0, reconstruidos = 0, decodificados = 0, pintados = 0;
+            long cambiosConfig = 0, idr = 0;
+
+            var reloj = Stopwatch.StartNew();
+            var siguienteAviso = TimeSpan.Zero;
+            var vigia = new Vigia();
+
             while (await llamada.ResponseStream.MoveNext(intento.Token))
             {
                 var paquete = llamada.ResponseStream.Current;
+                var ahora = reloj.Elapsed.TotalSeconds;
 
                 switch (paquete.PayloadCase)
                 {
@@ -532,13 +646,23 @@ public partial class RelayWindow : Window
                         // lo compone el DWM hasta que llega un WM_SIZE, y al
                         // cambiar de monitor la ventana no cambia de tamano: el
                         // WM_SIZE no llega y la imagen se queda clavada.
-                        if (presentador is null)
+                        //
+                        // Y ahora tampoco al reconectar: vive en la ventana.
+                        if (_presentador is null)
                         {
-                            presentador = new VideoPresenter(device, hwnd, ancho, alto);
-                            Nota(presentador.Diagnostico);
+                            _presentador = new VideoPresenter(device, hwnd, ancho, alto);
+                            Nota(_presentador.Diagnostico);
+
+                            // Hubo que rehacerlo -- la GPU fallo -- y el DWM no
+                            // compone el swapchain nuevo sin un WM_SIZE.
+                            if (_sacudirSuperficie)
+                            {
+                                _sacudirSuperficie = false;
+                                _ = Dispatcher.BeginInvoke(Video.ForzarRecomposicion);
+                            }
                         }
 
-                        presentador.Redimensionar(ancho, alto);
+                        _presentador.Redimensionar(ancho, alto);
 
                         H264Decoder nuevoDecoder;
 
@@ -578,6 +702,7 @@ public partial class RelayWindow : Window
 
                         var pantalla = paquete.VideoChunk.DisplayId;
                         porPantalla[pantalla] = porPantalla.GetValueOrDefault(pantalla) + 1;
+                        vigia.Trozo(pantalla, ahora);
 
                         if (!decodificadores.TryGetValue(pantalla, out var decoder)
                             || !configs.TryGetValue(pantalla, out var config))
@@ -644,7 +769,7 @@ public partial class RelayWindow : Window
                                 // apertura real -- el trozo visible, sin las filas
                                 // de relleno de los macrobloques -- solo se conoce
                                 // despues de descodificar el primer frame.
-                                presentador?.Colocar(
+                                _presentador?.Colocar(
                                     pantalla, decoder.Width, decoder.Height,
                                     decoder.Aperture.X, decoder.Aperture.Y,
                                     decoder.Aperture.Width, decoder.Aperture.Height,
@@ -655,8 +780,9 @@ public partial class RelayWindow : Window
                                 // RGB dentro de Present.
                                 var captura = Interlocked.Exchange(ref _captura, null);
 
-                                presentador?.Present(pantalla, imagen.Texture, imagen.Subresource, captura);
+                                _presentador?.Present(pantalla, imagen.Texture, imagen.Subresource, captura);
                                 pintados++;
+                                vigia.Pintado(pantalla);
 
                                 // El segundo acuse, el que NO suelta nada. Con
                                 // el, el host puede medir lo que tarda un frame
@@ -696,7 +822,11 @@ public partial class RelayWindow : Window
                         // La reconexion funciono: la espera vuelve al principio.
                         // Sin esto, un microcorte a los diez minutos empezaria
                         // esperando los 5 s a los que llego el corte anterior.
+                        // Y el minuto de gracia tambien: el proximo corte es
+                        // otro corte.
                         _espera = TimeSpan.FromMilliseconds(250);
+                        _corte = null;
+                        aceptado = true;
 
                         break;
 
@@ -772,8 +902,29 @@ public partial class RelayWindow : Window
 
                     case RemotePacket.PayloadOneofCase.Error:
                         _cierre = $"Relay: {paquete.Error.Code} {paquete.Error.Detail}";
-                        _token = null;
+
+                        // Rechazado al VOLVER, el token se conserva. El relay no
+                        // deja entrar a un viewer mientras cree que el anterior
+                        // sigue conectado, y tras un corte sucio tarda unos
+                        // segundos en enterarse. Rendirse aqui era perder la
+                        // sesion justo en el caso para el que existe la gracia.
+                        // Si de verdad expiro, el minuto de reintentos se agota y
+                        // el bucle termina igual.
+                        if (aceptado)
+                            _token = null;
+
                         break;
+                }
+
+                // Llegan trozos de una pantalla y no se pinta nada. El IDR que lo
+                // arregla esta limitado a uno por segundo y pantalla, asi que
+                // preguntar en cada paquete no cuesta nada.
+                foreach (var atascada in vigia.Atascadas(ahora))
+                {
+                    PedirKeyframe(
+                        atascada,
+                        montadores.TryGetValue(atascada, out var suyo) ? suyo.LastGoodFrameId : 0,
+                        KeyframeReason.ViewerRequest);
                 }
 
                 void Informar()
@@ -827,13 +978,15 @@ public partial class RelayWindow : Window
         finally
         {
             CerrarGrabacion();
-            presentador?.Dispose();
 
+            // El presentador NO: es de la ventana y lo usa la proxima conexion.
             foreach (var abierto in decodificadores.Values)
                 abierto.Dispose();
 
             await intento.CancelAsync();
-            try { await latidos; } catch (Exception) { /* cerrando */ }
+
+            if (latidos is not null)
+                try { await latidos; } catch (Exception) { /* cerrando */ }
         }
     }
 

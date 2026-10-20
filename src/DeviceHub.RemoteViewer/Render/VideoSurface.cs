@@ -158,6 +158,35 @@ public sealed class VideoSurface : HwndHost
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ScreenToClient(IntPtr hwnd, ref POINT point);
 
+    /// <summary>
+    /// Un WM_SIZE de verdad sin cambiar nada: un pixel mas y vuelta atras.
+    ///
+    /// El DWM no compone un swapchain NUEVO sobre este HWND hasta que la ventana
+    /// cambia de tamano. Cuando el video se tiene que rehacer sin que la ventana
+    /// se mueva -- la GPU se reinicio a media sesion -- la imagen se quedaba
+    /// clavada en el ultimo frame del swapchain viejo. Desde el hilo de la
+    /// interfaz, que es el dueno de la ventana.
+    /// </summary>
+    public void ForzarRecomposicion()
+    {
+        if (_hwnd == IntPtr.Zero || !GetClientRect(_hwnd, out var caja))
+            return;
+
+        var ancho = caja.Right - caja.Left;
+        var alto = caja.Bottom - caja.Top;
+
+        SetWindowPos(_hwnd, IntPtr.Zero, 0, 0, ancho + 1, alto + 1, SwpSoloTamano);
+        SetWindowPos(_hwnd, IntPtr.Zero, 0, 0, ancho, alto, SwpSoloTamano);
+    }
+
+    /// <summary>SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE.</summary>
+    private const uint SwpSoloTamano = 0x0002 | 0x0004 | 0x0010;
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(
+        IntPtr hwnd, IntPtr despuesDe, int x, int y, int ancho, int alto, uint banderas);
+
     protected override void DestroyWindowCore(HandleRef hwnd)
     {
         if (_cursor != IntPtr.Zero)
