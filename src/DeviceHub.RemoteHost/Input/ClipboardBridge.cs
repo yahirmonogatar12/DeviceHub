@@ -26,10 +26,36 @@ public static class ClipboardBridge
     /// </summary>
     private static uint _secuencia;
 
-    /// <summary>Lo ultimo que pasó por aqui, en cualquiera de los dos sentidos.
-    /// Es lo que evita el eco: sin esto, lo que llega del tecnico se detecta como
-    /// cambio local y se le devuelve.</summary>
-    private static string? _ultimo;
+    /// <summary>Vueltas seguidas sin poder abrir el portapapeles para una misma
+    /// copia. A 500 ms la vuelta, diez son cinco segundos: lo bastante para que
+    /// quien lo tenga abierto lo suelte, y no tanto como para insistir siempre
+    /// sobre una aplicacion que lo retiene.</summary>
+    private static int _fallosSeguidos;
+    private const int FallosAntesDeRendirse = 10;
+
+    /// <summary>
+    /// Lo que el tecnico tiene que saber y la PC remota no le puede decir de
+    /// otro modo. UNA vez cada aviso distinto: esto se mira cada medio segundo.
+    /// </summary>
+    private static string? _avisoPendiente;
+    private static string? _ultimoAviso;
+
+    private static void Avisar(string texto)
+    {
+        if (texto == _ultimoAviso)
+            return;
+
+        _ultimoAviso = texto;
+        _avisoPendiente = texto;
+    }
+
+    /// <summary>El aviso nuevo, si lo hay. Lo recoge la sesion y lo manda al visor.</summary>
+    public static string? TomarAviso()
+    {
+        var aviso = _avisoPendiente;
+        _avisoPendiente = null;
+        return aviso;
+    }
 
     /// <summary>
     /// Lo que haya de nuevo en el portapapeles, o nada si no cambio.
@@ -42,10 +68,45 @@ public static class ClipboardBridge
     {
         var secuencia = GetClipboardSequenceNumber();
 
+        // CERO es "sin acceso al portapapeles de esta estacion", no "nada
+        // nuevo". Comparado a secas con el cero inicial pareceria que nunca
+        // cambia nada: lo copiado aqui no saldria nunca, sin un solo error.
+        if (secuencia == 0)
+        {
+            Avisar("El host no tiene acceso al portapapeles de esta sesion: lo que se copie aqui no llegara al tecnico.");
+            return (null, []);
+        }
+
         if (secuencia == _secuencia)
             return (null, []);
 
+        // LA SECUENCIA SE GASTA SOLO SI SE PUDO LEER. Antes se anotaba primero y
+        // se leia despues: si el portapapeles estaba abierto por otro -- la
+        // aplicacion que acaba de copiar, el historial de Windows, un gestor de
+        // portapapeles -- la lectura fallaba y esa copia ya no se volvia a
+        // mirar nunca. Asi se intenta otra vez en la siguiente vuelta.
+        if (!IsClipboardFormatAvailable(CfHdrop) && !IsClipboardFormatAvailable(CfUnicodeText))
+        {
+            _secuencia = secuencia;   // imagen, formato propio: no es nuestro
+            return (null, []);
+        }
+
+        if (!Abrir())
+        {
+            if (++_fallosSeguidos == FallosAntesDeRendirse)
+            {
+                _secuencia = secuencia;
+                _fallosSeguidos = 0;
+                Avisar($"No se pudo leer el portapapeles de la PC remota (error {Marshal.GetLastWin32Error()}); otra aplicacion lo tiene abierto.");
+            }
+
+            return (null, []);
+        }
+
+        CloseClipboard();
+        _fallosSeguidos = 0;
         _secuencia = secuencia;
+        _ultimoAviso = null;   // se pudo: el proximo fallo vuelve a avisarse
 
         var archivos = LeerArchivos();
 
@@ -64,7 +125,6 @@ public static class ClipboardBridge
             // numero de secuencia, que EscribirArchivos actualiza al terminar
             // (ver el finally de ese metodo). Esta comparacion solo bloqueaba
             // repeticiones legitimas.
-            _ultimo = string.Join("|", archivos);
             return (null, archivos);
         }
 
@@ -73,7 +133,12 @@ public static class ClipboardBridge
 
         var texto = Leer();
 
-        if (texto is null || texto == _ultimo)
+        // Y CON EL TEXTO IGUAL. Se descartaba si coincidia con lo ultimo que
+        // habia cruzado, asi que si una copia no llegaba a pegarse en la PC del
+        // tecnico -- su portapapeles ocupado en ese momento --, volver a copiar
+        // el mismo texto aqui no lo mandaba nunca mas. El eco de lo que pega el
+        // tecnico ya lo corta la secuencia, que Escribir anota al terminar.
+        if (texto is null)
             return (null, []);
 
         // Demasiado grande no se recorta: se ignora. Mandar medio texto es peor
@@ -81,7 +146,6 @@ public static class ClipboardBridge
         if (texto.Length > RemoteSessionProtocol.MaxClipboardChars)
             return (null, []);
 
-        _ultimo = texto;
         return (texto, []);
     }
 
@@ -312,7 +376,6 @@ public static class ClipboardBridge
             // A partir de aqui el bloque es del portapapeles: liberarlo seria
             // dejarle un puntero muerto.
             mango = IntPtr.Zero;
-            _ultimo = texto;
 
             return true;
         }
@@ -331,16 +394,23 @@ public static class ClipboardBridge
     }
 
     /// <summary>
-    /// Tres intentos sin esperar entre ellos. El portapapeles es exclusivo y
-    /// cualquier aplicacion puede tenerlo abierto un instante; dormir aqui seria
-    /// dormir el hilo de captura, que es el que dibuja.
+    /// Cinco intentos con 10 ms entre ellos. El portapapeles es exclusivo y
+    /// justo despues de copiar es cuando mas gente lo tiene abierto: la
+    /// aplicacion que copio y el historial de Windows, que lo lee en cuanto
+    /// cambia.
+    ///
+    /// Antes eran tres intentos SIN esperar, o sea uno solo en la practica,
+    /// porque dormir era dormir el hilo que dibujaba. Ya no lo es: el video va
+    /// en un hilo por pantalla y este se queda con lo compartido, sin prisa.
     /// </summary>
     private static bool Abrir()
     {
-        for (var intento = 0; intento < 3; intento++)
+        for (var intento = 0; intento < 5; intento++)
         {
             if (OpenClipboard(IntPtr.Zero))
                 return true;
+
+            Thread.Sleep(10);
         }
 
         return false;

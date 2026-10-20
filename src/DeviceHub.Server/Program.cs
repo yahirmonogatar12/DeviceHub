@@ -146,20 +146,31 @@ static string? ArgValue(string[] args, string name)
 var certificate = CertificateProvider.LoadOrCreate(options.DataDirectory, bootstrapLogger);
 var jwtKeyProvider = new JwtKeyProvider(options.DataDirectory);
 
-builder.WebHost.ConfigureKestrel(kestrel => kestrel.ListenAnyIP(options.Port, listen =>
+builder.WebHost.ConfigureKestrel(kestrel =>
 {
-    // gRPC exige HTTP/2, pero el puerto ya no solo lleva gRPC: por aqui se
-    // sirven tambien los paquetes del agente, y eso lo pide un HttpClient que
-    // por defecto habla HTTP/1.1. Con Http2 a secas ese GET fallaba y el agente
-    // caia al respaldo por SMB sin decir nada -- justo el camino que no funciona.
-    //
-    // Aceptar los dos no le quita nada a gRPC: sobre TLS el protocolo lo elige
-    // ALPN, y un cliente gRPC siempre pide h2. Lo que gana es que la URL se
-    // puede abrir desde un navegador para ver si el servidor esta sirviendo
-    // actualizaciones, que es la primera pregunta cuando una PC no se actualiza.
-    listen.Protocols = HttpProtocols.Http1AndHttp2;
-    listen.UseHttps(certificate);
-}));
+    // PING de HTTP/2 a cada conexion. Sin el, un visor que se fue sin cerrar --
+    // cable, wifi, VPN -- se queda "conectado" hasta que el TCP se rinda, que en
+    // Windows son minutos. Mientras tanto el relay rechaza su reconexion con
+    // StillConnected y el tecnico ve la imagen congelada. Con esto la conexion
+    // muerta se suelta en ~20 s y entra la gracia del lease.
+    kestrel.Limits.Http2.KeepAlivePingDelay = TimeSpan.FromSeconds(10);
+    kestrel.Limits.Http2.KeepAlivePingTimeout = TimeSpan.FromSeconds(10);
+
+    kestrel.ListenAnyIP(options.Port, listen =>
+    {
+        // gRPC exige HTTP/2, pero el puerto ya no solo lleva gRPC: por aqui se
+        // sirven tambien los paquetes del agente, y eso lo pide un HttpClient que
+        // por defecto habla HTTP/1.1. Con Http2 a secas ese GET fallaba y el agente
+        // caia al respaldo por SMB sin decir nada -- justo el camino que no funciona.
+        //
+        // Aceptar los dos no le quita nada a gRPC: sobre TLS el protocolo lo elige
+        // ALPN, y un cliente gRPC siempre pide h2. Lo que gana es que la URL se
+        // puede abrir desde un navegador para ver si el servidor esta sirviendo
+        // actualizaciones, que es la primera pregunta cuando una PC no se actualiza.
+        listen.Protocols = HttpProtocols.Http1AndHttp2;
+        listen.UseHttps(certificate);
+    });
+});
 
 builder.Services.AddGrpc();
 

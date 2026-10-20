@@ -348,38 +348,76 @@ public partial class SesionRemota : UserControl
             {
                 var inicio = DateTimeOffset.UtcNow;
 
+                string motivo;
+                Exception? fallo = null;
+
                 try
                 {
                     RecibirAsync().GetAwaiter().GetResult();
+
+                    // TERMINAR SIN EXCEPCION TAMBIEN ES UN CORTE. Si el relay
+                    // cierra el stream sin mandar Close -- se reinicio, o lo
+                    // cerro un proxy por el camino -- antes se salia del bucle
+                    // aqui y la ventana se quedaba con el ultimo frame, quieta
+                    // y sin decir nada. Con Close o Error de verdad, el token ya
+                    // es null y PuedeReconectar dice que no.
+                    motivo = "el relay cerro el stream";
                 }
-                catch (RpcException ex)
+                catch (Exception ex) when (!_cancelacion.IsCancellationRequested)
                 {
-                    // La espera no se toca aqui: la reinicia el HelloAccepted,
-                    // que es una reconexion CONSEGUIDA y no una que solo duro.
-                    corte = VentanaDeReconexion.Corte(corte, inicio, DateTimeOffset.UtcNow);
+                    fallo = ex;
+                    motivo = ex is RpcException rpc ? rpc.StatusCode.ToString() : $"{ex.GetType().Name}: {ex.Message}";
 
-                    // Por `throw` y no por un filtro: la marca de la racha hay
-                    // que calcularla antes de decidir, y un `when` corre primero.
-                    if (!PuedeReconectar(corte.Value))
-                        throw;
-
-                    Mostrar(
-                        $"Conexion perdida ({ex.StatusCode}). Reintentando en {_espera.TotalSeconds:0.0} s...\n" +
-                        $"{_cierre ?? string.Empty}");
-
-                    // Espera CANCELABLE: con Thread.Sleep, cerrar la ventana
-                    // dejaba el hilo dormido y el proceso sin terminar.
-                    if (_cancelacion.Token.WaitHandle.WaitOne(_espera))
-                        break;
-
-                    _espera = _espera < TimeSpan.FromSeconds(5)
-                        ? _espera + _espera
-                        : TimeSpan.FromSeconds(5);
-
-                    continue;
+                    // Lo que no es de red es de AQUI: casi siempre la GPU (un
+                    // reinicio del driver, la PC que volvio de suspender). Ese
+                    // device ya no sirve, y reconectar sobre el dejaria la imagen
+                    // congelada igual. Se tira y la vuelta lo crea de nuevo.
+                    //
+                    // Y sin la espera corta: la reconexion SI funciona, y un
+                    // fallo que se repite en cada vuelta martillearia al relay.
+                    if (!EsDeRed(ex))
+                    {
+                        DescartarVideo();
+                        _espera = TimeSpan.FromSeconds(2);
+                    }
                 }
 
-                break;
+                if (_cancelacion.IsCancellationRequested)
+                    break;
+
+                // La espera no se toca aqui: la reinicia el HelloAccepted,
+                // que es una reconexion CONSEGUIDA y no una que solo duro.
+                corte = VentanaDeReconexion.Corte(corte, inicio, DateTimeOffset.UtcNow);
+
+                if (!PuedeReconectar(corte.Value))
+                {
+                    // Cierre ordenado sin error: el informe con las cifras y el
+                    // motivo ya esta en la barra y no se pisa.
+                    if (fallo is not null || _token is not null)
+                    {
+                        Mostrar(
+                            $"Conexion perdida ({motivo}). " +
+                            (_token is null
+                                ? "La sesion termino."
+                                : "No se pudo recuperar en 1 min: abre la sesion otra vez desde el dashboard.") +
+                            $"\n{_cierre ?? string.Empty}");
+                    }
+
+                    break;
+                }
+
+                Mostrar(
+                    $"Conexion perdida ({motivo}). Reintentando en {_espera.TotalSeconds:0.0} s...\n" +
+                    $"{_cierre ?? string.Empty}");
+
+                // Espera CANCELABLE: con Thread.Sleep, cerrar la ventana
+                // dejaba el hilo dormido y el proceso sin terminar.
+                if (_cancelacion.Token.WaitHandle.WaitOne(_espera))
+                    break;
+
+                _espera = _espera < TimeSpan.FromSeconds(5)
+                    ? _espera + _espera
+                    : TimeSpan.FromSeconds(5);
             }
         }
         catch (OperationCanceledException)
@@ -391,8 +429,46 @@ public partial class SesionRemota : UserControl
         }
         finally
         {
+            DescartarVideo();
             MediaFactory.MFShutdown();
         }
+    }
+
+    /// <summary>Lo que se arregla volviendo a conectar. Todo lo demas -- la GPU,
+    /// el descodificador -- se arregla rehaciendo el video.</summary>
+    private static bool EsDeRed(Exception ex)
+        => ex is RpcException or IOException or HttpRequestException or OperationCanceledException;
+
+    /// <summary>
+    /// El device es de la VENTANA, no de la conexion, igual que el presentador.
+    ///
+    /// Antes los dos se creaban en cada intento. Un swapchain NUEVO sobre el
+    /// mismo HWND no lo compone el DWM hasta que llega un WM_SIZE -- es la
+    /// imagen clavada del cambio de monitor, documentada en VideoPresenter -- y
+    /// al reconectar la ventana no cambia de tamano: la sesion volvia, el video
+    /// llegaba, se "pintaba", y en pantalla seguia el ultimo frame de antes del
+    /// corte.
+    /// </summary>
+    private ID3D11Device? _device;
+
+    /// <summary>La ventana sobre la que se creo el presentador vivo.</summary>
+    private IntPtr _hwndDelPresentador;
+
+    /// <summary>El presentador se tuvo que rehacer: el proximo necesita que la
+    /// ventana reciba un WM_SIZE para que el DWM lo componga.</summary>
+    private bool _sacudirSuperficie;
+
+    private void DescartarVideo()
+    {
+        var presentador = Interlocked.Exchange(ref _presentador, null);
+
+        if (presentador is not null)
+            _sacudirSuperficie = true;
+
+        presentador?.Dispose();
+
+        _device?.Dispose();
+        _device = null;
     }
 
     /// <summary>
@@ -417,6 +493,10 @@ public partial class SesionRemota : UserControl
 
     private async Task RecibirAsync()
     {
+        // El informe de un intento anterior no es de este. Si se quedara, el
+        // primer paquete de la conexion nueva lo tomaria por un cierre.
+        _cierre = null;
+
         // UN token por intento, enlazado al de la ventana.
         //
         // Antes esto usaba el de la ventana directamente y el `finally` de abajo
@@ -442,7 +522,28 @@ public partial class SesionRemota : UserControl
         if (hwnd == IntPtr.Zero)
             return;
 
-        var opciones = new GrpcChannelOptions();
+        // El presentador sobrevive a la conexion, pero no a su ventana. Si el
+        // HWND del video es otro -- WPF rehace la ventana hija de un HwndHost
+        // cuando cambia de padre --, su swapchain apunta a una ventana muerta.
+        if (hwnd != _hwndDelPresentador)
+            Interlocked.Exchange(ref _presentador, null)?.Dispose();
+
+        // SocketsHttpHandler SIEMPRE, por el keepalive de HTTP/2. Sin el, un
+        // cable que se mueve o un switch que se reinicia dejan el TCP medio
+        // abierto: nada lanza, MoveNext espera para siempre y la imagen se queda
+        // congelada en el ultimo frame. Con un PING cada 5 s, la conexion muerta
+        // se descubre en 10 y entra el bucle de reconexion. Lo contesta el
+        // servidor, no el host, asi que no corta mientras el relay espera a que
+        // vuelva la PC controlada.
+        var manejador = new SocketsHttpHandler
+        {
+            // Y que intentar conectar con el servidor caido no tarde los ~21 s
+            // del SYN de Windows en cada vuelta del bucle.
+            ConnectTimeout = TimeSpan.FromSeconds(5),
+            KeepAlivePingDelay = TimeSpan.FromSeconds(5),
+            KeepAlivePingTimeout = TimeSpan.FromSeconds(5),
+            KeepAlivePingPolicy = HttpKeepAlivePingPolicy.Always
+        };
 
         if (!string.IsNullOrWhiteSpace(_pin))
         {
@@ -450,14 +551,11 @@ public partial class SesionRemota : UserControl
             // adelanto desde la Fase 17 porque la 19 da acceso a la pantalla de
             // login: conceder eso sobre un canal que no valida al servidor seria
             // descuidado.
-            opciones.HttpHandler = new SocketsHttpHandler
+            manejador.SslOptions = new System.Net.Security.SslClientAuthenticationOptions
             {
-                SslOptions = new System.Net.Security.SslClientAuthenticationOptions
-                {
-                    RemoteCertificateValidationCallback = (_, certificado, _, _) =>
-                        certificado is not null
-                        && PinSpki(certificado) == _pin
-                }
+                RemoteCertificateValidationCallback = (_, certificado, _, _) =>
+                    certificado is not null
+                    && PinSpki(certificado) == _pin
             };
         }
         else if (_permitirSinConfianza)
@@ -467,14 +565,30 @@ public partial class SesionRemota : UserControl
             // fingir que la sesion es segura.
             Mostrar("AVISO: no se valida el certificado del servidor. Configura ServerPin en el dashboard.");
 
-            opciones.HttpHandler = new HttpClientHandler
+            manejador.SslOptions = new System.Net.Security.SslClientAuthenticationOptions
             {
-                ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+                RemoteCertificateValidationCallback = (_, _, _, _) => true
             };
         }
 
-        using var canal = GrpcChannel.ForAddress(_servidor, opciones);
+        // DisposeHttpClient: el manejador muere con el canal. Sin esto cada
+        // reconexion dejaba atras un pool de conexiones vivo.
+        using var canal = GrpcChannel.ForAddress(_servidor, new GrpcChannelOptions
+        {
+            HttpHandler = manejador,
+            DisposeHttpClient = true
+        });
+
         var cliente = new RemoteRelayService.RemoteRelayServiceClient(canal);
+
+        // Si contesto HelloAccepted en ESTE intento. Un Error antes de eso, con
+        // un token en la mano, casi siempre es que el servidor todavia no se
+        // entero de que la conexion anterior murio: se reintenta en vez de
+        // rendirse.
+        var aceptado = false;
+
+        // Llegan trozos y no se pinta nada: se pide un IDR. Ver Vigia.
+        var vigia = new Vigia();
 
         using var llamada = cliente.ViewerChannel(cancellationToken: intento.Token);
 
@@ -532,7 +646,7 @@ public partial class SesionRemota : UserControl
 
         var latidos = LatirAsync(llamada.RequestStream, intento.Token);
 
-        using var device = VideoPresenter.CreateDevice();
+        var device = _device ??= VideoPresenter.CreateDevice();
 
         // UN DECODIFICADOR Y UNA CONFIG POR PANTALLA.
         //
@@ -542,8 +656,6 @@ public partial class SesionRemota : UserControl
         // otra, y eso no da error: da imagen corrupta.
         var decodificadores = new Dictionary<uint, H264Decoder>();
         var configs = new Dictionary<uint, VideoConfig>();
-
-        VideoPresenter? presentador = null;
 
         // Y UN REENSAMBLADOR POR PANTALLA, por el mismo motivo y con mas
         // consecuencias.
@@ -700,20 +812,30 @@ public partial class SesionRemota : UserControl
                         // lo compone el DWM hasta que llega un WM_SIZE, y al
                         // cambiar de monitor la ventana no cambia de tamano: el
                         // WM_SIZE no llega y la imagen se queda clavada.
-                        if (presentador is null)
+                        //
+                        // Y ahora tampoco al reconectar: vive en la ventana.
+                        if (_presentador is null)
                         {
-                            presentador = new VideoPresenter(device, hwnd, ancho, alto)
+                            _presentador = new VideoPresenter(device, hwnd, ancho, alto)
                             {
                                 // Lo que el tecnico eligiera antes de que
                                 // existiera la cadena.
                                 Vsync = _vsync
                             };
 
-                            _presentador = presentador;
-                            Nota(presentador.Diagnostico);
+                            _hwndDelPresentador = hwnd;
+                            Nota(_presentador.Diagnostico);
+
+                            // Hubo que rehacerlo -- la GPU fallo -- y el DWM no
+                            // compone el swapchain nuevo sin un WM_SIZE.
+                            if (_sacudirSuperficie)
+                            {
+                                _sacudirSuperficie = false;
+                                _ = Dispatcher.BeginInvoke(Video.ForzarRecomposicion);
+                            }
                         }
 
-                        presentador.Redimensionar(ancho, alto);
+                        _presentador.Redimensionar(ancho, alto);
 
                         H264Decoder nuevoDecoder;
 
@@ -776,6 +898,7 @@ public partial class SesionRemota : UserControl
 
                         var pantalla = paquete.VideoChunk.DisplayId;
                         porPantalla[pantalla] = porPantalla.GetValueOrDefault(pantalla) + 1;
+                        vigia.Trozo(pantalla, reloj.Elapsed.TotalSeconds);
 
                         if (!decodificadores.TryGetValue(pantalla, out var decoder)
                             || !configs.TryGetValue(pantalla, out var config))
@@ -883,7 +1006,7 @@ public partial class SesionRemota : UserControl
                                 // apertura real -- el trozo visible, sin las filas
                                 // de relleno de los macrobloques -- solo se conoce
                                 // despues de descodificar el primer frame.
-                                presentador?.Colocar(
+                                _presentador?.Colocar(
                                     pantalla, decoder.Width, decoder.Height,
                                     decoder.Aperture.X, decoder.Aperture.Y,
                                     decoder.Aperture.Width, decoder.Aperture.Height,
@@ -894,8 +1017,9 @@ public partial class SesionRemota : UserControl
                                 // RGB dentro de Present.
                                 var captura = Interlocked.Exchange(ref _captura, null);
 
-                                presentador?.Present(pantalla, imagen.Texture, imagen.Subresource, captura);
+                                _presentador?.Present(pantalla, imagen.Texture, imagen.Subresource, captura);
                                 pintados++;
+                                vigia.Pintado(pantalla);
 
                                 // El segundo acuse, el que NO suelta nada. Con
                                 // el, el host puede medir lo que tarda un frame
@@ -946,6 +1070,7 @@ public partial class SesionRemota : UserControl
                         // Sin esto, un microcorte a los diez minutos empezaria
                         // esperando los 5 s a los que llego el corte anterior.
                         _espera = TimeSpan.FromMilliseconds(250);
+                        aceptado = true;
 
                         break;
 
@@ -1060,8 +1185,29 @@ public partial class SesionRemota : UserControl
 
                     case RemotePacket.PayloadOneofCase.Error:
                         _cierre = $"Relay: {paquete.Error.Code} {paquete.Error.Detail}";
-                        _token = null;
+
+                        // Rechazado al VOLVER, el token se conserva. El relay no
+                        // deja entrar a un viewer mientras cree que el anterior
+                        // sigue conectado, y tras un corte sucio tarda unos
+                        // segundos en enterarse. Rendirse aqui era perder la
+                        // sesion justo en el caso para el que existe la gracia.
+                        // Si de verdad expiro, la ventana de reconexion se agota
+                        // y el bucle termina igual.
+                        if (aceptado)
+                            _token = null;
+
                         break;
+                }
+
+                // Llegan trozos de una pantalla y no se pinta nada. El IDR que lo
+                // arregla esta limitado a uno por segundo y pantalla, asi que
+                // preguntar en cada paquete no cuesta nada.
+                foreach (var atascada in vigia.Atascadas(reloj.Elapsed.TotalSeconds))
+                {
+                    PedirKeyframe(
+                        atascada,
+                        montadores.TryGetValue(atascada, out var suyo) ? suyo.LastGoodFrameId : 0,
+                        KeyframeReason.ViewerRequest);
                 }
 
                 void Informar()
@@ -1120,8 +1266,8 @@ public partial class SesionRemota : UserControl
         finally
         {
             CerrarGrabacion();
-            presentador?.Dispose();
 
+            // El presentador NO: es de la ventana y lo usa la proxima conexion.
             foreach (var abierto in decodificadores.Values)
                 abierto.Dispose();
 
@@ -2663,21 +2809,55 @@ public partial class SesionRemota : UserControl
     /// <summary>Lo que copiaron en la PC remota, en el portapapeles de aqui.</summary>
     private void RecibirPortapapeles(string texto)
     {
-        if (string.IsNullOrEmpty(texto) || texto == _ultimoPortapapeles)
+        // Sin descartar el texto igual a `_ultimoPortapapeles`: si la vez
+        // anterior no se pudo poner aqui, volver a copiarlo alla es la unica
+        // forma de traerlo. Ponerlo otra vez cuando ya estaba no cuesta nada, y
+        // el eco no existe -- al activarse la ventana se compara con esta marca.
+        if (string.IsNullOrEmpty(texto))
             return;
 
         _ultimoPortapapeles = texto;
 
-        Dispatcher.BeginInvoke(() =>
+        Dispatcher.BeginInvoke(() => PonerPortapapeles(texto, intento: 1));
+    }
+
+    /// <summary>
+    /// Lo copiado en la PC remota, en el portapapeles de aqui. CON REINTENTOS y
+    /// diciendo lo que paso.
+    ///
+    /// Antes era un intento y un catch vacio. Si el portapapeles local estaba
+    /// ocupado -- el historial de Windows, un gestor de portapapeles, Office --
+    /// la copia se perdia sin rastro. Desde aqui no habia forma de saber si el
+    /// texto llego y no se pudo poner, o no llego nunca. Ahora la barra lo dice
+    /// en los dos casos.
+    /// </summary>
+    private void PonerPortapapeles(string texto, int intento)
+    {
+        try
         {
-            try
+            Clipboard.SetText(texto);
+            Nota($"Copiado de la PC remota: {texto.Length} caracteres.");
+        }
+        catch (System.Runtime.InteropServices.ExternalException ex)
+        {
+            // Lo mas nuevo gana: si mientras se reintentaba llego otra copia,
+            // esta ya no es la que el tecnico quiere pegar.
+            if (texto != _ultimoPortapapeles)
+                return;
+
+            if (intento < 5)
             {
-                Clipboard.SetText(texto);
+                _ = Task.Delay(200 * intento).ContinueWith(
+                    _ => Dispatcher.BeginInvoke(() => PonerPortapapeles(texto, intento + 1)));
+                return;
             }
-            catch (System.Runtime.InteropServices.COMException)
-            {
-            }
-        });
+
+            // `_ultimoPortapapeles` NO se olvida: con el vacio, la proxima vez
+            // que la ventana se active mandaria lo viejo de aqui y pisaria lo
+            // que el tecnico acaba de copiar alla.
+            Nota("Llego lo copiado en la PC remota, pero el portapapeles de esta PC esta ocupado. " +
+                 $"Copialo otra vez alla. ({ex.Message})");
+        }
     }
 
     private void Nota(string texto)
