@@ -57,32 +57,109 @@ public static class PathGuard
     }
 
     /// <summary>
-    /// Normaliza y resuelve enlaces.
+    /// Normaliza y resuelve enlaces EN CADA SEGMENTO de la ruta.
     ///
     /// GetFullPath por si solo colapsa `..\` pero NO sigue junctions ni symlinks,
     /// y en Windows un directorio de usuario puede apuntar a C:\Windows. Sin
     /// resolver el destino real, la comprobacion se saltaria con un enlace.
+    ///
+    /// Antes solo se miraba el ULTIMO componente. Con `C:\Datos\junc\config.ini`
+    /// y `junc -> C:\Windows`, el archivo no es un enlace, asi que no se resolvia
+    /// nada y la ruta se comparaba como `C:\Datos\...`: se podia escribir dentro
+    /// de un arbol de solo lectura justo por el camino que este metodo decia
+    /// cerrar.
     /// </summary>
+    /// <exception cref="IOException">Demasiados enlaces encadenados -- un ciclo --,
+    /// o un enlace que no se pudo leer.</exception>
+    /// <exception cref="UnauthorizedAccessException">Sin permiso para leer un
+    /// enlace del camino.</exception>
+    /// <remarks>
+    /// LANZA en vez de seguir con la ruta sin resolver, que es lo que hacia antes
+    /// al fallar: un enlace que no se sabe a donde va es justo el caso en el que
+    /// no se puede decir que la ruta este fuera de C:\Windows. TryValidate lo
+    /// convierte en un rechazo.
+    /// </remarks>
     public static string Normalize(string path)
     {
-        var full = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar);
+        var saltos = 0;
+        return Recortar(ResolverEnlaces(Path.GetFullPath(path), ref saltos));
+    }
 
-        try
+    /// <summary>Lo bastante para cualquier instalacion real, y un tope para que
+    /// un ciclo de enlaces no cuelgue al agente.</summary>
+    private const int MaxSaltos = 32;
+
+    private static string ResolverEnlaces(string full, ref int saltos)
+    {
+        var raiz = Path.GetPathRoot(full);
+
+        if (string.IsNullOrEmpty(raiz))
+            return full;
+
+        var segmentos = full[raiz.Length..].Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
+
+        var actual = raiz;
+
+        for (var i = 0; i < segmentos.Length; i++)
         {
-            var target = Directory.Exists(full)
-                ? new DirectoryInfo(full).ResolveLinkTarget(returnFinalTarget: true)?.FullName
-                : new FileInfo(full).ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+            var siguiente = Path.Combine(actual, segmentos[i]);
 
-            if (!string.IsNullOrEmpty(target))
-                full = Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar);
-        }
-        catch (Exception)
-        {
-            // Enlace roto o sin permisos para resolverlo: se sigue con la ruta
-            // normalizada, que ya cerro el paso a `..\`.
+            // Los ATRIBUTOS y no Directory.Exists: un enlace cuyo destino no
+            // existe da false en Exists, y seguiria siendo un enlace.
+            // GetAttributes mira el enlace en si, sin seguirlo.
+            FileAttributes atributos;
+
+            try
+            {
+                atributos = File.GetAttributes(siguiente);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                // Lo que no existe no puede ser un enlace, ni nada de lo que
+                // cuelgue de ello: el resto se pega tal cual.
+                return Path.Combine(actual, string.Join(Path.DirectorySeparatorChar, segmentos[i..]));
+            }
+
+            // Otros puntos de reanalisis -- archivos de OneDrive, deduplicacion --
+            // no tienen LinkTarget y no llevan a ningun otro sitio.
+            FileSystemInfo info = atributos.HasFlag(FileAttributes.Directory)
+                ? new DirectoryInfo(siguiente)
+                : new FileInfo(siguiente);
+
+            if (atributos.HasFlag(FileAttributes.ReparsePoint) && info.LinkTarget is not null)
+            {
+                if (++saltos > MaxSaltos)
+                    throw new IOException($"Demasiados enlaces encadenados al resolver {full}");
+
+                var destino = info.ResolveLinkTarget(returnFinalTarget: true);
+
+                // El destino puede a su vez pasar por otro enlace en un segmento
+                // intermedio: se resuelve entero otra vez.
+                if (destino is not null)
+                    siguiente = ResolverEnlaces(Path.GetFullPath(destino.FullName), ref saltos);
+            }
+
+            actual = siguiente;
         }
 
-        return full;
+        return actual;
+    }
+
+    /// <summary>
+    /// Quita el separador final, SALVO en la raiz de una unidad.
+    ///
+    /// "C:\" recortado es "C:", y en Windows "C:" no es la raiz: es el directorio
+    /// actual del proceso en esa unidad. El servicio corre en C:\Windows\System32,
+    /// asi que listar "C:\" devolvia System32.
+    /// </summary>
+    private static string Recortar(string full)
+    {
+        var raiz = Path.GetPathRoot(full);
+
+        return raiz is not null && full.Length <= raiz.Length
+            ? full
+            : full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
     /// <summary>
@@ -130,8 +207,10 @@ public static class PathGuard
         {
             normalized = Normalize(path);
         }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException or UnauthorizedAccessException)
         {
+            // IOException cubre PathTooLong y tambien el enlace que no se pudo
+            // resolver: si no se sabe a donde apunta, no se toca.
             error = $"Ruta invalida: {ex.Message}";
             return false;
         }

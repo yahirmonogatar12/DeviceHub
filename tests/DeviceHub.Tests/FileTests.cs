@@ -94,6 +94,73 @@ public class PathGuardTests
         var scratch = Path.Combine(Path.GetTempPath(), "devicehub-test");
         Assert.True(PathGuard.TryValidate(scratch, forWriting: true, out _, out _));
     }
+
+    /// <summary>
+    /// "C:\" recortado es "C:", que en Windows es el directorio ACTUAL en esa
+    /// unidad. El servicio corre en System32, asi que listar la raiz de C:
+    /// devolvia System32.
+    /// </summary>
+    [Fact]
+    public void The_drive_root_keeps_its_separator()
+    {
+        var raiz = Path.GetPathRoot(Windows)!;   // "C:\"
+
+        Assert.Equal(raiz, PathGuard.Normalize(raiz));
+        Assert.True(PathGuard.TryValidate(raiz, forWriting: false, out var normalizada, out _));
+        Assert.Equal(raiz, normalizada);
+    }
+
+    /// <summary>
+    /// El enlace EN MEDIO de la ruta. Antes solo se resolvia el ultimo
+    /// componente, asi que `junc\archivo.txt` con `junc -> C:\Windows` se
+    /// comparaba como si estuviera en la carpeta de pruebas y se dejaba escribir
+    /// dentro de C:\Windows.
+    /// </summary>
+    [Fact]
+    public void A_junction_in_the_middle_of_the_path_is_followed()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var carpeta = Path.Combine(Path.GetTempPath(), $"devicehub-junc-{Guid.NewGuid():N}");
+        var enlace = Path.Combine(carpeta, "junc");
+        Directory.CreateDirectory(carpeta);
+
+        try
+        {
+            // Junction y no symlink: mklink /J no pide administrador ni modo
+            // desarrollador, que es justo por lo que un usuario normal puede
+            // plantar uno.
+            using (var mklink = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                "cmd.exe", $"/c mklink /J \"{enlace}\" \"{Windows}\"")
+            {
+                CreateNoWindow = true,
+                UseShellExecute = false
+            })!)
+            {
+                mklink.WaitForExit();
+                Assert.Equal(0, mklink.ExitCode);
+            }
+
+            var dentro = Path.Combine(enlace, "devicehub-no-deberia-existir.txt");
+
+            Assert.StartsWith(Windows, PathGuard.Normalize(dentro), StringComparison.OrdinalIgnoreCase);
+            Assert.False(PathGuard.TryValidate(dentro, forWriting: true, out _, out var error));
+            Assert.Contains("protegida", error);
+
+            // Y un nivel mas abajo, por si el ultimo segmento tampoco existe.
+            Assert.False(PathGuard.TryValidate(
+                Path.Combine(enlace, "System32", "no-existe", "x.ini"), forWriting: true, out _, out _));
+        }
+        finally
+        {
+            // Directory.Delete sobre una junction borra el ENLACE, no el destino.
+            if (Directory.Exists(enlace))
+                Directory.Delete(enlace);
+
+            Directory.Delete(carpeta, recursive: true);
+        }
+    }
 }
 
 public class FileOperationsTests : IDisposable
