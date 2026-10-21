@@ -103,9 +103,36 @@ public sealed class UpdateService(
     private PorRecurso? Respaldo()
         => string.IsNullOrWhiteSpace(options.UpdateShare) ? null : new PorRecurso(options.UpdateShare);
 
+    /// <summary>
+    /// Donde se descarga, se verifica y se extrae el paquete, y donde se escribe
+    /// el script que lo instala.
+    ///
+    /// NO EN %TEMP%. Para SYSTEM, segun la version de Windows, eso es
+    /// C:\Windows\SystemTemp (solo SYSTEM) o C:\Windows\Temp, donde cualquier
+    /// usuario puede crear carpetas. Con un nombre predecible
+    /// (devicehub-update-1.2.3), un usuario podia crear la carpeta ANTES -- y
+    /// siendo suya, cambiar el payload entre la comprobacion del hash y la
+    /// firma y el momento en que el script lo instala como SYSTEM. El directorio
+    /// de datos del agente ya esta cerrado a SYSTEM y Administradores
+    /// (MachineIdentity.EnsureDirectory).
+    /// </summary>
+    private string Descargas => Path.Combine(options.DataDirectory, "updates");
+
     private bool Stage(UpdateManifest manifest, IOrigenDeActualizaciones origen)
     {
-        var staging = Path.Combine(Path.GetTempPath(), $"devicehub-update-{manifest.Version}");
+        // Lo de intentos anteriores se tira: un zip por version se acumularia
+        // para siempre, y nada de lo que haya ahi sirve para este.
+        try
+        {
+            if (Directory.Exists(Descargas))
+                Directory.Delete(Descargas, recursive: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning("No se pudo limpiar {Carpeta}: {Message}", Descargas, ex.Message);
+        }
+
+        var staging = Path.Combine(Descargas, $"devicehub-update-{manifest.Version}");
         Directory.CreateDirectory(staging);
 
         var localZip = Path.Combine(staging, manifest.File);
@@ -235,7 +262,9 @@ public sealed class UpdateService(
     {
         var installDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
         var backupDir = installDir + ".anterior";
-        var scriptPath = Path.Combine(Path.GetTempPath(), $"devicehub-update-{version}.ps1");
+        // Junto al paquete, no en %TEMP%: se ejecuta como SYSTEM con
+        // -ExecutionPolicy Bypass. Ver Descargas.
+        var scriptPath = Path.Combine(Descargas, $"devicehub-update-{version}.ps1");
         var healthPath = Path.Combine(options.DataDirectory, HealthFile);
 
         File.WriteAllText(scriptPath, $$"""
@@ -264,8 +293,8 @@ public sealed class UpdateService(
                 Move-Item $instalado $respaldo
                 Move-Item $nuevo $instalado
 
-                # MOVER CONSERVA LA ACL DE ORIGEN, y el origen es el temporal de
-                # SYSTEM, que solo abre SYSTEM. Sin esto la carpeta quedaba
+                # MOVER CONSERVA LA ACL DE ORIGEN, y el origen es el directorio
+                # de datos del agente, que solo abren SYSTEM y Administradores. Sin esto la carpeta quedaba
                 # ilegible para los usuarios, y el ayudante del portapapeles de
                 # RemoteHost -- que corre como el usuario -- no arrancaba.
                 & icacls $instalado /reset /T /C /Q | Out-Null
