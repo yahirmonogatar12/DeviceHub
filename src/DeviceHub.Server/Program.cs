@@ -203,6 +203,7 @@ builder.Services.AddSingleton(sp => new RemoteProviderCatalog(
     sp.GetRequiredService<IEnumerable<IRemoteProvider>>(),
     builder.Configuration["DeviceHub:RemoteProvider"] ?? "rustdesk"));
 builder.Services.AddSingleton<UserRepository>();
+builder.Services.AddSingleton<SesionesVigentes>();
 builder.Services.AddSingleton<ConnectionRegistry>();
 builder.Services.AddSingleton<RemoteSessionRegistry>();
 builder.Services.AddSingleton<RemoteTicketRegistry>();
@@ -214,16 +215,35 @@ builder.Services.AddSingleton(new ServerPins([PublicKeyPin.Compute(certificate)]
 
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(jwt => jwt.TokenValidationParameters = new TokenValidationParameters
+    .AddJwtBearer(jwt =>
     {
-        ValidIssuer = options.JwtIssuer,
-        ValidAudience = options.JwtIssuer,
-        IssuerSigningKey = jwtKeyProvider.SigningKey,
-        ValidateIssuer = true,
-        ValidateAudience = true,
-        ValidateLifetime = true,
-        ValidateIssuerSigningKey = true,
-        ClockSkew = TimeSpan.FromMinutes(1)
+        jwt.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidIssuer = options.JwtIssuer,
+            ValidAudience = options.JwtIssuer,
+            IssuerSigningKey = jwtKeyProvider.SigningKey,
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ClockSkew = TimeSpan.FromMinutes(1)
+        };
+
+        // Firma y fecha no bastan: el usuario puede haber cambiado desde que se
+        // emitio. Ver SesionesVigentes.
+        jwt.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = async contexto =>
+            {
+                var vigentes = contexto.HttpContext.RequestServices.GetRequiredService<SesionesVigentes>();
+
+                if (contexto.Principal is null
+                    || !await vigentes.SigueValidaAsync(contexto.Principal, contexto.HttpContext.RequestAborted))
+                {
+                    contexto.Fail("El usuario cambio desde que se emitio este token (rol, estado o contrasena).");
+                }
+            }
+        };
     });
 
 builder.Services.AddAuthorization();

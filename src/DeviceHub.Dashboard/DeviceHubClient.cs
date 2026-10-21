@@ -195,10 +195,34 @@ public sealed class DeviceHubClient : IDisposable
         }
     }
 
-    public Task<UserRecord> ChangeOwnPasswordAsync(string actual, string nueva, CancellationToken ct)
-        => _client.ChangeOwnPasswordAsync(
+    /// <summary>
+    /// Cambia la contrasena y entra otra vez con la nueva.
+    ///
+    /// El servidor invalida los tokens emitidos con la contrasena anterior --
+    /// incluido el de esta sesion --, asi que sin volver a entrar la siguiente
+    /// llamada saldria con "la sesion guardada ya no vale" justo despues de un
+    /// cambio que salio bien.
+    /// </summary>
+    public async Task<UserRecord> ChangeOwnPasswordAsync(string actual, string nueva, CancellationToken ct)
+    {
+        var registro = await _client.ChangeOwnPasswordAsync(
             new ChangeOwnPasswordRequest { CurrentPassword = actual, NewPassword = nueva },
             _auth, cancellationToken: ct).ResponseAsync;
+
+        try
+        {
+            await LoginAsync(Username, nueva, ct);
+        }
+        catch (RpcException ex)
+        {
+            // El cambio YA se hizo. Decir "no se pudo cambiar" aqui mandaria a
+            // probar con la contrasena vieja, que ya no vale.
+            throw new InvalidOperationException(
+                $"La contrasena se cambio, pero no se pudo volver a entrar ({ex.Status.Detail}). Entra con la nueva.", ex);
+        }
+
+        return registro;
+    }
 
     public async Task LoginAsync(string username, string password, CancellationToken ct)
     {

@@ -31,6 +31,7 @@ public sealed class AdminGrpcService(
     RateLimiter limiter,
     RemoteProviderCatalog motores,
     UserRepository users,
+    SesionesVigentes vigentes,
     MachineBroadcaster broadcaster,
     ConnectionRegistry registry,
     RemoteTicketRegistry remoteTickets,
@@ -529,6 +530,10 @@ public sealed class AdminGrpcService(
 
         await users.UpdateAsync(username, role, active, passwordHash, ct);
 
+        // Degradado, desactivado o con contrasena nueva: sus tokens dejan de
+        // valer YA, no cuando caduque lo recordado. Ver SesionesVigentes.
+        vigentes.Olvidar(username);
+
         await audit.WriteAsync(BuildAudit(context, AuditActions.UserUpdated, null, AuditEntry.Allowed,
             $"{username} rol={role ?? "="} activo={(active?.ToString() ?? "=")} password={(passwordHash is not null)}"), ct);
 
@@ -561,6 +566,11 @@ public sealed class AdminGrpcService(
             throw new RpcException(new Status(StatusCode.InvalidArgument, error));
 
         await users.UpdateAsync(username, null, null, Secrets.HashPassword(request.NewPassword), ct);
+
+        // Las demas sesiones de este usuario -- otra PC, un token robado --
+        // dejan de valer. El dashboard que hizo el cambio entra otra vez solo
+        // con la contrasena nueva (DeviceHubClient.ChangeOwnPasswordAsync).
+        vigentes.Olvidar(username);
         await audit.WriteAsync(BuildAudit(context, AuditActions.PasswordChanged, null, AuditEntry.Allowed, username), ct);
 
         return ToRecord((await users.FindAsync(username, ct))!);
@@ -1113,7 +1123,8 @@ public sealed class AdminGrpcService(
             Subject = new ClaimsIdentity(
             [
                 new Claim(ClaimTypes.Name, user.Username),
-                new Claim(ClaimTypes.Role, user.Role)
+                new Claim(ClaimTypes.Role, user.Role),
+                new Claim(SesionesVigentes.ClaimSello, SesionesVigentes.Sello(user))
             ]),
             SigningCredentials = new SigningCredentials(jwtKey.SigningKey, SecurityAlgorithms.HmacSha256)
         };
