@@ -294,8 +294,8 @@ public sealed class UpdateService(
                 Move-Item $nuevo $instalado
 
                 # MOVER CONSERVA LA ACL DE ORIGEN, y el origen es el directorio
-                # de datos del agente, que solo abren SYSTEM y Administradores. Sin esto la carpeta quedaba
-                # ilegible para los usuarios, y el ayudante del portapapeles de
+                # de datos del agente, que solo abren SYSTEM y Administradores.
+                # Sin esto la carpeta quedaba ilegible para los usuarios, y el ayudante del portapapeles de
                 # RemoteHost -- que corre como el usuario -- no arrancaba.
                 & icacls $instalado /reset /T /C /Q | Out-Null
 

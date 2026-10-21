@@ -97,7 +97,7 @@ public static class PathGuard
             return full;
 
         var segmentos = full[raiz.Length..].Split(
-            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
+            new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
 
         var actual = raiz;
 
