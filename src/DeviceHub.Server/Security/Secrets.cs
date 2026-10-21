@@ -12,7 +12,11 @@ public static class Secrets
     // Sin I, L, O, 0, 1: un tecnico va a teclear esto mirando una pantalla.
     private const string CodeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 
-    private const int Pbkdf2Iterations = 210_000; // OWASP, PBKDF2-HMAC-SHA256
+    // OWASP para PBKDF2-HMAC-SHA256 desde 2023 (antes eran 210 000). Solo
+    // afecta a los hashes NUEVOS: cada hash guarda sus iteraciones y
+    // VerifyPassword usa las suyas, asi que las contrasenas existentes siguen
+    // valiendo y suben de coste cuando se cambian.
+    private const int Pbkdf2Iterations = 600_000;
     private const int SaltBytes = 16;
     private const int KeyBytes = 32;
 
