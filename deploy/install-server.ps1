@@ -38,9 +38,6 @@ if (Get-Service $ServiceName -ErrorAction SilentlyContinue) {
 New-Item -ItemType Directory -Force -Path $InstallPath | Out-Null
 Copy-Item "$Source\*" -Destination $InstallPath -Recurse -Force
 
-# La cadena de conexion NO va en un archivo versionado (regla 4).
-[Environment]::SetEnvironmentVariable('DEVICEHUB_DB_CONNECTION', $ConnectionString, 'Machine')
-
 $settingsPath = Join-Path $InstallPath 'appsettings.json'
 $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
 $settings.DeviceHub.Port = $Port
@@ -49,6 +46,19 @@ $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath -Encoding UTF8
 $exe = Join-Path $InstallPath 'DeviceHub.Server.exe'
 sc.exe create $ServiceName binPath= "`"$exe`"" start= auto DisplayName= 'ILSAN DeviceHub Server' | Out-Null
 sc.exe description $ServiceName 'Servidor central de ILSAN DeviceHub (gRPC + MySQL).' | Out-Null
+
+# La cadena de conexion NO va en un archivo versionado (regla 4), y tampoco en
+# una variable de MAQUINA: esa la lee cualquier proceso de la PC, y un servicio
+# no la ve hasta que Windows refresca su bloque de entorno -- el "Falta la
+# cadena de conexion" de siempre. Va en el entorno DEL SERVICIO, igual que lo
+# hace DeviceHubServer.iss. Despues de sc.exe create, que es quien crea la clave.
+New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName" `
+    -Name 'Environment' -PropertyType MultiString `
+    -Value @("DEVICEHUB_DB_CONNECTION=$ConnectionString") -Force | Out-Null
+
+# Y la de maquina que dejaban las versiones anteriores de este script se quita:
+# con la del servicio ya no hace falta, y seguia siendo legible por todos.
+[Environment]::SetEnvironmentVariable('DEVICEHUB_DB_CONNECTION', $null, 'Machine')
 
 # Reinicio automatico: un servidor caido deja ciega a toda la planta.
 sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/15000/restart/60000 | Out-Null
