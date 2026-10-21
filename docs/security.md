@@ -97,9 +97,9 @@ enrolamiento, que dura minutos.
 |---|---|
 | Token de maquina | SHA256 en la BD; DPAPI en el agente |
 | Codigo de enrolamiento | SHA256, nunca en claro |
-| Password de usuario | PBKDF2-HMAC-SHA256, 210.000 iteraciones, salt por usuario |
-| Clave JWT | 64 bytes aleatorios en ProgramData, generada al primer arranque |
-| Cadena de conexion | variable de entorno `DEVICEHUB_DB_CONNECTION` |
+| Password de usuario | PBKDF2-HMAC-SHA256, 600.000 iteraciones (los hashes de antes guardan las suyas y suben al cambiarse), salt por usuario |
+| Clave JWT y `server.pfx` | `C:\ProgramData\ILSANSYSTEM\DeviceHubServer`, en claro, con ACL **solo SYSTEM y Administradores** puesta por el servidor en cada arranque |
+| Cadena de conexion | `DEVICEHUB_DB_CONNECTION` en el entorno **del servicio** (`HKLM\...\Services\DeviceHubServer\Environment`), no de maquina |
 
 No hay usuario sembrado con password fija: el servidor crea `admin` con una
 password aleatoria y la escribe una sola vez en el log. Un default hardcodeado es
@@ -107,6 +107,51 @@ exactamente lo que nadie cambia despues.
 
 Las comparaciones de token y password son en tiempo fijo. El login devuelve el
 mismo mensaje para usuario inexistente y password incorrecta.
+
+## Sesiones del dashboard
+
+El JWT dura 12 h, pero no se fia de lo que lleva dentro: cada token tiene un
+sello (resumen de rol, estado activo y hash de la contrasena) que se compara en
+cada llamada con la fila actual del usuario. Degradarlo, desactivarlo o
+cambiarle la contrasena invalida sus tokens en segundos. Limite: los streams
+largos (`WatchMachines`, el visor) se autorizan al abrirse y siguen hasta que se
+cierran.
+
+El login se limita por **IP** (sin el puerto efimero): 5 intentos por cuenta y
+20 sumando todas las cuentas, en 5 minutos. No hay limite por cuenta a secas,
+porque dejaria a cualquiera de la red bloquear al admin.
+
+## Gestor de archivos y terminal
+
+El gestor de archivos deja los directorios del sistema en **solo lectura**,
+resolviendo junctions y symlinks en cada segmento de la ruta, sin borrado
+recursivo y con tope de 4 MB por transferencia.
+
+Eso **no es una barrera frente a quien tenga el terminal**: `RunShell`
+(Engineer o superior) ejecuta PowerShell como SYSTEM y puede hacer todo lo que
+el gestor de archivos impide. En la practica, un Engineer es administrador de
+todas las PCs. Las protecciones del gestor evitan errores, no abusos.
+
+## Auto-actualizacion
+
+Se descarga, verifica y extrae en `<DataDirectory>\updates` (solo SYSTEM y
+Administradores), nunca en `%TEMP%`. El SHA256 viaja con el paquete y solo
+protege contra corrupcion.
+
+**Con `UpdatePublisherThumbprint` vacio, que es el valor por defecto, no se
+verifica firma**: quien pueda escribir en el origen de actualizaciones (la
+carpeta `UpdatesPath` del servidor, o el recurso SMB de respaldo) ejecuta codigo
+como SYSTEM en toda la planta. El agente lo avisa en el log en cada comprobacion.
+
+## Limites conocidos
+
+- La CLI del servidor (`DeviceHub.Server.exe --command ...`) se audita como
+  `cli` sin rol: quien tenga acceso a la maquina del servidor se salta la
+  escalera de roles (no las sesiones: rechaza `RunShell`).
+- La deteccion de clones por fingerprint se degrada a `LOW` cuando 3 o mas
+  maquinas lo comparten, que es lo normal en lotes de placas industriales. Ahi
+  solo queda el detector de streams simultaneos: un clon que nunca coincide
+  encendido con el original no se detecta.
 
 ## Pendiente (Fase 13)
 
