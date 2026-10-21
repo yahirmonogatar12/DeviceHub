@@ -143,6 +143,10 @@ static string? ArgValue(string[] args, string name)
     return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
 }
 
+// ANTES de crear o leer nada de ahi: la clave del certificado y la de los JWT
+// estan en claro, y lo unico que las protege es esta ACL.
+DirectorioProtegido.Endurecer(options.DataDirectory, bootstrapLogger);
+
 var certificate = CertificateProvider.LoadOrCreate(options.DataDirectory, bootstrapLogger);
 var jwtKeyProvider = new JwtKeyProvider(options.DataDirectory);
 
