@@ -1,5 +1,6 @@
 using DeviceHub.Remote.Contracts;
 using DeviceHub.Server.Remote;
+using DeviceHub.Server.Security;
 using Grpc.Core;
 
 namespace DeviceHub.Server.Services;
@@ -156,7 +157,7 @@ public sealed class RemoteRelayGrpcService(
         await AuditarAsync(
             DeviceHub.Server.Data.AuditActions.RemoteConnected,
             hola.Hello.MachineId, usuario,
-            $"sesion {sesion.Id} papel {papel} estado {sesion.State}", contexto.Peer);
+            $"sesion {sesion.Id} papel {papel} estado {sesion.State}", Origen.Ip(contexto) ?? string.Empty);
 
         bomba = conexion.PumpAsync(new StreamWriter(salida), cancelacion);
 
@@ -265,7 +266,7 @@ public sealed class RemoteRelayGrpcService(
                     : DeviceHub.Server.Data.AuditActions.RemoteFailed,
                 hola.Hello.MachineId, usuario,
                 $"sesion {sesion.Id} papel {papel} motivo {motivo} {detalle}".TrimEnd(),
-                contexto.Peer);
+                Origen.Ip(contexto) ?? string.Empty);
 
             // EL HOST QUE SE CAE NO ES EL HOST QUE CIERRA.
             //

@@ -45,21 +45,31 @@ public sealed class AdminGrpcService(
     [AllowAnonymous]
     public override async Task<LoginReply> Login(LoginRequest request, ServerCallContext context)
     {
-        // Registrar los intentos fallidos no los detiene. Se limita por usuario Y
-        // por origen: por usuario para que no se le pruebe la cuenta al admin
-        // desde mil sitios, por origen para que un solo atacante no barra la
-        // lista de usuarios.
-        var throttleKey = $"login:{request.Username.ToLowerInvariant()}|{context.Peer}";
+        // Registrar los intentos fallidos no los detiene. Dos limites:
+        //
+        //   usuario + IP  pocos intentos contra UNA cuenta desde un sitio;
+        //   solo IP       un techo mas alto para que un solo origen no barra
+        //                 la lista de usuarios cambiando de nombre.
+        //
+        // POR IP, NO POR EL PEER: el Peer lleva el puerto efimero y cada
+        // conexion nueva era una clave nueva, o sea ningun limite. Ver Origen.
+        //
+        // No hay limite por usuario a secas a proposito: con el, cualquiera de
+        // la red podria dejar al admin sin poder entrar escribiendo mal su
+        // contrasena cinco veces.
+        var ip = Origen.Ip(context) ?? "desconocido";
+        var throttleKey = $"login:{request.Username.ToLowerInvariant()}|{ip}";
 
-        if (!limiter.TryAcquire(throttleKey, RateLimits.LoginAttempts, RateLimits.LoginWindow))
+        if (!limiter.TryAcquire($"login-ip:{ip}", RateLimits.LoginAttemptsPerIp, RateLimits.LoginWindow)
+            || !limiter.TryAcquire(throttleKey, RateLimits.LoginAttempts, RateLimits.LoginWindow))
         {
-            logger.LogWarning("Login bloqueado por exceso de intentos: {Username} desde {Peer}",
-                request.Username, context.Peer);
+            logger.LogWarning("Login bloqueado por exceso de intentos: {Username} desde {Ip}",
+                request.Username, ip);
 
             await audit.WriteAsync(new AuditEntry(
                 UserId: request.Username, UserRole: null, Action: AuditActions.LoginThrottled,
                 MachineId: null, MachineCode: null, SiteCode: null,
-                RequestId: context.GetHttpContext().TraceIdentifier, SourceIp: context.Peer,
+                RequestId: context.GetHttpContext().TraceIdentifier, SourceIp: ip,
                 Outcome: AuditEntry.Denied, Details: null), context.CancellationToken);
 
             throw new RpcException(new Status(StatusCode.ResourceExhausted,
@@ -72,14 +82,14 @@ public sealed class AdminGrpcService(
         // que cuentas existen.
         if (user is null || !user.IsActive || !Secrets.VerifyPassword(request.Password, user.PasswordHash))
         {
-            logger.LogWarning("Login fallido para {Username} desde {Peer}", request.Username, context.Peer);
+            logger.LogWarning("Login fallido para {Username} desde {Ip}", request.Username, ip);
 
             // Los intentos fallidos se auditan: es como se detecta que alguien
             // esta probando contrasenas contra la consola de administracion.
             await audit.WriteAsync(new AuditEntry(
                 UserId: request.Username, UserRole: null, Action: AuditActions.LoginFailed,
                 MachineId: null, MachineCode: null, SiteCode: null,
-                RequestId: context.GetHttpContext().TraceIdentifier, SourceIp: context.Peer,
+                RequestId: context.GetHttpContext().TraceIdentifier, SourceIp: ip,
                 Outcome: AuditEntry.Denied, Details: null), context.CancellationToken);
 
             throw new RpcException(new Status(StatusCode.Unauthenticated, "Credenciales invalidas"));
@@ -647,7 +657,7 @@ public sealed class AdminGrpcService(
             MachineCode: machine?.MachineCode,
             SiteCode: machine?.SiteCode,
             RequestId: context.GetHttpContext().TraceIdentifier,
-            SourceIp: context.Peer,
+            SourceIp: Origen.Ip(context),
             Outcome: outcome,
             Details: details);
     }
@@ -687,11 +697,11 @@ public sealed class AdminGrpcService(
         var actor = context.GetHttpContext().User.Identity?.Name ?? "desconocido";
 
         var sessionId = await sessions.StartAsync(
-            machine.Id, actor, "terminal", null, context.Peer,
+            machine.Id, actor, "terminal", null, Origen.Ip(context),
             BuildAudit(context, AuditActions.TerminalStart, machine, AuditEntry.Allowed), ct, kind: "terminal");
 
         logger.LogWarning("{Actor} abrio TERMINAL sobre {MachineCode} desde {Source}",
-            actor, machine.MachineCode, context.Peer);
+            actor, machine.MachineCode, Origen.Ip(context));
 
         return new TerminalSessionReply
         {
@@ -894,7 +904,7 @@ public sealed class AdminGrpcService(
                 "Esta maquina no tiene motor de control remoto instalado"));
         }
 
-        var sourceIp = context.Peer;
+        var sourceIp = Origen.Ip(context);
 
         // Las huerfanas se cierran aqui, sin servicio de fondo.
         await sessions.CloseOrphansAsync(ct);

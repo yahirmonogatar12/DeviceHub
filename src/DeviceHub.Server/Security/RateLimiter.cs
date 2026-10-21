@@ -54,8 +54,12 @@ public sealed class RateLimiter
 
 public static class RateLimits
 {
-    /// <summary>Intentos de login por usuario y por origen.</summary>
+    /// <summary>Intentos de login contra una cuenta desde una IP.</summary>
     public const int LoginAttempts = 5;
+
+    /// <summary>Intentos de login desde una IP, sumando todas las cuentas. Holgado
+    /// para una oficina detras de un NAT; lo que corta es barrer usuarios.</summary>
+    public const int LoginAttemptsPerIp = 20;
     public static readonly TimeSpan LoginWindow = TimeSpan.FromMinutes(5);
 
     /// <summary>

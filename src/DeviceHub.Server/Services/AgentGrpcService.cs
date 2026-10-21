@@ -352,5 +352,5 @@ public sealed class AgentGrpcService(
             : null;
     }
 
-    private static string? PeerIp(ServerCallContext context) => context.Peer;
+    private static string? PeerIp(ServerCallContext context) => Origen.Ip(context);
 }
