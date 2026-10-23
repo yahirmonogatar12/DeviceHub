@@ -230,6 +230,39 @@ public sealed class AdminGrpcService(
         var siteId = await machines.GetSiteIdAsync(siteCode, ct)
             ?? throw new RpcException(new Status(StatusCode.InvalidArgument, $"Sitio desconocido: {siteCode}"));
 
+        var code = Secrets.NewEnrollmentCode();
+        var target = NullIfEmpty(request.TargetMachineId);
+        var actor = context.GetHttpContext().User.Identity?.Name ?? "desconocido";
+
+        // EL PERMANENTE DE PLANTA. Ver EnrollmentLimits.Permanente.
+        if (request.Permanent)
+        {
+            // Un recovery code apunta a UNA maquina concreta: hacerlo eterno no
+            // tiene sentido y seria una puerta a esa identidad para siempre.
+            if (target is not null)
+                throw new RpcException(new Status(StatusCode.InvalidArgument,
+                    "Un recovery code no puede ser permanente"));
+
+            // Solo uno vivo: crear otro es la forma de revocar el anterior.
+            var anulados = await enrollment.AnularPermanentesAsync(ct);
+
+            await enrollment.CreateAsync(Secrets.Sha256Hex(code), siteId, actor,
+                EnrollmentLimits.Permanente, int.MaxValue, null, ct);
+
+            await audit.WriteAsync(BuildAudit(context, AuditActions.EnrollmentCodeCreated, null, AuditEntry.Allowed,
+                $"site={siteCode} PERMANENTE anulados={anulados}"), ct);
+
+            logger.LogWarning("{Actor} genero el codigo PERMANENTE de planta para {Site} (anulados: {Anulados})",
+                actor, siteCode, anulados);
+
+            return new EnrollmentCodeReply
+            {
+                Code = code,
+                ExpiresAt = Timestamp.FromDateTime(EnrollmentLimits.Permanente),
+                MaxUses = int.MaxValue
+            };
+        }
+
         // Ventana corta y un solo uso por defecto: un codigo filtrado sirve de poco.
         var maxUses = request.MaxUses > 0 ? request.MaxUses : 1;
         // Hasta un turno completo: desplegar 80 PCs no cabe en dos horas, y forzar a
@@ -237,13 +270,9 @@ public sealed class AdminGrpcService(
         var minutes = Math.Clamp(request.ValidMinutes > 0 ? request.ValidMinutes : 30, 5, EnrollmentLimits.MaxMinutes);
         var expiresAt = DateTime.UtcNow.AddMinutes(minutes);
 
-        var code = Secrets.NewEnrollmentCode();
-        var target = NullIfEmpty(request.TargetMachineId);
-
         if (target is not null && await machines.GetAsync(target, ct) is null)
             throw new RpcException(new Status(StatusCode.NotFound, "La maquina del recovery code no existe"));
 
-        var actor = context.GetHttpContext().User.Identity?.Name ?? "desconocido";
         await enrollment.CreateAsync(Secrets.Sha256Hex(code), siteId, actor, expiresAt, maxUses, target, ct);
 
         await audit.WriteAsync(BuildAudit(context, AuditActions.EnrollmentCodeCreated, null, AuditEntry.Allowed,

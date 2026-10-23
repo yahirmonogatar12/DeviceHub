@@ -24,6 +24,22 @@ public sealed class EnrollmentRepository(Db db)
     }
 
     /// <summary>
+    /// Anula el codigo permanente de planta que hubiera. Devuelve cuantos.
+    ///
+    /// Se le adelanta la caducidad a ahora en vez de borrarlo: la fila sigue
+    /// diciendo quien lo creo y que maquinas entraron con el.
+    /// </summary>
+    public async Task<int> AnularPermanentesAsync(CancellationToken ct)
+    {
+        await using var conn = await db.OpenAsync(ct);
+
+        return await conn.ExecuteAsync("""
+            UPDATE enrollment_codes SET expires_at = @now
+            WHERE expires_at >= @permanente AND target_machine_id IS NULL
+            """, new { now = DateTime.UtcNow, permanente = EnrollmentLimits.Permanente });
+    }
+
+    /// <summary>
     /// Consume un codigo. Devuelve null si no existe, vencio o se agoto.
     ///
     /// El UPDATE condicional resuelve las tres cosas y ademas la carrera: dos

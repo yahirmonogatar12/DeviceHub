@@ -634,6 +634,12 @@ message CreateEnrollmentCodeRequest {
   // Con valor: recovery code de una maquina existente (conserva identidad e
   // historial). Vacio: enrolamiento de maquina nueva.
   string target_machine_id = 4;
+
+  // El codigo PERMANENTE DE PLANTA: ni caduca ni se gasta, y va horneado en
+  // el instalador que maneja el administrador. Ignora max_uses y
+  // valid_minutes. Solo hay uno vivo: crear otro anula el anterior, que es
+  // como se revoca un instalador que acabo donde no debia.
+  bool permanent = 5;
 }
 
 message EnrollmentCodeReply {

@@ -879,6 +879,54 @@ public sealed partial class MainViewModel : ObservableObject
     {
         try
         {
+            // EL PERMANENTE DE PLANTA, para el instalador que maneja el
+            // administrador. Se pregunta primero y con las consecuencias
+            // dichas: anula el anterior, asi que un instalador viejo deja de
+            // registrar PCs nuevas en cuanto se pulsa Si.
+            var permanente = MessageBox.Show(
+                "Generar el codigo PERMANENTE de planta?\n\n" +
+                "Si: no caduca ni se gasta, para hornearlo en el instalador de planta.\n" +
+                "    ANULA el permanente anterior: los instaladores hechos con el dejan de\n" +
+                "    registrar PCs nuevas (las ya instaladas siguen igual).\n\n" +
+                "No: un codigo normal, con numero de PCs y caducidad.",
+                "Codigo de enrolamiento", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+
+            if (permanente == MessageBoxResult.Cancel)
+                return;
+
+            if (permanente == MessageBoxResult.Yes)
+            {
+                var fijo = await _client.CreateEnrollmentCodeAsync(
+                    new CreateEnrollmentCodeRequest { Permanent = true }, CancellationToken.None);
+
+                // UN SERVIDOR DE ANTES no conoce el campo, lo ignora y da un
+                // codigo NORMAL -- de un uso y media hora --. Llamarlo permanente
+                // seria hornear en el instalador uno que muere enseguida.
+                if (fijo.MaxUses != int.MaxValue)
+                {
+                    MessageBox.Show(
+                        $"El servidor todavia no sabe hacer codigos permanentes: actualizalo.\n\n" +
+                        $"Lo que devolvio es un codigo NORMAL ({fijo.Code}: {fijo.MaxUses} uso(s), " +
+                        $"vence a las {fijo.ExpiresAt.ToDateTime().ToLocalTime():HH:mm}). No lo uses para el instalador.",
+                        "Codigo de enrolamiento", MessageBoxButton.OK, MessageBoxImage.Warning);
+
+                    return;
+                }
+
+                var copiadoFijo = Copiar(fijo.Code);
+
+                MessageBox.Show(
+                    $"Codigo PERMANENTE: {fijo.Code}\n\n" +
+                    (copiadoFijo
+                        ? "Copiado al portapapeles."
+                        : "NO se pudo copiar al portapapeles: copialo de aqui a mano.") +
+                    "\nNo caduca ni tiene limite de usos. El permanente anterior ya no sirve.\n\n" +
+                    "No se vuelve a mostrar: con el se genera el instalador de planta.",
+                    "Codigo de enrolamiento", MessageBoxButton.OK, MessageBoxImage.Information);
+
+                return;
+            }
+
             // CUANTAS PCs Y CUANTO DURA, en vez de 1 uso y 30 minutos fijos.
             //
             // Un codigo de un solo uso obliga a volver al dashboard entre PC y

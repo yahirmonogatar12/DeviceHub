@@ -18,4 +18,16 @@ public static class EnrollmentLimits
     /// su caducidad es lo unico que limita para que sirve ese .exe el dia que se
     /// queda olvidado en una USB.</summary>
     public const int MaxMinutes = 1440;
+
+    /// <summary>
+    /// Cuando "vence" el codigo permanente de planta: el ultimo dia que cabe en
+    /// un DATETIME de MySQL. Es tambien su marca: un codigo con esta caducidad
+    /// es EL permanente, y crear otro lo anula.
+    ///
+    /// Existe porque el administrador lo pidio: los instaladores solo se usan en
+    /// planta y los maneja el, y regenerar el instalador cada 24 h era el
+    /// precio diario de un riesgo que ahi no compensaba. Lo que sigue limitando
+    /// es que hace falta TENER el instalador: sin codigo no se registra nada.
+    /// </summary>
+    public static readonly DateTime Permanente = new(9999, 12, 31, 0, 0, 0, DateTimeKind.Utc);
 }
